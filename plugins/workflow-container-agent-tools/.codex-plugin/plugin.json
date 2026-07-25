@@ -1,6 +1,6 @@
 {
   "name": "workflow-container-agent-tools",
-  "version": "0.1.0+codex.20260724000000",
+  "version": "0.1.0+codex.20260725144844",
   "description": "Workflow-container domain authoring, audit, and input preparation skills.",
   "author": {
     "name": "Andrey Antonov",
