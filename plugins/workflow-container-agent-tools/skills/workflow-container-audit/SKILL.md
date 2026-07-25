@@ -21,7 +21,8 @@ Before auditing, read:
 Instruction-bearing artifacts include:
 
 - `AGENTS.md`;
-- `doc/design/**`;
+- `DESIGN.md`;
+- `design/**`;
 - prompt templates;
 - step prompts;
 - verification prompts;
