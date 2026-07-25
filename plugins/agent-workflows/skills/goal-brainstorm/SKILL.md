@@ -29,6 +29,7 @@ Turn an implementation idea into approved project contracts and one harness-neut
 
 - Preserve unrelated user changes.
 - If an owner conflict remains unresolved, stop without conflicting edits or a task artifact pair and report the exact decision still required.
+- Follow the `.spec` retention and deletion authorization owned by `Lifecycle` in the required reference; never infer deletion authority from goal or task state.
 - Goal activation MUST NOT weaken `Terminal Completion Audit` into one final checklist pass, one test run, one implementation self-review, or one request for additional completion evidence artifacts.
 - For either `/goal` fallback, print this exact semantic command in the user's language:
 

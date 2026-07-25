@@ -9,7 +9,7 @@
 - `.spec/*-spec.md` owns one temporary task-specific implementation contract.
 - `.spec/*-goal.md` owns one concise executable objective and exact references to its paired specification and approved stable source contracts.
 
-A goal is not a second design or specification owner. A specification must not copy durable instructions or architecture already owned elsewhere. Completed or abandoned task artifacts are not project documentation and must not remain in `.spec/`.
+A goal is not a second design or specification owner. A specification must not copy durable instructions or architecture already owned elsewhere. Task artifacts are not project documentation, remain ignored and untracked regardless of task state, and must not be deleted without an explicit user request.
 
 ## Document Selection
 
@@ -33,7 +33,7 @@ Task artifacts live under the harness-neutral root directory `.spec/`. Before cr
 
 The directory contains ordinary Markdown only. Vendor-specific frontmatter, harness session state, lock files, caches, and project-global durable rules are forbidden there.
 
-The directory may be absent when no task artifacts are active. Do not add `.gitkeep` or another tracked placeholder.
+The directory may be absent when no task pair has been created or when the user explicitly requested deletion of every retained pair. Do not add `.gitkeep` or another tracked placeholder. No task artifact under `.spec/` may be tracked by Git.
 
 ## File Names
 
@@ -134,12 +134,12 @@ This terminal cycle uses the current task contracts and current system state dir
 2. Create or update the approved specification after the design decisions and owner changes it depends on are approved.
 3. Apply `Semantic Review` before creating or updating the paired goal.
 4. Show both files and their stable source contracts before asking separately whether to activate the goal.
-5. Keep the pair while the task is active, blocked, or explicitly paused.
-6. Before presumed completion, move every durable resulting rule into its stable owner and confirm that deleting the pair loses no current contract.
+5. Keep the pair for every task state, including active, blocked, paused, completed, or abandoned.
+6. Before presumed completion, move every durable resulting rule into its stable owner and confirm that the pair is not the only owner of any current durable contract.
 7. Run `Terminal Completion Audit` to its zero-finding fixed point.
-8. Delete both files after the task is completed or explicitly abandoned.
+8. Retain both files after the task is completed or explicitly abandoned. Delete task artifacts only when the user explicitly requests their deletion.
 
-Workspace audit must report a stale pair whose task is known to be completed or abandoned. It must not delete an active, blocked, paused, or unclassified pair automatically.
+Workspace audit must verify the exact root-level `/.spec/` ignore rule and report every tracked file under `.spec/`. It must not classify a pair as stale because its task is completed or abandoned, and it must not delete any task artifact without an explicit user request.
 
 ## Semantic Review
 

@@ -26,7 +26,7 @@ If one required provider skill is unavailable, continue read-only discovery only
 - This repository is not a runtime dependency of application or workflow-container code.
 - Product-specific logic, configuration, prompts, validators, and data remain in their owning application repositories.
 - `DESIGN.md` owns the stable provider architecture and cross-project artifact model.
-- Active task pairs live only under the ignored `.spec/` root; completed or abandoned pairs must be removed.
+- Task pairs live only under the ignored `.spec/` root, remain untracked, and MUST NOT be deleted unless the user explicitly requests their deletion.
 - The repository exposes no Python distribution or project-discovery CLI.
 
 ## Required Workflows
