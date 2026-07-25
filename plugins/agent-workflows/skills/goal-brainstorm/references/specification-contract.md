@@ -116,7 +116,17 @@ The goal states the outcome, essential constraints, and verification while givin
 
 Use root-relative paths for contracts in the coordinating repository. Cross-repository references must identify both the canonical repository and its root-relative contract path unambiguously without embedding one user-specific absolute workspace root.
 
-The persistent objective should name the goal file, treat that file and its paired specification as the completion contract, and require the full applicable verification and final semantic review. Keep detailed context in project files instead of expanding the objective.
+The persistent objective should name the goal file, treat that file and its paired specification as the completion contract, require the full applicable verification, and require `Terminal Completion Audit`. Keep detailed context in project files instead of expanding the objective.
+
+## Terminal Completion Audit
+
+After implementation appears complete, audit the whole current task scope again from scratch against the complete goal file, paired specification, and every referenced stable source contract. The audit MUST inspect the current repository and external state owned by the task and MUST NOT be limited to the implementation plan, changed files, completed checklist entries, passing verification, or findings from an earlier audit.
+
+If the audit finds any unfinished, contradictory, missing, stale, or unverified requirement, keep the goal active, fix every finding, rerun every verification affected by those fixes, and start another complete audit from scratch. Repeat this audit/fix cycle until one new full audit performed after the last fix finds no unfinished requirement.
+
+Goal completion is allowed only after that zero-finding full audit and after all required verification remains successful. A fixed iteration limit, a weaker partial recheck, or completion because the remaining work is expensive is forbidden. A genuine external blocker follows the harness goal-blocking contract instead of being reported as completion.
+
+This terminal cycle uses the current task contracts and current system state directly. It MUST NOT require a separately generated completion ledger, evidence document, completion report, or other persistent proof artifact.
 
 ## Lifecycle
 
@@ -125,14 +135,15 @@ The persistent objective should name the goal file, treat that file and its pair
 3. Apply `Semantic Review` before creating or updating the paired goal.
 4. Show both files and their stable source contracts before asking separately whether to activate the goal.
 5. Keep the pair while the task is active, blocked, or explicitly paused.
-6. Before completion, move every durable resulting rule into its stable owner and confirm that deleting the pair loses no current contract.
-7. Delete both files after the task is completed or explicitly abandoned.
+6. Before presumed completion, move every durable resulting rule into its stable owner and confirm that deleting the pair loses no current contract.
+7. Run `Terminal Completion Audit` to its zero-finding fixed point.
+8. Delete both files after the task is completed or explicitly abandoned.
 
 Workspace audit must report a stale pair whose task is known to be completed or abandoned. It must not delete an active, blocked, paused, or unclassified pair automatically.
 
 ## Semantic Review
 
-Before creating the goal, reread all changed and directly affected documents as one contract set. Confirm that:
+Before creating the goal, reread all changed and directly affected documents as one contract set. This pre-activation review does not replace `Terminal Completion Audit` after implementation. Confirm that:
 
 - each requirement has one owner;
 - references identify exact source documents or sections without duplicating their content;

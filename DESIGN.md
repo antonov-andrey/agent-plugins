@@ -57,6 +57,8 @@ Task history, progress, rejected alternatives и завершённые implemen
 
 Trivial work, для которого persistent goal не требуется, не создаёт эту пару. Любая задача, для которой создаётся persistent goal, получает оба файла. В режиме direct owner update specification только связывает outcome, изменяемых владельцев и verification и не повторяет их содержимое.
 
+Предполагаемое завершение persistent goal запускает terminal audit/fix cycle. Каждый audit заново проверяет полную goal, paired specification, stable source contracts и текущее состояние всего заявленного scope, независимо от implementation plan, уже закрытых checklist items, предыдущего audit или прошедших тестов. Любая новая находка незавершённого scope возвращает goal в fix phase; после исправления и повторной применимой verification полный audit начинается заново. Goal может перейти в `complete` только когда новый полный audit после последнего исправления не находит незавершённых требований. Этот цикл не создаёт отдельный ledger, completion report или другой обязательный evidence artifact.
+
 Multi-repository задача хранит одну пару в явно выбранном coordinating repository. Другие projects не получают копии этой пары.
 
 После завершения или отмены задачи оба файла удаляются. Перед удалением semantic review подтверждает, что ни одно устойчивое требование не осталось только во временной specification. Заблокированная или явно приостановленная задача сохраняет пару до возобновления либо отмены.
