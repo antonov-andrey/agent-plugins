@@ -9,11 +9,28 @@
 
 ## Required Standards
 
-- `project-standards:project-foundation` applies to all work in this repository.
-- `project-standards:project-instruction-developer` applies to plugin skills and instruction references.
-- `project-standards:project-documentation-developer` applies to `DESIGN.md` and maintained documentation.
-- `project-standards:python-developer`, `project-standards:python-cli-developer`, and `project-standards:pytest-developer` apply to provider-owned Python tools and tests.
-- `project-standards:runtime-config-developer` applies to environment-configured provider tools.
+- `project-standards:aws-cloudformation-developer`
+- `project-standards:docker-compose-developer`
+- `project-standards:http-api-client-developer`
+- `project-standards:kubernetes-developer`
+- `project-standards:legacy-python-maintainer`
+- `project-standards:project-documentation-developer`
+- `project-standards:project-foundation`
+- `project-standards:project-instruction-developer`
+- `project-standards:project-standard-audit`
+- `project-standards:project-standardize`
+- `project-standards:pytest-developer`
+- `project-standards:python-cli-developer`
+- `project-standards:python-developer`
+- `project-standards:python-logging-developer`
+- `project-standards:python-retry-developer`
+- `project-standards:react-ui-developer`
+- `project-standards:rest-api-server-developer`
+- `project-standards:runtime-config-developer`
+- `project-standards:sqlalchemy-developer`
+- `project-standards:submodule-developer`
+- `project-standards:typescript-developer`
+- `project-standards:zitadel-developer`
 
 If one required provider skill is unavailable, continue read-only discovery only and do not mutate this repository until the provider is restored.
 
