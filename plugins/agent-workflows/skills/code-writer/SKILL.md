@@ -66,11 +66,20 @@ Implement the requested change and drive the run to the correct terminal state u
 
 ## Verification Selection Contract
 - Build required verification from user-required checks, then owner-required checks, then targeted coverage checks.
+- Keep executable verification and semantic verification separate. Executable commands prove only the exact behavior or closed predicate they run.
 - Skipped optional checks MAY be reported only when they were explicitly considered during verification selection and intentionally not run.
 - Required handoff verification MUST include the ordinary handoff suite from the governing `Evidence And Verification Rules` in `AGENTS.md`.
 - Do not add `test/code/**` to ordinary code-writing verification unless the user explicitly requests it, the current task changes code-contract tests or helpers, or a narrower workflow gate explicitly requires it.
 - If root `pytest` is skipped, the final response MUST record that skip and the reason in the appropriate verification subsection.
 - Do not claim that one narrower targeted check covers behavior it did not actually execute.
+
+## Semantic Acceptance Contract
+- Derive one complete applicable requirement inventory independently from the current user request, every governing owner resolved in step 3, and every directly affected stable Product contract.
+- Do not derive or narrow that inventory from checker identities, checker output, tests, the implementation plan, the changed-file list, previous findings, or the first apparently successful implementation.
+- After the last implementation or documentation fix and successful required executable verification, inspect the complete current working scope against every requirement in that inventory.
+- This direct semantic pass does not create a report, checklist file, completion ledger, or other evidence artifact unless the user explicitly requests one.
+- Any semantic finding returns the run to the owning implementation, owner-resolution, or scope step. After its fix, rerun affected executable verification and restart the complete semantic pass from owner discovery.
+- Successful handoff requires one fresh complete semantic pass after the last fix with no finding and no uncovered requirement.
 
 ## Failed Verification Inspection Contract
 - `Failed Verification Inspection Contract` applies only when a required verification check fails and yields a failed verification path to inspect.
@@ -100,10 +109,10 @@ Implement the requested change and drive the run to the correct terminal state u
 
 ## Iteration Cycle
 1. Inventory the requested scope and the current changed paths in repository state.
-   - If repository state reveals one blocker under `Blocker Contract`, go to step 9.
+   - If repository state reveals one blocker under `Blocker Contract`, go to step 10.
    - Otherwise go to step 2.
 2. Derive the working scope for the run under `Scope Derivation Contract`.
-   - If `Blocker Contract` classifies one needed contract change that this skill cannot absorb directly, go to step 9.
+   - If `Blocker Contract` classifies one needed contract change that this skill cannot absorb directly, go to step 10.
    - Otherwise go to step 3.
 3. Resolve owner, rule, and verification requirements.
    - If that resolution changes the working scope, go to step 2.
@@ -134,9 +143,16 @@ Implement the requested change and drive the run to the correct terminal state u
      - if verification review reveals unresolved owner, rule, or verification requirements, go to step 3,
      - if verification review shows that `Scope Derivation Contract` was applied incompletely, go to step 2,
      - if failed-check inspection shows a confirmed implementation or cutover problem under `Code Writing Contract`, go to step 6,
-     - if `Blocker Contract` classifies one blocker, go to step 9,
-     - if required verification ran and failed and `Blocker Contract` does not classify one blocker, go to step 9.
-9. Stop and report the current terminal state under `Final Response Contract`, using `Blocker Contract` when the terminal state is blocked.
+     - if `Blocker Contract` classifies one blocker, go to step 10,
+     - if required verification ran and failed and `Blocker Contract` does not classify one blocker, go to step 10.
+9. Apply `Semantic Acceptance Contract` to the complete current working scope.
+   - If the pass reveals unresolved owner or requirement selection, go to step 3.
+   - If the pass reveals incomplete scope, go to step 2.
+   - If the pass finds an implementation or cutover problem, go to step 6.
+   - If the pass finds a documentation problem, go to step 7.
+   - If `Blocker Contract` classifies one blocker, go to step 10.
+   - If the fresh complete pass has no finding and no uncovered requirement, go to step 10.
+10. Stop and report the current terminal state under `Final Response Contract`, using `Blocker Contract` when the terminal state is blocked.
 
 ## Anti-Patterns
 - Deviating from `Iteration Cycle` by skipping, merging, reordering, or improvising steps instead of following the declared `go to step N` transitions.
@@ -145,6 +161,8 @@ Implement the requested change and drive the run to the correct terminal state u
 - Violating `Code Writing Contract` by changing one API or signature without migrating in-repository call sites in the same change.
 - Violating `Code Writing Contract` by leaving dead code, bridge layers, stale imports, or partial refactor cutovers in the changed scope.
 - Violating `Verification Selection Contract` by selecting verification without following the governing `Evidence And Verification Rules` from `AGENTS.md`.
+- Treating successful executable verification as semantic acceptance or deriving semantic scope from checker output, tests, the implementation plan, or previous findings.
+- Reusing a semantic pass completed before the latest fix instead of restarting the complete pass.
 - Violating `Final Response Contract` by claiming verification that was not actually run.
 - Violating `Final Response Contract` or `Blocker Contract` by claiming success while a required verification check still fails or remains blocked.
 - Violating `Scope Derivation Contract` by expanding a Python refactor scope because of compatibility-only edits outside the declared scope.

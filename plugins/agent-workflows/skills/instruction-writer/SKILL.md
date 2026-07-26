@@ -54,16 +54,18 @@ Create, delete, restructure, or update repository instruction artifacts while pr
 4. Apply the smallest direct artifact edit that resolves the framed problem.
 5. Update any direct references, code-contract checks, tests, or project documentation artifacts required by the instruction change.
 6. Run verification required by `AGENTS.md` for the changed artifact types.
-7. Use `instruction-audit` only when the user explicitly requests the structured instruction-audit skill or one validated instruction-audit report.
-8. Report outcome, verification, and unresolved problems.
+7. Independently derive every applicable normative requirement from the complete affected owner closure, then semantically review the current artifacts and owner placement against each requirement. Do not derive or narrow this scope from scripts, tests, changed files, previous findings, or the implementation plan. If the review finds one problem or uncovered requirement, return to the applicable owner-resolution or edit step; after every fix rerun affected verification and restart this complete semantic review. Completion requires one fresh post-fix review with no findings and creates no separate evidence artifact.
+8. Use `instruction-audit` only when the user explicitly requests the structured instruction-audit skill or one validated instruction-audit report.
+9. Report outcome, verification, and unresolved problems.
 
 ## Verification
-- Instruction-only changes require semantic reread of the changed instruction text and direct checks for the changed artifact type.
+- Instruction-only changes require the complete direct semantic review in step 7 and direct checks for the changed artifact type.
+- Mechanical and executable checks prove only their exact closed contracts and MUST NOT replace, seed, narrow, or close the semantic review.
 - Changes to mechanical instruction checks require the relevant `test/code/**` checks.
 - Handoff verification MUST be selected from `Evidence And Verification Rules` in `AGENTS.md` for the changed artifact types.
 
 ## Anti-Patterns
-- Reintroducing an audit loop into this skill.
+- Automatically invoking the structured, report-producing `instruction-audit` workflow without an explicit user request; the direct artifact-free semantic review in step 7 remains mandatory.
 - Treating passing mechanical checks as semantic audit.
 - Adding broad rules without current evidence and a concrete failure mode.
 - Duplicating repository-wide rules in one skill or role prompt instead of referencing `AGENTS.md`.

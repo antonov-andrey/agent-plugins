@@ -5,12 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from lib.antipattern_check_helpers import (
-    INSTRUMENTAL_REPORT_RELPATH,
+    MECHANICAL_REPORT_RELPATH,
     SEMANTIC_REPORT_RELPATH,
     VALID_REPORT_SCOPE,
     repo_tool_run,
     temporary_repo_file_create,
-    valid_instrumental_report,
+    valid_mechanical_report,
     valid_semantic_report,
 )
 
@@ -29,8 +29,8 @@ def test_report_merge_creates_deterministic_merged_report(tmp_path: Path) -> Non
     with (
         temporary_repo_file_create(
             repo_root=tmp_path,
-            relpath=INSTRUMENTAL_REPORT_RELPATH,
-            content=valid_instrumental_report(),
+            relpath=MECHANICAL_REPORT_RELPATH,
+            content=valid_mechanical_report(),
         ),
         temporary_repo_file_create(
             repo_root=tmp_path,
@@ -40,7 +40,7 @@ def test_report_merge_creates_deterministic_merged_report(tmp_path: Path) -> Non
     ):
         result = repo_tool_run(
             "plugins/agent-workflows/lib/code-antipattern-audit/tool/code_antipattern_audit_report_merge.py",
-            INSTRUMENTAL_REPORT_RELPATH,
+            MECHANICAL_REPORT_RELPATH,
             SEMANTIC_REPORT_RELPATH,
             report_root=tmp_path,
         )
@@ -51,10 +51,10 @@ def test_report_merge_creates_deterministic_merged_report(tmp_path: Path) -> Non
         merged_text = merged_path.read_text(encoding="utf-8")
 
     assert f"- `scope`: `{VALID_REPORT_SCOPE}`" in merged_text
-    assert f"- `instrumental_report_path`: `{INSTRUMENTAL_REPORT_RELPATH}`" in merged_text
+    assert f"- `mechanical_report_path`: `{MECHANICAL_REPORT_RELPATH}`" in merged_text
     assert f"- `semantic_report_path`: `{SEMANTIC_REPORT_RELPATH}`" in merged_text
     assert "- `overall_verdict`: `FINDINGS`" in merged_text
-    assert "## Instrumental source report" in merged_text
+    assert "## Mechanical source report" in merged_text
     assert "## Semantic source report" in merged_text
     merged_path.unlink(missing_ok=True)
 
@@ -73,8 +73,8 @@ def test_report_merge_rejects_scope_mismatch(tmp_path: Path) -> None:
     with (
         temporary_repo_file_create(
             repo_root=tmp_path,
-            relpath=INSTRUMENTAL_REPORT_RELPATH,
-            content=valid_instrumental_report(),
+            relpath=MECHANICAL_REPORT_RELPATH,
+            content=valid_mechanical_report(),
         ),
         temporary_repo_file_create(
             repo_root=tmp_path,
@@ -84,7 +84,7 @@ def test_report_merge_rejects_scope_mismatch(tmp_path: Path) -> None:
     ):
         result = repo_tool_run(
             "plugins/agent-workflows/lib/code-antipattern-audit/tool/code_antipattern_audit_report_merge.py",
-            INSTRUMENTAL_REPORT_RELPATH,
+            MECHANICAL_REPORT_RELPATH,
             SEMANTIC_REPORT_RELPATH,
             report_root=tmp_path,
         )
@@ -107,8 +107,8 @@ def test_report_merge_rejects_invalid_source_report(tmp_path: Path) -> None:
     with (
         temporary_repo_file_create(
             repo_root=tmp_path,
-            relpath=INSTRUMENTAL_REPORT_RELPATH,
-            content=valid_instrumental_report(),
+            relpath=MECHANICAL_REPORT_RELPATH,
+            content=valid_mechanical_report(),
         ),
         temporary_repo_file_create(
             repo_root=tmp_path,
@@ -118,7 +118,7 @@ def test_report_merge_rejects_invalid_source_report(tmp_path: Path) -> None:
     ):
         result = repo_tool_run(
             "plugins/agent-workflows/lib/code-antipattern-audit/tool/code_antipattern_audit_report_merge.py",
-            INSTRUMENTAL_REPORT_RELPATH,
+            MECHANICAL_REPORT_RELPATH,
             SEMANTIC_REPORT_RELPATH,
             report_root=tmp_path,
         )

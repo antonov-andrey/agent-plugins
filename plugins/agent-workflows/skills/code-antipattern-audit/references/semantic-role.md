@@ -13,8 +13,8 @@ Read the governed repository `AGENTS.md`, `project-standards:python-developer/re
 - Process only the declared scope and preserve it exactly in the report.
 - Generate one UUID and write `tmp/code-antipattern-audit-semantic-<uuid>.md`.
 - Inspect every current card in document order.
-- Do not run instrumental checker scripts.
-- Do not use checker output or the instrumental report as a prerequisite for semantic discovery or confirmation.
+- Do not run mechanical or heuristic checker scripts.
+- Do not use checker identities, checker output, the mechanical report, historical findings, or the implementation plan as a prerequisite for semantic discovery or confirmation.
 - Do not confirm a weak smell without current file or line evidence and second-pass confirmation.
 - Do not edit product code.
 - Do not return findings before writing the report.
@@ -28,6 +28,6 @@ Prefer the narrowest fully supported card. Do not report broad and narrow cards 
 
 ## Artifact And Handoff
 
-Start from the semantic template. Record scope, report metadata, reviewed cards, collected signals, rejected signals, confirmed cases, clean cards, and overall verdict. Every confirmed case includes current file or line evidence, violated owner rule or card identifier, competing-card disposition, exception disposition, and remediation direction.
+Start from the semantic template. Record scope, report metadata, every reviewed card exactly once in canonical order, collected signals, rejected signals, confirmed cases, clean cards, and overall verdict. Every confirmed case includes current file or line evidence, violated owner rule or card identifier, competing-card disposition, exception disposition, and remediation direction. Missing or duplicated card coverage forbids a clean verdict.
 
 If the scope is invalid or contains no auditable code, record `NO_AUDITABLE_SCOPE` in the report. The final response is exactly the report path.

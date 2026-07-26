@@ -11,7 +11,11 @@ from lib.audit_contract import report_error_list_get
 
 
 def _args_parse() -> argparse.Namespace:
-    """Parse command-line arguments."""
+    """Parse command-line arguments.
+
+    Returns:
+        Parsed command-line namespace.
+    """
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--audit-name", required=True)
@@ -22,7 +26,11 @@ def _args_parse() -> argparse.Namespace:
 
 
 def main() -> int:
-    """Validate the requested merged audit report."""
+    """Validate the requested merged audit report.
+
+    Returns:
+        Zero for a valid report, otherwise one.
+    """
 
     args = _args_parse()
     error_list = report_error_list_get(

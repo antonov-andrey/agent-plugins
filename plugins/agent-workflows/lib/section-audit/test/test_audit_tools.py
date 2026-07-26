@@ -55,6 +55,11 @@ def test_section_results_merge_and_validate(tmp_path: Path) -> None:
         "- Audit: code-audit\n"
         "- Section: Python\n"
         "- Scope: script/demo\n\n"
+        "## Requirement Results\n"
+        "### Python owner rule\n"
+        "- Status: Problems\n"
+        "- Evidence: script/demo.py: one current violation\n"
+        "- Not applicable reason: None\n\n"
         "## Findings\n"
         "- High: One concrete problem.\n"
         "  Fix: Apply one concrete correction.\n"
@@ -67,6 +72,8 @@ def test_section_results_merge_and_validate(tmp_path: Path) -> None:
         [
             "--audit-name",
             "code-audit",
+            "--expected-requirement",
+            "Python owner rule",
             "--expected-scope",
             "script/demo",
             "--expected-section",
@@ -81,6 +88,10 @@ def test_section_results_merge_and_validate(tmp_path: Path) -> None:
         [
             "--audit-name",
             "code-audit",
+            "--mechanical-status",
+            "clean",
+            "--mechanical-evidence",
+            "project-standard-check --scope all exited 0 with mechanical_status=clean",
             "--output",
             str(output_path),
             "--scope-mode",
@@ -110,6 +121,10 @@ def test_section_results_merge_and_validate(tmp_path: Path) -> None:
     assert UUID(run_uuid)
     assert merge.stdout.strip() == output_path.as_posix()
     assert report_check.returncode == 0, report_check.stderr
+    report_text = (tmp_path / output_path).read_text(encoding="utf-8")
+    assert "## Mechanical Verification" in report_text
+    assert "##### Python owner rule" in report_text
+    assert "- Status: Problems" in report_text
 
 
 def test_section_result_rejects_problem_without_fix(tmp_path: Path) -> None:
@@ -128,6 +143,11 @@ def test_section_result_rejects_problem_without_fix(tmp_path: Path) -> None:
         "- Audit: instruction-audit\n"
         "- Section: Ownership\n"
         "- Scope: AGENTS.md\n\n"
+        "## Requirement Results\n"
+        "### Instruction ownership rule\n"
+        "- Status: Problems\n"
+        "- Evidence: AGENTS.md: one current violation\n"
+        "- Not applicable reason: None\n\n"
         "## Findings\n"
         "- High: One problem without its required correction.\n",
         encoding="utf-8",
@@ -138,6 +158,8 @@ def test_section_result_rejects_problem_without_fix(tmp_path: Path) -> None:
         [
             "--audit-name",
             "instruction-audit",
+            "--expected-requirement",
+            "Instruction ownership rule",
             "--expected-scope",
             "AGENTS.md",
             "--expected-section",
@@ -149,3 +171,83 @@ def test_section_result_rejects_problem_without_fix(tmp_path: Path) -> None:
 
     assert result.returncode == 1
     assert "Fix line" in result.stderr
+
+
+def test_section_result_rejects_missing_requirement_coverage(tmp_path: Path) -> None:
+    """A structurally valid subset cannot stand in for the assigned inventory.
+
+    Args:
+        tmp_path: Isolated target root.
+    """
+
+    result_path = (
+        tmp_path / "tmp" / "instruction-audit" / "00000000-0000-0000-0000-000000000004" / "ownership.agent.result.md"
+    )
+    result_path.parent.mkdir(parents=True)
+    result_path.write_text(
+        "# Audit Section Result\n"
+        "- Audit: instruction-audit\n"
+        "- Section: Ownership\n"
+        "- Scope: AGENTS.md\n\n"
+        "## Requirement Results\n"
+        "### First rule\n"
+        "- Status: Satisfied\n"
+        "- Evidence: AGENTS.md: inspected the current owner\n"
+        "- Not applicable reason: None\n\n"
+        "## Findings\n"
+        "- None\n",
+        encoding="utf-8",
+    )
+
+    result = _tool_run(
+        "audit_section_result_check.py",
+        [
+            "--audit-name",
+            "instruction-audit",
+            "--expected-requirement",
+            "First rule",
+            "--expected-requirement",
+            "Second rule",
+            "--expected-scope",
+            "AGENTS.md",
+            "--expected-section",
+            "Ownership",
+            str(result_path),
+        ],
+        audit_root=tmp_path,
+    )
+
+    assert result.returncode == 1
+    assert "requirement coverage mismatch" in result.stderr
+
+
+def test_report_merge_rejects_noncanonical_output_path(tmp_path: Path) -> None:
+    """The merger must not write outside its canonical final-report family.
+
+    Args:
+        tmp_path: Isolated target root.
+    """
+
+    result = _tool_run(
+        "audit_report_merge.py",
+        [
+            "--audit-name",
+            "code-audit",
+            "--mechanical-status",
+            "clean",
+            "--mechanical-evidence",
+            "project-standard-check --scope all exited 0 with mechanical_status=clean",
+            "--output",
+            "outside.md",
+            "--scope-mode",
+            "explicit",
+            "--scope-entry",
+            "script/demo",
+            "missing.result.md",
+        ],
+        audit_root=tmp_path,
+    )
+
+    assert result.returncode == 1
+    assert "report path must match tmp/code-audit-<uuid>.md" in result.stderr
+    assert not (tmp_path / "outside.md").exists()

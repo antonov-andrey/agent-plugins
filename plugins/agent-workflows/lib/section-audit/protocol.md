@@ -22,6 +22,7 @@ This file owns shared section-agent orchestration, artifact contracts, validator
 - Create exactly one section task per top-level checklist section in canonical checklist order.
 - Each section task MUST include the literal top-level checklist-section heading and every checklist item that belongs to that section in canonical order.
 - Each section task MUST include every skill-required checklist-card metadata field literally, without parent-local paraphrase or weakening.
+- When one owning skill requires exhaustive semantic coverage, checklist items MUST be derived from the complete canonical owner requirement inventory before findings or mechanical output are inspected. Mechanical check identities, signals, historical findings, and implementation-plan items MUST NOT define or limit that inventory.
 - Each section task MUST include the resolved scope entries, reviewed files, user focus notes when present, and exact required task-result path pattern.
 - Different top-level checklist sections MUST NOT be merged into one task, and one top-level checklist section MUST NOT be split across multiple tasks.
 
@@ -33,8 +34,16 @@ This file owns shared section-agent orchestration, artifact contracts, validator
 - Corrective feedback for one invalid section-task result MUST go to the same section agent while `lib/subagent-transport/protocol.md` keeps that agent current.
 
 ## Result Handling
-- Validate every written section-task result with the skill-local task-result validator before merging it.
+- Every section-task result MUST contain one `## Requirement Results` block with exactly one canonical-order entry for every requirement assigned by the parent:
+  - `### <literal assigned requirement>`;
+  - `- Status: Satisfied|Problems|Not applicable`;
+  - `- Evidence: <current concrete evidence>`;
+  - `- Not applicable reason: None|<concrete reason>`.
+- Validate every written section-task result with the skill-local task-result validator and pass every assigned literal through repeated `--expected-requirement` arguments before merging it.
 - Formal validation MUST NOT semantically re-grade, weaken, or strengthen section-agent findings.
+- Formal validation proves artifact structure and exact presence of the parent-supplied requirement literals only. It MUST NOT be reported as semantic validation, semantic completeness, evidence truth, or correctness of one finding disposition.
 - The parent MUST merge only validated section-task results into the final report in canonical checklist order.
+- Before merge, the parent MUST perform every skill-required coverage comparison against the independently derived owner inventory. Missing or duplicated coverage forbids a clean report even when every artifact validator passes.
 - The parent MUST NOT replace missing section-agent findings with locally improvised findings.
+- The final merge MUST receive the separately executed mechanical status and concrete command/result evidence. Mechanical output MUST NOT be exposed to semantic section agents before their discovery and confirmation are complete.
 - Validate the final report with the skill-local final report validator before returning the report path.

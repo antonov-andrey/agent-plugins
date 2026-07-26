@@ -6,14 +6,26 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from lib.audit_contract import ROOT, section_result_findings_get, section_result_section_get
+from lib.audit_contract import (
+    ROOT,
+    report_path_get,
+    section_result_findings_get,
+    section_result_requirement_line_list_get,
+    section_result_section_get,
+)
 
 
 def _args_parse() -> argparse.Namespace:
-    """Parse command-line arguments."""
+    """Parse command-line arguments.
+
+    Returns:
+        Parsed command-line namespace.
+    """
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--audit-name", required=True)
+    parser.add_argument("--mechanical-evidence", action="append", dest="mechanical_evidence_list", required=True)
+    parser.add_argument("--mechanical-status", choices=("clean", "error", "finding"), required=True)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--scope-entry", action="append", dest="scope_entry_list", required=True)
     parser.add_argument("--scope-mode", choices=("default-changed", "explicit"), required=True)
@@ -22,10 +34,17 @@ def _args_parse() -> argparse.Namespace:
 
 
 def main() -> int:
-    """Merge section results in caller-supplied canonical order."""
+    """Merge section results in caller-supplied canonical order.
+
+    Returns:
+        Zero after writing the merged report.
+    """
 
     args = _args_parse()
-    output_path = args.output if args.output.is_absolute() else ROOT / args.output
+    try:
+        output_path = report_path_get(args.output, audit_name=args.audit_name)
+    except ValueError as exc:
+        raise SystemExit(f"ERROR: {exc}") from exc
     result_path_list = [path if path.is_absolute() else ROOT / path for path in args.section_result_path_list]
     title = " ".join(word.capitalize() for word in args.audit_name.split("-"))
     line_list = [
@@ -35,14 +54,37 @@ def main() -> int:
         f"- Scope mode: {args.scope_mode}",
         *[f"- Scope entry: {entry}" for entry in args.scope_entry_list],
         "",
+        "## Mechanical Verification",
+        f"- Status: {args.mechanical_status.upper()}",
+        *[f"- Evidence: {evidence}" for evidence in args.mechanical_evidence_list],
+        "",
         "## Section Results",
     ]
-    has_finding = False
+    have_finding = False
     for result_path in result_path_list:
         finding_line_list = section_result_findings_get(result_path)
-        has_finding = has_finding or finding_line_list != ["- None"]
-        line_list.extend(["", f"### {section_result_section_get(result_path)}", *finding_line_list])
-    line_list.extend(["", "## Verdict", f"- Status: {'FINDINGS' if has_finding else 'CLEAN'}", ""])
+        have_finding = have_finding or finding_line_list != ["- None"]
+        requirement_line_list = [
+            f"##{line}" if line.startswith("### ") else line
+            for line in section_result_requirement_line_list_get(result_path)
+        ]
+        line_list.extend(
+            [
+                "",
+                f"### {section_result_section_get(result_path)}",
+                "#### Requirement Results",
+                *requirement_line_list,
+                "#### Findings",
+                *finding_line_list,
+            ]
+        )
+    if args.mechanical_status == "error":
+        verdict = "ERROR"
+    elif args.mechanical_status == "finding" or have_finding:
+        verdict = "FINDINGS"
+    else:
+        verdict = "CLEAN"
+    line_list.extend(["", "## Verdict", f"- Status: {verdict}", ""])
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text("\n".join(line_list), encoding="utf-8")
     print(output_path.relative_to(ROOT).as_posix())

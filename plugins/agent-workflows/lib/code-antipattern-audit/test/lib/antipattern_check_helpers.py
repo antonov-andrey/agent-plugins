@@ -5,64 +5,21 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 import os
-import shutil
+from pathlib import Path
+import re
 import subprocess
 import sys
-import tempfile
-import re
-from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[6]
 PLUGIN_ROOT = Path(__file__).resolve().parents[4]
-INSTRUMENTAL_TEMPLATE_PATH = PLUGIN_ROOT / "lib" / "code-antipattern-audit" / "template" / "instrumental.md"
+MECHANICAL_TEMPLATE_PATH = PLUGIN_ROOT / "lib" / "code-antipattern-audit" / "template" / "mechanical.md"
 SEMANTIC_TEMPLATE_PATH = PLUGIN_ROOT / "lib" / "code-antipattern-audit" / "template" / "semantic.md"
 VALID_REPORT_SCOPE = "script/demo"
-INSTRUMENTAL_REPORT_UUID = "00000000-0000-0000-0000-000000000001"
+MECHANICAL_REPORT_UUID = "00000000-0000-0000-0000-000000000001"
 SEMANTIC_REPORT_UUID = "00000000-0000-0000-0000-000000000002"
-INSTRUMENTAL_REPORT_RELPATH = f"tmp/code-antipattern-audit-instrumental-{INSTRUMENTAL_REPORT_UUID}.md"
+MECHANICAL_REPORT_RELPATH = f"tmp/code-antipattern-audit-mechanical-{MECHANICAL_REPORT_UUID}.md"
 SEMANTIC_REPORT_RELPATH = f"tmp/code-antipattern-audit-semantic-{SEMANTIC_REPORT_UUID}.md"
 REPORT_ROOT_OVERRIDE_ENV_NAME = "CODE_ANTIPATTERN_AUDIT_REPORT_ROOT"
-
-
-def checker_with_sample_run(
-    *,
-    checker_relpath: str,
-    src: str,
-    filename: str = "sample.py",
-    extra_args: tuple[str, ...] = (),
-) -> subprocess.CompletedProcess[str]:
-    """Write a temporary sample file and run one checker against it.
-
-    Args:
-        checker_relpath: Repository-relative checker path.
-        src: Python source code to analyze.
-        filename: Sample filename to write inside the temporary scope.
-        extra_args: Additional CLI arguments.
-
-    Returns:
-        Completed process result.
-    """
-
-    temp_root = Path("/tmp/pytest_antipattern_checks")
-    temp_root.mkdir(parents=True, exist_ok=True)
-    sample_dir = Path(tempfile.mkdtemp(prefix="sample-", dir=temp_root))
-    sample = sample_dir / filename
-    sample.write_text(src, encoding="utf-8")
-
-    try:
-        return subprocess.run(
-            [checker_relpath, str(sample), *extra_args],
-            capture_output=True,
-            text=True,
-            check=False,
-            cwd=ROOT,
-        )
-    finally:
-        shutil.rmtree(sample_dir, ignore_errors=True)
-        try:
-            temp_root.rmdir()
-        except OSError:
-            pass
 
 
 def repo_tool_run(tool_relpath: str, *args: str, report_root: Path | None = None) -> subprocess.CompletedProcess[str]:
@@ -112,89 +69,6 @@ def temporary_repo_file_create(*, repo_root: Path, relpath: str, content: str) -
         yield path
     finally:
         path.unlink(missing_ok=True)
-
-
-def valid_instrumental_report() -> str:
-    """Build one valid instrumental source report.
-
-    Returns:
-        Canonical valid instrumental source-report text.
-    """
-
-    report = INSTRUMENTAL_TEMPLATE_PATH.read_text(encoding="utf-8")
-    report = _keyed_bullet_value_replace(report, "scope", f"`{VALID_REPORT_SCOPE}`")
-    report = _keyed_bullet_value_replace(report, "report_uuid", f"`{INSTRUMENTAL_REPORT_UUID}`")
-    report = _keyed_bullet_value_replace(report, "report_path", f"`{INSTRUMENTAL_REPORT_RELPATH}`")
-    report = _keyed_bullet_value_replace(
-        report,
-        "project-standards:python-developer/scripts/python_proxy_method_check.py",
-        "`PASS`",
-    )
-    report = _keyed_bullet_value_replace(
-        report,
-        "project-standards:python-developer/scripts/python_single_use_artifact_check.py",
-        "`NOT_RUN`",
-    )
-    report = _keyed_bullet_value_replace(
-        report,
-        "project-standards:python-developer/scripts/python_argument_pack_check.py",
-        "`NOT_RUN`",
-    )
-    report = _keyed_bullet_value_replace(
-        report,
-        "project-standards:python-developer/scripts/python_control_flow_complexity_check.py",
-        "`NOT_RUN`",
-    )
-    report = _keyed_bullet_value_replace(
-        report,
-        "project-standards:python-developer/scripts/python_dependency_fanout_check.py",
-        "`NOT_RUN`",
-    )
-    report = _keyed_bullet_value_replace(
-        report,
-        "project-standards:python-developer/scripts/python_hidden_dependency_construction_check.py",
-        "`NOT_RUN`",
-    )
-    report = _keyed_bullet_value_replace(
-        report,
-        "project-standards:python-developer/scripts/python_generic_bucket_module_check.py",
-        "`NOT_RUN`",
-    )
-    report = _keyed_bullet_value_replace(report, "overall_verdict", "`FINDINGS`")
-    report = _section_bullet_replace(
-        report,
-        "Executed commands",
-        0,
-        ["- `project-standards:python-developer/scripts/python_proxy_method_check.py script/demo`"],
-    )
-    report = _section_bullet_replace(report, "Reviewed anti-pattern cards", 0, ["- `PRJ-10`"])
-    report = _section_bullet_replace(
-        report,
-        "Collected signals",
-        0,
-        [
-            "- checker id: `python_proxy_method_check`; file path: `script/demo.py`; line: `10`; "
-            "triggering pattern: `pass-through`; candidate anti-pattern ids: `PRJ-10`; scope expansion used: `None`"
-        ],
-    )
-    report = _section_bullet_replace(report, "Rejected signals", 0, ["- None"])
-    report = _section_bullet_replace(
-        report,
-        "Confirmed anti-pattern cases",
-        0,
-        [
-            "- anti-pattern ids: `PRJ-10`; violated owner rule: `Main project code Rules`; file path: `script/demo.py`; "
-            "line: `10`; supporting checker ids: `python_proxy_method_check`; competing cards rejected: `BOOK-06`; "
-            "exception status: `rejected`; scope expansion used: `None`; remediation direction: `delete the proxy`"
-        ],
-    )
-    report = _section_bullet_replace(
-        report,
-        "Clean cards checked",
-        0,
-        ["- `PRJ-11`: inspected `script/demo.py` and found no confirmed case in the declared scope"],
-    )
-    return report
 
 
 def _keyed_bullet_value_replace(report: str, key: str, replacement_value: str) -> str:
@@ -254,6 +128,33 @@ def _section_bullet_replace(
     new_body_lines = body_lines[:start] + replacement_line_list + body_lines[end:]
     replacement = match.group(1) + "\n".join(new_body_lines).rstrip() + "\n\n"
     return report[: match.start()] + replacement + report[match.end() :]
+
+
+def valid_mechanical_report() -> str:
+    """Build one valid mechanical source report.
+
+    Returns:
+        Canonical valid mechanical source-report text.
+    """
+
+    report = MECHANICAL_TEMPLATE_PATH.read_text(encoding="utf-8")
+    report = _keyed_bullet_value_replace(report, "scope", f"`{VALID_REPORT_SCOPE}`")
+    report = _keyed_bullet_value_replace(report, "report_uuid", f"`{MECHANICAL_REPORT_UUID}`")
+    report = _keyed_bullet_value_replace(report, "report_path", f"`{MECHANICAL_REPORT_RELPATH}`")
+    report = _keyed_bullet_value_replace(report, "project_root", "`/tmp/repository`")
+    report = _keyed_bullet_value_replace(report, "command_exit_status", "`0`")
+    report = _keyed_bullet_value_replace(report, "mechanical_status", "`clean`")
+    report = _keyed_bullet_value_replace(report, "mechanical_checker_count", "`3`")
+    report = _keyed_bullet_value_replace(report, "overall_verdict", "`CLEAN`")
+    report = _section_bullet_replace(
+        report,
+        "Executed commands",
+        0,
+        ["- `project-standard-check --project-root /tmp/repository --scope all`"],
+    )
+    report = _section_bullet_replace(report, "Mechanical findings", 0, ["- None"])
+    report = _section_bullet_replace(report, "Mechanical errors", 0, ["- None"])
+    return report
 
 
 def valid_semantic_report() -> str:

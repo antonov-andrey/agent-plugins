@@ -19,7 +19,7 @@ Repository и installable plugin `project-standards` являются отдел
 - пользовательский глобальный instruction-файл владеет личными правилами взаимодействия, применимыми ко всем проектам;
 - пользовательская глобальная конфигурация harness владеет общими model, feature, approval и sandbox defaults;
 - project `AGENTS.md` владеет назначением и структурой конкретного проекта, локальными owner paths, runtime versions, точными командами, security boundaries, project-specific constraints, выбранными external standards и локальными overrides;
-- capability skill в `project-standards` владеет одним reusable opinionated engineering standard, его audit cards, mechanical checkers и owner-local tests;
+- capability skill в `project-standards` владеет одним reusable opinionated engineering standard и его audit contract; mechanical checker и owner-local checker tests существуют только для самостоятельного замкнутого правила с полным детерминированным алгоритмом;
 - workflow skill в `agent-workflows` владеет повторяемой task procedure, её report or handoff contract, orchestration mechanics, tools и tests, но не копирует engineering standards;
 - domain skill в одном independently installable domain plugin владеет reusable domain procedure, instructions, references, agent tools и tests, но не project-specific business logic;
 - корневой `DESIGN.md` владеет стабильной архитектурой проекта и служит её канонической точкой входа;
@@ -193,7 +193,7 @@ project-standards/
 - `project-standardize`;
 - `project-standard-audit`.
 
-Каждый capability skill является canonical owner своего reusable standard и содержит применимые development rules, audit cards, mechanical checkers и tests. `project-standard-audit` компонует выбранные capability skills, а общий `agent-workflows:code-audit` управляет audit procedure и report contract.
+Каждый capability skill является canonical owner своего reusable standard и содержит применимые development rules и audit contract. Mechanical checker и его tests принадлежат этому skill только при выполнении строгого критерия полной детерминированной проверяемости. `project-standard-audit` компонует выбранные capability skills, а общий `agent-workflows:code-audit` управляет audit procedure и report contract.
 
 Project выбирает standards явно в canonical section `Required Standards` своего `AGENTS.md`. Этот выбор обязан полностью соответствовать фактическим entities, technologies, boundaries, artifact families и workflows проекта: появление уже описанной capability требует подключения соответствующего skill в том же change set. Исключение или project-local specialization допустимы только по явному требованию пользователя и должны называть внешний owner и точную локальную область. Generated copies standard prose в `AGENTS.md` не создаются и drift synchronization между provider и consumer prose не используется. Project-local overlay не повторяет standard и содержит только реальные локальные bindings, ограничения и явно разрешённые исключения.
 
@@ -247,5 +247,11 @@ Workspace standardization verification подтверждает:
 - наличие точного корневого ignore-правила `/.spec/` и отсутствие отслеживаемых Git файлов под `.spec/` независимо от состояния соответствующих задач;
 - отсутствие абсолютных workspace paths и project-specific domain contracts в generic provider assets;
 - прохождение применимых проверок каждого изменённого project.
+
+Механическая и семантическая проверки образуют разные обязательные фазы. Исполняемый checker допустим только для самостоятельного закрытого правила, которое он полностью и детерминированно решает на всей объявленной области. Эвристические сигналы, выбранные примеры, thresholds, name/path allowlists и exception lists не являются проверкой правила и не поставляются как checker.
+
+Semantic audit строит coverage независимо из полного набора применимых canonical owners и каждого их нормативного требования. Checker inventory, успешный exit code, implementation plan, исторические findings и заранее замеченные concerns не могут определять или сужать semantic scope. Каждый section result содержит отдельный статус и текущее evidence для каждого назначенного требования; финальный report сохраняет отдельно mechanical evidence и полное semantic coverage. Формальный validator подтверждает только структуру и наличие переданного parent-инвентаря, но не смысл, истинность evidence или корректность semantic verdict. После любого fix полный semantic audit начинается заново; acceptance требует свежего прохода без findings и без непокрытых требований.
+
+Обычные writing workflows после последнего fix и исполняемой verification выполняют такой же полный прямой semantic pass по всем применимым owner requirements, но не создают report, completion ledger или другой evidence artifact. Structured audit workflow и его report запускаются только по явному запросу пользователя. Успешные scripts, tests или validators не могут заменить ни прямой semantic acceptance writing workflow, ни явно запрошенный structured audit.
 
 Provider проверяется, устанавливается и становится доступным в fresh harness session раньше удаления consumer copy. Неуспешная provider validation оставляет consumer project с прежним рабочим workflow и допускает исправление provider без промежуточного compatibility layer.
