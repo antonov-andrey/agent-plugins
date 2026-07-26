@@ -25,11 +25,7 @@ Trivial work that does not need a persistent goal creates neither file. Every su
 
 ## Artifact Directory
 
-Task artifacts live under the harness-neutral root directory `.spec/`. Before creating them, ensure that the coordinating repository has the exact root-level ignore rule:
-
-```gitignore
-/.spec/
-```
+Task artifacts live under the harness-neutral root directory `.spec/`. Before creating them, ensure that the coordinating repository's root `.gitignore` actually ignores that root directory. Equivalent Git ignore patterns are allowed; no one textual pattern is required.
 
 The directory contains ordinary Markdown only. Vendor-specific frontmatter, harness session state, lock files, caches, and project-global durable rules are forbidden there.
 
@@ -139,7 +135,7 @@ This terminal cycle uses the current task contracts and current system state dir
 7. Run `Terminal Completion Audit` to its zero-finding fixed point.
 8. Retain both files after the task is completed or explicitly abandoned. Delete task artifacts only when the user explicitly requests their deletion.
 
-Workspace audit must verify the exact root-level `/.spec/` ignore rule and report every tracked file under `.spec/`. It must not classify a pair as stale because its task is completed or abandoned, and it must not delete any task artifact without an explicit user request.
+Workspace audit must verify the actual root `.spec` ignore behavior from the repository's root `.gitignore` and report every tracked file under `.spec/`. It must not require one particular equivalent pattern, classify a pair as stale because its task is completed or abandoned, or delete any task artifact without an explicit user request.
 
 ## Semantic Review
 

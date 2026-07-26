@@ -38,7 +38,7 @@ Create, delete, restructure, or update repository instruction artifacts while pr
 - Prefer the shortest wording that preserves the same semantics.
 - When changed instruction text depends on details owned elsewhere, reference that owner instead of restating foreign-owner detail unless one owner-local trigger, boundary, or transition must stay explicit.
 - In workflow text, keep steps limited to local actions and transitions; repeated requirements belong in the owning contract instead of the step text.
-- When changing one instruction artifact, update direct references, mechanical checkers, and tests that enforce or reference that artifact.
+- When changing one instruction artifact, update direct references and behavior tests that enforce or reference that artifact. Update an executable checker only when it still decides one independently normative closed predicate completely; delete it when the changed contract exposes heuristic, selected-example, partial, or semantic inference.
 - If the instruction change affects project documentation requirements, update the owning documentation artifact in the same run.
 
 ## Role-Prompt Contract
@@ -61,7 +61,7 @@ Create, delete, restructure, or update repository instruction artifacts while pr
 ## Verification
 - Instruction-only changes require the complete direct semantic review in step 7 and direct checks for the changed artifact type.
 - Mechanical and executable checks prove only their exact closed contracts and MUST NOT replace, seed, narrow, or close the semantic review.
-- Changes to mechanical instruction checks require the relevant `test/code/**` checks.
+- Changes to an executable instruction checker or tool require behavior tests at that checker's owning provider or project-local test boundary. Consumer `test/code/**` is used only for one exact consumer-specific integration contract, never as a copied reusable checker owner.
 - Handoff verification MUST be selected from `Evidence And Verification Rules` in `AGENTS.md` for the changed artifact types.
 
 ## Anti-Patterns

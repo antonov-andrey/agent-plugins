@@ -44,7 +44,7 @@ Task history, progress, rejected alternatives и завершённые implemen
 
 ## Harness-neutral task artifacts
 
-Task artifacts живут в корневом каталоге `.spec/`, который project явно игнорирует правилом `/.spec/`. Ни один файл из этого каталога не отслеживается в Git. Каталог не принадлежит Codex или другому конкретному harness.
+Task artifacts живут в корневом каталоге `.spec/`, который фактически игнорируется корневым repository `.gitignore`; конкретная эквивалентная форма Git ignore pattern не нормируется. Ни один файл из этого каталога не отслеживается в Git. Каталог не принадлежит Codex или другому конкретному harness.
 
 Одна задача использует общий dated semantic prefix:
 
@@ -244,7 +244,7 @@ Workspace standardization verification подтверждает:
 - отсутствие generated copies `project-standards` prose;
 - наличие корректного project `AGENTS.md` с `Required Standards`, owner paths, commands, local boundaries и overlays;
 - корректную классификацию stable design, прочих docs и временных task artifacts;
-- наличие точного корневого ignore-правила `/.spec/` и отсутствие отслеживаемых Git файлов под `.spec/` независимо от состояния соответствующих задач;
+- фактическое игнорирование корневого каталога `.spec` через корневой repository `.gitignore` и отсутствие отслеживаемых Git файлов под `.spec/` независимо от состояния соответствующих задач;
 - отсутствие абсолютных workspace paths и project-specific domain contracts в generic provider assets;
 - прохождение применимых проверок каждого изменённого project.
 
