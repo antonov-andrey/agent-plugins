@@ -1,6 +1,6 @@
 {
   "name": "marketplace-agent-tools",
-  "version": "0.1.0+codex.20260725144844",
+  "version": "0.1.0+codex.20260726111535",
   "description": "Reusable marketplace-domain development workflows and tools explicitly assigned to a shared plugin.",
   "author": {
     "name": "Andrey Antonov",

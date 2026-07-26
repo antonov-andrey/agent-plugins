@@ -9,7 +9,7 @@ The canonical provider is `ozon_seller_api`, and `ozon_seller_api/DESIGN.md` own
 
 Generic outbound HTTP behavior follows `project-standards:http-api-client-developer`. Generic retry behavior follows `project-standards:python-retry-developer` and `retry_runtime/DESIGN.md`. Generic runtime configuration follows `project-standards:runtime-config-developer`. Generic submodule publication uses `agent-workflows:git-commit`.
 
-Host code uses public endpoint or buffered-operation APIs from the provider. Direct official Seller API URLs, generic public transport verbs, internal provider module imports, caller-managed pagination, and host-local copies of the multi-shop configuration parser are forbidden.
+Host code follows `ozon_seller_api/DESIGN.md`, section `Host integration`, for the public provider boundary and mechanically enforceable host restrictions. This skill does not copy that stable contract.
 
 An endpoint change is validated against the pinned OpenAPI snapshot and the current official Ozon contract. Tests cover method, path, payload, response parsing, pagination, provider failure, malformed response, timeout, allowed retry, forbidden ambiguous retry, and buffered state when applicable.
 
