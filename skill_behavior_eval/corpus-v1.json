@@ -119,13 +119,12 @@
         "agent-workflows:instruction-migration"
       ],
       "forbidden_skill_list": [
-        "project-standards:project-documentation-developer",
-        "project-standards:project-standard-audit"
+        "agent-workflows:instruction-audit"
       ],
       "semantic_invariant_list": [
         {
           "id": "task-artifact-owner",
-          "text": "The response reads goal-brainstorm as the sole normative task-artifact owner and does not route .spec lifecycle semantics through documentation or generic standards audit."
+          "text": "The response reads documentation and audit skills only as source owners of copied rules to remove, reads goal-brainstorm as the sole normative task-artifact owner, and does not route .spec lifecycle semantics through documentation or generic standards audit."
         },
         {
           "id": "migration-boundary",
