@@ -1,6 +1,6 @@
 ---
 name: goal-review
-description: Use when the user explicitly requests the `goal-review` skill or asks to run a non-interactive Codex CLI review with automatic selection between uncommitted changes and a branch base.
+description: Run an explicitly requested non-interactive Codex review against uncommitted changes or the selected branch base.
 ---
 
 # Goal Review

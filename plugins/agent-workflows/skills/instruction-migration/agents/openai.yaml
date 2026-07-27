@@ -1,0 +1,6 @@
+interface:
+  display_name: "Instruction Migration"
+  short_description: "Move instruction owners without semantic loss."
+  default_prompt: "Use $instruction-migration to apply the approved source-to-target instruction ledger."
+policy:
+  allow_implicit_invocation: false

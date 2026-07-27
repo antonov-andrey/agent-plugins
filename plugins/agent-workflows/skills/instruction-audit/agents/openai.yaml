@@ -1,0 +1,6 @@
+interface:
+  display_name: "Instruction Audit"
+  short_description: "Audit instructions against their real owners."
+  default_prompt: "Use $instruction-audit to produce one validated semantic instruction-audit report."
+policy:
+  allow_implicit_invocation: false

@@ -1,6 +1,6 @@
 ---
 name: ozon-seller-api-developer
-description: Use when code adds, changes, audits, or consumes an Ozon Seller API client endpoint, external schema, pagination flow, buffered operation, provider configuration, documentation snapshot, or provider submodule revision.
+description: Develop or audit Ozon Seller API endpoints, schemas, pagination, buffered operations, provider configuration, snapshots, and consumers.
 ---
 
 # Ozon Seller API Developer

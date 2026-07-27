@@ -1,6 +1,6 @@
 ---
 name: goal-brainstorm
-description: Use when a user wants to clarify an implementation idea, revise project design requirements, create an implementation specification, or prepare a persistent Codex goal before implementation.
+description: Clarify an implementation idea, revise stable design requirements, and prepare an optional harness-neutral specification and persistent goal.
 ---
 
 # Goal Brainstorm

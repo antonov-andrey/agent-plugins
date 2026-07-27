@@ -28,7 +28,7 @@ Repository и installable plugin `project-standards` являются отдел
 - `.spec/*-spec.md` владеет временным task-level контрактом одной реализации независимо от её текущего состояния;
 - `.spec/*-goal.md` владеет краткой исполняемой целью той же реализации независимо от её текущего состояния.
 
-Project `AGENTS.md` обязан явно назвать применимые skills из `project-standards`, task workflows из `agent-workflows` и skills из применимых domain plugins. Если существующая или новая project entity, technology, boundary, artifact family или workflow уже описана применимым capability или domain skill, project обязан подключить и применять этот skill. Не использовать или заменить применимый skill можно только по явному требованию пользователя; project-local convenience, существующее несоответствие, молчаливое решение agent или отсутствие прежней записи не создают исключение. Если обязательный provider или skill недоступен, agent должен остановиться до изменения проекта. Молчаливое продолжение без объявленного standard запрещено.
+Project `AGENTS.md` обязан объявить полный текущий каталог `project-standards`, а также явно назвать требуемые task workflows из `agent-workflows` и skills из применимых domain plugins. Capability standard из полного каталога применяется только когда его provider-owned trigger соответствует фактическому состоянию проекта или текущей задаче; появление новой entity, technology, boundary, artifact family или workflow автоматически включает уже объявленный standard без изменения каталога. Не использовать или заменить применимый skill можно только по явному требованию пользователя; project-local convenience, существующее несоответствие или молчаливое решение agent не создают исключение. Если обязательный provider или skill недоступен, agent должен остановиться до изменения соответствующего scope. Молчаливое продолжение без объявленного provider contract запрещено.
 
 Другой harness может использовать adapter к тем же canonical contracts из provider repositories. Копирование standards или workflows обратно в consumer repository ради поддержки другого harness запрещено.
 
@@ -104,7 +104,6 @@ Plugin `agent-workflows` владеет skills:
 
 - `code-antipattern-audit`;
 - `code-audit`;
-- `code-writer`;
 - `explain-algorithm`;
 - `explain-interface`;
 - `explain-internal-api`;
@@ -114,7 +113,7 @@ Plugin `agent-workflows` владеет skills:
 - `goal-brainstorm`;
 - `goal-review`;
 - `instruction-audit`;
-- `instruction-writer`;
+- `instruction-migration`;
 - `sequential-batch`.
 
 Plugin `workflow-container-agent-tools` владеет skills:
@@ -190,16 +189,16 @@ project-standards/
 - `docker-compose-developer`;
 - `kubernetes-developer`;
 - `aws-cloudformation-developer`;
-- `project-standardize`;
+- `zitadel-developer`;
 - `project-standard-audit`.
 
-Каждый capability skill является canonical owner своего reusable standard и содержит применимые development rules и audit contract. Mechanical checker и его tests принадлежат этому skill только при выполнении строгого критерия полной детерминированной проверяемости. `project-standard-audit` компонует выбранные capability skills, а общий `agent-workflows:code-audit` управляет audit procedure и report contract.
+Каждый capability skill является canonical owner своего reusable standard и содержит применимые development rules и audit contract. Mechanical checker и его tests принадлежат этому skill только при выполнении строгого критерия полной детерминированной проверяемости. `project-standard-audit` классифицирует условную применимость skills из полного объявленного каталога, а общий `agent-workflows:code-audit` управляет audit procedure и report contract.
 
-Project выбирает standards явно в canonical section `Required Standards` своего `AGENTS.md`. Этот выбор обязан полностью соответствовать фактическим entities, technologies, boundaries, artifact families и workflows проекта: появление уже описанной capability требует подключения соответствующего skill в том же change set. Исключение или project-local specialization допустимы только по явному требованию пользователя и должны называть внешний owner и точную локальную область. Generated copies standard prose в `AGENTS.md` не создаются и drift synchronization между provider и consumer prose не используется. Project-local overlay не повторяет standard и содержит только реальные локальные bindings, ограничения и явно разрешённые исключения.
+Project связывается со всем provider одной canonical секцией `Required Standards` в `AGENTS.md`; её набор обязан точно совпадать с полным текущим каталогом `project-standards`. Это объявление не утверждает наличие каждой технологии: фактическая применимость определяется provider-owned trigger во время задачи и semantic audit. Исключение или project-local specialization допустимы только по явному требованию пользователя и должны называть внешний owner и точную локальную область. Generated copies standard prose в `AGENTS.md` не создаются и drift synchronization между provider и consumer prose не используется. Project-local overlay не повторяет standard и содержит только реальные локальные bindings, ограничения и явно разрешённые исключения.
 
 Named term, определённый обязательным capability skill, входит в instruction model проекта в пределах applicability этого skill и может использоваться в project `AGENTS.md` без копирования definition. Provider term block остаётся единственным canonical definition owner. Project-local `Core Terms` содержит только специфичные для проекта terms, которых нет в применимых standards. Несовместимые definitions одного term в двух применимых providers являются fail-closed conflict. Явно разрешённая пользователем локальная specialization может расширить использование provider-owned term только в объявленной области, но не становится вторым definition owner.
 
-Один task может применять несколько skills. Например, изменение inbound REST API использует `agent-workflows:code-writer` как procedure, `project-standards:rest-api-server-developer` как reusable engineering standard и project-local `AGENTS.md` или design как owner конкретного framework, router, authentication и domain contract.
+Один task может применять несколько skills. Например, изменение inbound REST API использует `project-standards:rest-api-server-developer` как reusable engineering standard и project-local `AGENTS.md` или design как owner конкретного framework, router, authentication и domain contract.
 
 ## Project-local boundary
 
@@ -226,9 +225,9 @@ Global Codex configuration использует `project_doc_max_bytes = 524288`
 
 После provider cutover `workflow-control-center` и `marketplace-tr-priority` не сохраняют `.codex/config.toml`: их общие значения принадлежат global configuration, а named role entries заменяются provider-owned workflow contracts. Новый project-local harness config создаётся только при доказанном project-specific отличии.
 
-Выбранные standards объявляются в `AGENTS.md`; отдельный project-standard manifest не создаётся без доказанной потребности в machine-readable boundary. Plugin installation и skill discovery могут быть harness-specific, но canonical standard, design и `.spec/` contracts остаются обычным Markdown.
+Полный provider catalog объявляется в `AGENTS.md`; отдельный project-standard manifest не создаётся без доказанной потребности в machine-readable boundary. Plugin installation и skill discovery могут быть harness-specific, но canonical standard, design и `.spec/` contracts остаются обычным Markdown.
 
-Projects и selected standards для workspace standardization обнаруживаются по filesystem и project metadata относительно явно переданного workspace root. Generic implementation не содержит списка пользовательских checkout или абсолютного пути `/home/andrey/Projects`.
+Projects и объявленные provider catalogs для workspace standardization обнаруживаются по filesystem и project metadata относительно явно переданного workspace root. Generic implementation не содержит списка пользовательских checkout или абсолютного пути `/home/andrey/Projects`.
 
 ## Проверка
 
@@ -239,7 +238,7 @@ Projects и selected standards для workspace standardization обнаружи
 Workspace standardization verification подтверждает:
 
 - доступность каждого required plugin и skill до изменения consumer project;
-- полный выбор всех capability skills, применимых к фактическому scope каждого project, и явное пользовательское основание каждого исключения;
+- точное равенство `Required Standards` полному provider catalog и отдельную семантическую классификацию фактически применимых capability skills;
 - отсутствие local copies общих skills и orchestration assets в consumer projects;
 - отсутствие generated copies `project-standards` prose;
 - наличие корректного project `AGENTS.md` с `Required Standards`, owner paths, commands, local boundaries и overlays;
@@ -255,3 +254,9 @@ Semantic audit строит coverage независимо из полного н
 Обычные writing workflows после последнего fix и исполняемой verification выполняют такой же полный прямой semantic pass по всем применимым owner requirements, но не создают report, completion ledger или другой evidence artifact. Structured audit workflow и его report запускаются только по явному запросу пользователя. Успешные scripts, tests или validators не могут заменить ни прямой semantic acceptance writing workflow, ни явно запрошенный structured audit.
 
 Provider проверяется, устанавливается и становится доступным в fresh harness session раньше удаления consumer copy. Неуспешная provider validation оставляет consumer project с прежним рабочим workflow и допускает исправление provider без промежуточного compatibility layer.
+
+### Поведенческая Проверка Skills
+
+`skill_behavior_eval/corpus-v1.json` является версионированным набором direct, indirect, incomplete, negative и overlap scenarios для трёх plugins этого repository. Каждый case задаёт expected и forbidden activation и смысловые invariants ответа.
+
+Общий runner принадлежит `project-standards:project-instruction-developer` и не копируется в этот repository. Он выполняет read-only generation и отдельное semantic judging на target model. Эта opt-in фаза обязательна при существенном изменении triggers, explicit-only policy, overlap boundaries или workflow output contract, но остаётся отдельной от plugin validator, skill validator и `pytest`.

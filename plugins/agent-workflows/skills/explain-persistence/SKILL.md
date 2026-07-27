@@ -1,6 +1,6 @@
 ---
 name: explain-persistence
-description: Use when the user asks to explain current persistence behavior, database reads or writes, file side effects, lifecycle semantics, stale marking, upserts, snapshots, or generated artifacts.
+description: Explain current database writes, file side effects, lifecycle semantics, stale marking, upserts, snapshots, and generated artifacts.
 ---
 
 # Explain Persistence

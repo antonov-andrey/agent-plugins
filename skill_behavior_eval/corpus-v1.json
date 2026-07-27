@@ -1,0 +1,212 @@
+{
+  "schema_version": 1,
+  "suite": "agent-plugins",
+  "case_list": [
+    {
+      "id": "direct-code-audit",
+      "working_directory": "..",
+      "prompt": "Use $agent-workflows:code-audit. In this read-only evaluation, explain its exact owner-derived execution and terminal report contract for the current Python scope without creating the actual report.",
+      "expected_skill_list": [
+        "agent-workflows:code-audit"
+      ],
+      "forbidden_skill_list": [
+        "agent-workflows:code-antipattern-audit",
+        "agent-workflows:goal-review"
+      ],
+      "semantic_invariant_list": [
+        {
+          "id": "workflow-contract",
+          "text": "The response describes the named code-audit workflow with complete owner-derived coverage and its terminal result of either one validated canonical report path or explicit no-auditable-scope; it does not claim to have created a report or fabricate a path in the read-only evaluation."
+        },
+        {
+          "id": "read-only",
+          "text": "The response keeps the audit read-only and does not implement findings."
+        }
+      ]
+    },
+    {
+      "id": "direct-code-antipattern-audit",
+      "working_directory": "..",
+      "prompt": "Use $agent-workflows:code-antipattern-audit. In this read-only evaluation, explain its exact audit workflow and terminal contract for the current changed Python scope without creating report artifacts.",
+      "expected_skill_list": [
+        "agent-workflows:code-antipattern-audit"
+      ],
+      "forbidden_skill_list": [
+        "agent-workflows:code-audit",
+        "agent-workflows:instruction-audit"
+      ],
+      "semantic_invariant_list": [
+        {
+          "id": "explicit-workflow",
+          "text": "The response describes the explicitly named anti-pattern audit rather than substituting the general code-audit workflow."
+        },
+        {
+          "id": "read-only-scope",
+          "text": "The response preserves the read-only scope and explains that the terminal result is the validated anti-pattern report path or an explicit no-auditable-scope result."
+        }
+      ]
+    },
+    {
+      "id": "direct-instruction-audit",
+      "working_directory": "..",
+      "prompt": "Use $agent-workflows:instruction-audit. In this read-only evaluation, explain its exact canonical-owner semantic audit and terminal report contract without creating report artifacts.",
+      "expected_skill_list": [
+        "agent-workflows:instruction-audit"
+      ],
+      "forbidden_skill_list": [
+        "agent-workflows:instruction-migration",
+        "agent-workflows:code-audit"
+      ],
+      "semantic_invariant_list": [
+        {
+          "id": "explicit-workflow",
+          "text": "The response describes the explicitly named instruction-audit workflow and does not start instruction migration."
+        },
+        {
+          "id": "owner-derived",
+          "text": "The response derives semantic coverage from canonical instruction, provider, and design owners rather than a mechanical prose scan."
+        }
+      ]
+    },
+    {
+      "id": "direct-instruction-migration",
+      "working_directory": "..",
+      "prompt": "Use $agent-workflows:instruction-migration for an already approved source-to-target ledger, but in this read-only evaluation explain the exact migration and fresh semantic recheck sequence without changing files.",
+      "expected_skill_list": [
+        "agent-workflows:instruction-migration"
+      ],
+      "forbidden_skill_list": [
+        "agent-workflows:instruction-audit",
+        "agent-workflows:code-audit"
+      ],
+      "semantic_invariant_list": [
+        {
+          "id": "approved-ledger",
+          "text": "The response treats the approved source-to-target ledger as mandatory input and fails closed on an incomplete owner mapping."
+        },
+        {
+          "id": "no-compatibility-copy",
+          "text": "The response preserves each requirement at exactly one canonical destination, removes stale owners and references, and creates no compatibility copy."
+        },
+        {
+          "id": "fresh-semantic-pass",
+          "text": "After any fix, the response restarts a complete semantic pass over the ledger, destinations, removed sources, references, and project overlays."
+        }
+      ]
+    },
+    {
+      "id": "indirect-explain-algorithm-persistence",
+      "working_directory": "..",
+      "prompt": "Explain from the current code how `plugins/agent-workflows/lib/section-audit/tool/audit_report_merge.py` validates and merges section reports, which files it reads or writes, and where failure stops publication. Do not change anything.",
+      "expected_skill_list": [
+        "agent-workflows:explain-algorithm",
+        "agent-workflows:explain-persistence"
+      ],
+      "forbidden_skill_list": [
+        "agent-workflows:code-audit",
+        "agent-workflows:instruction-audit"
+      ],
+      "semantic_invariant_list": [
+        {
+          "id": "current-code-evidence",
+          "text": "The response derives the merge sequence and file effects from the current `audit_report_merge.py` implementation rather than generic architecture assumptions."
+        },
+        {
+          "id": "publication-boundary",
+          "text": "The response identifies the actual validation gate and the point at which the final report file is written or withheld."
+        }
+      ]
+    },
+    {
+      "id": "incomplete-instruction-change",
+      "working_directory": "..",
+      "prompt": "AGENTS.md has grown too large. Inspect what is project-specific and what may belong in shared standards, then propose a classification. No migration has been approved.",
+      "expected_skill_list": [
+        "project-standards:project-foundation",
+        "project-standards:project-instruction-developer",
+        "project-standards:project-standard-audit"
+      ],
+      "forbidden_skill_list": [
+        "agent-workflows:instruction-migration",
+        "agent-workflows:instruction-audit"
+      ],
+      "semantic_invariant_list": [
+        {
+          "id": "classification-only",
+          "text": "The response performs or proposes semantic classification without starting a protected instruction migration."
+        },
+        {
+          "id": "approval-boundary",
+          "text": "The response requires an explicit approved source-to-target ledger before moving instruction ownership."
+        }
+      ]
+    },
+    {
+      "id": "negative-ordinary-python-fix",
+      "working_directory": "..",
+      "prompt": "Fix a small bug in one ordinary non-Legacy Python function and add a focused pytest regression test.",
+      "expected_skill_list": [
+        "project-standards:project-foundation",
+        "project-standards:python-developer",
+        "project-standards:pytest-developer"
+      ],
+      "forbidden_skill_list": [
+        "agent-workflows:code-audit",
+        "agent-workflows:code-antipattern-audit",
+        "agent-workflows:instruction-migration",
+        "agent-workflows:goal-brainstorm"
+      ],
+      "semantic_invariant_list": [
+        {
+          "id": "ordinary-change",
+          "text": "The response treats this as an ordinary scoped implementation with a focused regression test, not as a named audit or brainstorm workflow."
+        }
+      ]
+    },
+    {
+      "id": "overlap-workflow-container-audit",
+      "working_directory": "..",
+      "prompt": "Semantically audit a workflow-container project's prompts, step recovery, artifact boundaries, and runtime integration without changing files. No target repository was supplied, so state the exact design-owner set and finding contract required before prioritized findings can be produced.",
+      "expected_skill_list": [
+        "workflow-container-agent-tools:workflow-container-audit",
+        "workflow-container-agent-tools:workflow-container-developer"
+      ],
+      "forbidden_skill_list": [
+        "agent-workflows:code-audit",
+        "agent-workflows:code-antipattern-audit"
+      ],
+      "semantic_invariant_list": [
+        {
+          "id": "owner-design-derived",
+          "text": "Because no target workflow-container project is supplied, the response refuses to invent an owner closure and names the source, runtime, platform, browser, VPN, and concrete workflow design owners that a real audit must resolve."
+        },
+        {
+          "id": "finding-contract",
+          "text": "The response remains read-only, does not fabricate findings without a target, and states that a real run will return prioritized findings with concrete evidence and fixes."
+        }
+      ]
+    },
+    {
+      "id": "direct-goal-brainstorm",
+      "working_directory": "..",
+      "prompt": "Use $agent-workflows:goal-brainstorm to turn a proposed multi-repository architecture change into approved stable contracts and a persistent spec/goal pair. Do not implement it.",
+      "expected_skill_list": [
+        "agent-workflows:goal-brainstorm"
+      ],
+      "forbidden_skill_list": [
+        "agent-workflows:instruction-migration",
+        "agent-workflows:git-commit"
+      ],
+      "semantic_invariant_list": [
+        {
+          "id": "approval-before-contract-write",
+          "text": "The response separates design approval, owner-document updates, task-pair creation, and later goal activation."
+        },
+        {
+          "id": "no-implementation",
+          "text": "The response does not begin production implementation, commit, or push during goal brainstorm."
+        }
+      ]
+    }
+  ]
+}

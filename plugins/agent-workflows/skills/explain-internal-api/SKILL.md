@@ -1,6 +1,6 @@
 ---
 name: explain-internal-api
-description: Use when the user asks for a Classes And Methods-style declaration view of current internal classes, methods, functions, and owned fields for one project script, module, package, or workflow.
+description: Explain current internal classes, methods, functions, signatures, and owned fields in a declaration-style view.
 ---
 
 # Explain Internal API
