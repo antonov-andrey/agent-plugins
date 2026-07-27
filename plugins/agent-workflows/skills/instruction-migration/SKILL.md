@@ -1,6 +1,6 @@
 ---
 name: instruction-migration
-description: Migrate instruction ownership across AGENTS.md, skills, providers, and design only when the user explicitly invokes this skill.
+description: Use only when explicitly asked to apply an approved instruction source-to-target ledger.
 ---
 
 # Instruction Migration

@@ -1,6 +1,6 @@
 ---
 name: goal-review
-description: Run an explicitly requested non-interactive Codex review against uncommitted changes or the selected branch base.
+description: Run an explicitly requested non-interactive Codex review of uncommitted changes or a branch diff.
 ---
 
 # Goal Review

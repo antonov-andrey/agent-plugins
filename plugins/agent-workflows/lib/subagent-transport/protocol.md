@@ -7,8 +7,9 @@ This file owns parent-side transport and recovery for workflows that keep one or
 - Every parent-to-subagent task MUST be idempotent or restart-resumable.
 - `agent-workflows` plugin support owner `lib/subagent-transport/protocol.md` owns parent-side subagent transport, liveness tracking, and recovery mechanics.
 - Subagents that are no longer current and will not receive corrective feedback or follow-up work MUST be closed.
-- `direct_agent` is the default mode for one current active subagent.
-- `agent_pool` is allowed only when one workflow has multiple active subagents at the same time and uses one run-local `agent.json` registry.
+- `direct_agent` means one independently tracked current subagent whose identifier is held in parent runtime state.
+- `agent_pool` means a registry-backed workflow that owns one run-local `agent.json`; it may currently contain one or more active subagents.
+- A locally executed role that does not create a subagent has no subagent transport mode.
 - Each subagent-using workflow MUST state its selected transport mode before sending work.
 
 ## Direct Agent Mode
@@ -33,9 +34,10 @@ python <resolved-agent-workflows-plugin-root>/lib/subagent-transport/tool/subage
 
 ## Agent Creation
 - This protocol does not restrict agent creation shape.
-- Parent workflows create default harness subagents and supply the complete workflow-owned role contract in the task prompt.
+- Parent workflows create subagents through the selected harness adapter without inherited surrounding conversation context and supply the complete workflow-owned role contract in the task prompt.
+- A harness adapter MUST express that context boundary with the harness's current supported creation field; canonical plugin contracts MUST NOT expose a harness-specific or obsolete field name.
 - This protocol receives only the created `agent_id`.
-- Selection of role prompt, context inheritance, task payload, and replacement prompt belongs to the workflow owner.
+- Selection of role prompt, task payload, and replacement prompt belongs to the workflow owner; inherited surrounding conversation context remains forbidden.
 - Consumer-local named-agent TOML is not a launch dependency or fallback.
 
 ## Agent Lifecycle

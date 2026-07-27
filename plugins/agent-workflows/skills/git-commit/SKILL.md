@@ -1,6 +1,6 @@
 ---
 name: git-commit
-description: Use when the user explicitly requests `commit` or `push` and the repository worktree must be inventoried, split into logical commits, and published with submodules committed first.
+description: Use when asked to commit or push; inventory worktrees, split logical commits, and publish submodules first.
 ---
 
 # Git Commit

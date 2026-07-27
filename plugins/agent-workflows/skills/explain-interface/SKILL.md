@@ -1,6 +1,6 @@
 ---
 name: explain-interface
-description: Use when the user asks to explain how a script, module, class, or workflow interacts with external systems, repository tables, files, APIs, CLI, config, or other boundary entities.
+description: Explain how current code interacts with external systems, APIs, databases, files, CLI, and configuration.
 ---
 
 # Explain Interface

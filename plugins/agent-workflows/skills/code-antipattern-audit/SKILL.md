@@ -1,6 +1,6 @@
 ---
 name: code-antipattern-audit
-description: Use when the user explicitly requests the code-antipattern-audit workflow or one merged anti-pattern audit report path under tmp/.
+description: Use only when explicitly asked for the code-antipattern-audit workflow or its merged report.
 ---
 
 # Code Anti-pattern Audit
@@ -26,9 +26,9 @@ Fail closed if either provider or required owner is unavailable. Do not fall bac
 
 1. Normalize one repository-relative auditable Python scope.
 2. Run the complete `references/mechanical-role.md` contract and write one mechanical source report. This phase records only exact repository-wide mechanical evidence and MUST NOT interpret anti-pattern cards.
-3. State transport mode `agent_pool` when the semantic role is delegated, otherwise `direct_agent`.
+3. State transport mode `direct_agent` when the semantic role is delegated. A locally executed semantic role has no subagent transport mode.
 4. Start the semantic role only after freezing the independently derived complete card inventory. Do not provide checker identities, mechanical output, historical findings, or the implementation plan to that role.
-5. When delegated, record the current semantic-agent identifier in one run-local `agent.json` as required by the transport owner and apply transport recovery without changing its fixed role.
+5. When delegated, keep the current semantic-agent identifier in parent runtime state, do not create or read `agent.json`, and apply transport recovery without changing its fixed role.
 6. Validate both source reports with `lib/code-antipattern-audit/tool/code_antipattern_audit_report_check.py --expected-scope <scope>`.
 7. Send malformed or incomplete semantic-report feedback to the same current role subagent while it remains current; replacement is transport-owned recovery only.
 8. Merge the two validated reports with `lib/code-antipattern-audit/tool/code_antipattern_audit_report_merge.py`.

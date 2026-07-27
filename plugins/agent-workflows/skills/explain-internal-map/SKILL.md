@@ -1,6 +1,6 @@
 ---
 name: explain-internal-map
-description: Use when the user asks for an internal interaction map, dependency map, call-flow map, or component relationship map for one project script, module, package, or workflow.
+description: Map current internal dependencies, calls, component interactions, and workflow relationships.
 ---
 
 # Explain Internal Map

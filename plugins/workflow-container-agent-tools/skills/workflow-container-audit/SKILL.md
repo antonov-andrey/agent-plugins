@@ -1,6 +1,6 @@
 ---
 name: workflow-container-audit
-description: Semantically audit workflow-container contracts, code, prompts, persistence, recovery, and cross-runtime ownership against their current project designs.
+description: Audit workflow-container contracts, prompts, persistence, recovery, and cross-runtime ownership against project design.
 ---
 
 # Workflow Container Audit

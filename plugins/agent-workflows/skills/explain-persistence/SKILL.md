@@ -1,6 +1,6 @@
 ---
 name: explain-persistence
-description: Explain current database writes, file side effects, lifecycle semantics, stale marking, upserts, snapshots, and generated artifacts.
+description: Explain current database and file effects, lifecycle, upserts, snapshots, and generated artifacts.
 ---
 
 # Explain Persistence

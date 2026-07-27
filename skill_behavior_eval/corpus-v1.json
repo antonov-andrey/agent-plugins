@@ -5,7 +5,7 @@
     {
       "id": "direct-code-audit",
       "working_directory": "..",
-      "prompt": "Use $agent-workflows:code-audit. In this read-only evaluation, explain its exact owner-derived execution and terminal report contract for the current Python scope without creating the actual report.",
+      "prompt": "Use $agent-workflows:code-audit. In this read-only evaluation, explain its exact owner-derived execution, one-section registry state, context-inheritance boundary, and terminal report contract for the current Python scope without creating the actual report.",
       "expected_skill_list": [
         "agent-workflows:code-audit"
       ],
@@ -21,13 +21,21 @@
         {
           "id": "read-only",
           "text": "The response keeps the audit read-only and does not implement findings."
+        },
+        {
+          "id": "registry-backed-section-pool",
+          "text": "The response uses the section-audit agent_pool and its run-local agent.json registry even when the resolved checklist has only one section."
+        },
+        {
+          "id": "context-boundary",
+          "text": "The response creates section agents without inherited surrounding conversation context through the current harness adapter and does not expose an obsolete harness-specific field as a canonical contract."
         }
       ]
     },
     {
       "id": "direct-code-antipattern-audit",
       "working_directory": "..",
-      "prompt": "Use $agent-workflows:code-antipattern-audit. In this read-only evaluation, explain its exact audit workflow and terminal contract for the current changed Python scope without creating report artifacts.",
+      "prompt": "Use $agent-workflows:code-antipattern-audit. In this read-only evaluation, explain its exact audit workflow, delegated-versus-local semantic-role transport state, and terminal contract for the current changed Python scope without creating report artifacts.",
       "expected_skill_list": [
         "agent-workflows:code-antipattern-audit"
       ],
@@ -43,13 +51,17 @@
         {
           "id": "read-only-scope",
           "text": "The response preserves the read-only scope and explains that the terminal result is the validated anti-pattern report path or an explicit no-auditable-scope result."
+        },
+        {
+          "id": "direct-agent-transport",
+          "text": "A delegated semantic role uses direct_agent with its identifier in parent runtime state and no agent.json; a locally executed semantic role has no subagent transport."
         }
       ]
     },
     {
       "id": "direct-instruction-audit",
       "working_directory": "..",
-      "prompt": "Use $agent-workflows:instruction-audit. In this read-only evaluation, explain its exact canonical-owner semantic audit and terminal report contract without creating report artifacts.",
+      "prompt": "Use $agent-workflows:instruction-audit. In this read-only evaluation, explain its exact canonical-owner semantic audit, one-section registry state, and terminal report contract without creating report artifacts.",
       "expected_skill_list": [
         "agent-workflows:instruction-audit"
       ],
@@ -65,6 +77,10 @@
         {
           "id": "owner-derived",
           "text": "The response derives semantic coverage from canonical instruction, provider, and design owners rather than a mechanical prose scan."
+        },
+        {
+          "id": "registry-backed-section-pool",
+          "text": "The response uses the section-audit agent_pool and its run-local agent.json registry even when the resolved checklist has only one section."
         }
       ]
     },
@@ -189,7 +205,7 @@
     {
       "id": "direct-goal-brainstorm",
       "working_directory": "..",
-      "prompt": "Use $agent-workflows:goal-brainstorm to turn a proposed multi-repository architecture change into approved stable contracts and a persistent spec/goal pair. Do not implement it.",
+      "prompt": "Use $agent-workflows:goal-brainstorm to turn a proposed multi-repository architecture change into approved stable contracts and a persistent spec/goal pair. Explain the required sequence among design approval, stable-owner document updates, task-pair creation, and later goal activation. Do not implement it.",
       "expected_skill_list": [
         "agent-workflows:goal-brainstorm"
       ],
@@ -205,6 +221,125 @@
         {
           "id": "no-implementation",
           "text": "The response does not begin production implementation, commit, or push during goal brainstorm."
+        }
+      ]
+    },
+    {
+      "id": "indirect-explain-interface",
+      "working_directory": "..",
+      "prompt": "Explain from current code every external boundary of plugins/agent-workflows/lib/section-audit/tool/audit_report_merge.py, including CLI inputs, files read and written, validation failures, and the evidence for each claim. Do not modify anything.",
+      "expected_skill_list": [
+        "agent-workflows:explain-interface",
+        "project-standards:project-foundation"
+      ],
+      "forbidden_skill_list": [
+        "agent-workflows:code-audit",
+        "agent-workflows:explain-internal-api"
+      ],
+      "semantic_invariant_list": [
+        {
+          "id": "boundary-detail",
+          "text": "The response proposes an evidence-backed interface explanation that distinguishes CLI, file, and validation boundaries rather than narrating an internal call chain."
+        }
+      ]
+    },
+    {
+      "id": "indirect-explain-internal-api",
+      "working_directory": "../../project-standards",
+      "prompt": "Show the current internal classes, functions, signatures, decorators, and owned fields of plugins/project-standards/skills/project-instruction-developer/scripts/skill_behavior_eval.py as declaration-style Python blocks. Do not change files.",
+      "expected_skill_list": [
+        "agent-workflows:explain-internal-api",
+        "project-standards:project-foundation"
+      ],
+      "forbidden_skill_list": [
+        "agent-workflows:explain-algorithm",
+        "agent-workflows:code-audit"
+      ],
+      "semantic_invariant_list": [
+        {
+          "id": "declaration-view",
+          "text": "The response uses current-code declaration blocks with signatures and owned fields, not a prose algorithm summary or a code audit."
+        }
+      ]
+    },
+    {
+      "id": "indirect-explain-internal-map",
+      "working_directory": "../../marketplace-tr-priority",
+      "prompt": "Draw an internal runtime interaction map for .agents/skills/trendyol-size-chart-parse/tool/run_prepare.py, including its workflow owner, database boundaries, image download boundary, generated files, and transaction labels. Do not change files.",
+      "expected_skill_list": [
+        "agent-workflows:explain-internal-map",
+        "project-standards:project-foundation"
+      ],
+      "forbidden_skill_list": [
+        "agent-workflows:explain-interface",
+        "agent-workflows:code-audit"
+      ],
+      "semantic_invariant_list": [
+        {
+          "id": "runtime-map",
+          "text": "The response proposes one current-code ASCII runtime map with explicit participants, interactions, and transaction labels rather than a generic architecture diagram."
+        }
+      ]
+    },
+    {
+      "id": "indirect-git-commit",
+      "working_directory": "..",
+      "prompt": "Commit and push every current change in this repository, preserving logical commit boundaries and publishing dirty submodules before the superproject. This evaluation is read-only, so explain the exact procedure without executing it.",
+      "expected_skill_list": [
+        "agent-workflows:git-commit",
+        "project-standards:project-foundation"
+      ],
+      "forbidden_skill_list": [
+        "github:yeet",
+        "agent-workflows:goal-review"
+      ],
+      "semantic_invariant_list": [
+        {
+          "id": "publication-order",
+          "text": "The response inventories the complete visible worktree, creates logical commits, and pushes submodule commits before a superproject commit that references them."
+        }
+      ]
+    },
+    {
+      "id": "indirect-goal-review",
+      "working_directory": "..",
+      "prompt": "Run a non-interactive Codex review of the current branch against main, fix every finding, and repeat until a fresh review is clean. This evaluation is read-only, so state the exact target-selection and loop contract without executing it.",
+      "expected_skill_list": [
+        "agent-workflows:goal-review",
+        "project-standards:project-foundation"
+      ],
+      "forbidden_skill_list": [
+        "agent-workflows:code-audit",
+        "agent-workflows:code-antipattern-audit"
+      ],
+      "semantic_invariant_list": [
+        {
+          "id": "review-loop",
+          "text": "The response selects non-interactive branch-relative review, requires a clean worktree for that mode, and repeats fix, verification, and the same review until a fresh run has no findings."
+        }
+      ]
+    },
+    {
+      "id": "indirect-workflow-input-create",
+      "working_directory": "../../brand-size-chart",
+      "prompt": "Prepare one complete Workflow input JSON for a saved WorkflowRun by starting from its saved complete input, asking for changed values, validating the whole selected source schema, and replacing the destination atomically. Do not launch the run.",
+      "expected_skill_list": [
+        "workflow-container-agent-tools:workflow-container-input-create",
+        "project-standards:project-foundation"
+      ],
+      "forbidden_skill_list": [
+        "workflow-container-agent-tools:workflow-container-developer",
+        "agent-workflows:goal-brainstorm",
+        "agent-workflows:git-commit"
+      ],
+      "semantic_invariant_list": [
+        {
+          "id": "complete-object",
+          "text": "The response starts from the saved complete input, treats partial user values as decisions rather than a recursive patch, validates the whole schema, and writes one atomic complete replacement."
+        },
+        {
+          "id": "no-launch",
+          "text": "The response does not launch a WorkflowRun or mutate marketplace state."
         }
       ]
     }

@@ -1,6 +1,6 @@
 # Section Audit Protocol
 
-This file owns shared section-agent orchestration, artifact contracts, validators, and deterministic merge for structured audit skills that split one checklist into top-level section tasks. Each skill owns its scope derivation, applicable owner selection, checklist text, and final handoff.
+This file owns shared section-agent orchestration, artifact contracts, validators, and deterministic merge for structured audit skills that split one checklist into top-level section tasks. Every run uses a registry-backed `agent_pool` and run-local `agent.json`, including a one-section run, and creates section agents without inherited surrounding conversation context through the current harness adapter. Each skill owns its scope derivation, applicable owner selection, checklist text, and final handoff.
 
 ## Required Skill Inputs
 - One `audit_name` used as the run directory prefix under `tmp/<audit_name>/<run_uuid>/`.
@@ -20,6 +20,7 @@ This file owns shared section-agent orchestration, artifact contracts, validator
 
 ## Section Tasks
 - Create exactly one section task per top-level checklist section in canonical checklist order.
+- Every section task MUST satisfy `lib/subagent-role-contract.md` by stating its mission, exact scope, limits, evidence requirements, result contract, and handoff rules.
 - Each section task MUST include the literal top-level checklist-section heading and every checklist item that belongs to that section in canonical order.
 - Each section task MUST include every skill-required checklist-card metadata field literally, without parent-local paraphrase or weakening.
 - When one owning skill requires exhaustive semantic coverage, checklist items MUST be derived from the complete canonical owner requirement inventory before findings or mechanical output are inspected. Mechanical check identities, signals, historical findings, and implementation-plan items MUST NOT define or limit that inventory.
@@ -27,7 +28,7 @@ This file owns shared section-agent orchestration, artifact contracts, validator
 - Different top-level checklist sections MUST NOT be merged into one task, and one top-level checklist section MUST NOT be split across multiple tasks.
 
 ## Section Agents
-- The default section-agent profile is one dedicated default sub-agent per top-level checklist section with `fork_context=false`.
+- The default section-agent profile is one dedicated default subagent per top-level checklist section without inherited surrounding conversation context.
 - The owning skill MAY declare a named project agent or another runtime-supported agent creation profile for section agents.
 - Send all section tasks in parallel.
 - If one required section sub-agent cannot be created through the selected profile, the owning skill MUST fail explicitly.
@@ -47,3 +48,14 @@ This file owns shared section-agent orchestration, artifact contracts, validator
 - The parent MUST NOT replace missing section-agent findings with locally improvised findings.
 - The final merge MUST receive the separately executed mechanical status and concrete command/result evidence. Mechanical output MUST NOT be exposed to semantic section agents before their discovery and confirmation are complete.
 - Validate the final report with the skill-local final report validator before returning the report path.
+
+## Canonical Orchestration
+
+1. Resolve the complete owner inventory and canonical checklist-section order independently of mechanical output and existing findings.
+2. Execute the owning skill's mechanical phase separately and retain its exact status and command/result evidence without exposing it to section agents.
+3. Create the run directory and pool registry, then create one section agent and one task for every top-level checklist section.
+4. Send all section tasks in parallel and use `lib/subagent-transport/protocol.md` for liveness tracking and recovery.
+5. Validate every section result structurally with every assigned requirement literal. Send corrective feedback to the same current agent while transport keeps it current.
+6. Compare the validated results with the independently derived complete owner inventory. Missing or duplicated coverage forbids merge.
+7. Merge validated results in canonical checklist order with the separate mechanical evidence.
+8. Validate the final report and return only its owning skill's declared final report path.

@@ -1,6 +1,6 @@
 ---
 name: workflow-container-developer
-description: Develop or refactor workflow-container sources, shared runtime packages, platform integration, browser or VPN capabilities, DBOS steps, prompts, and artifacts.
+description: Develop or refactor workflow-container code, contracts, runtimes, integration, VPN or browser capabilities, DBOS steps, prompts, or artifacts; not input JSON.
 ---
 
 # Workflow Container Developer
@@ -32,6 +32,7 @@ When one change crosses owners, read every affected owner design before editing.
 
 ## Boundaries
 
+- Preparing or revising one complete input JSON without changing source code or contracts belongs only to `workflow-container-input-create`.
 - A concrete workflow may depend at runtime on `workflow-container-contract` and optionally `workflow-container-runtime`; it must never depend on this plugin.
 - The shared base image and shared runtime package are optional implementations of the platform interface, not requirements for third-party images.
 - Generic mechanics move to their runtime owner only when they are truly source-neutral. Concrete DBOS topology, data meaning, prompts, validators, and result semantics stay with the concrete workflow.

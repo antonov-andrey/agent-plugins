@@ -1,6 +1,6 @@
 ---
 name: explain-internal-api
-description: Explain current internal classes, methods, functions, signatures, and owned fields in a declaration-style view.
+description: Declare current internal classes, methods, functions, signatures, and owned fields.
 ---
 
 # Explain Internal API

@@ -1,6 +1,6 @@
 ---
 name: workflow-container-input-create
-description: Use when a user needs to prepare, revise, validate, export, or migrate one complete workflow-container input JSON for a Workflow or WorkflowRun.
+description: Use when preparing, revising, validating, exporting, or migrating complete workflow-container input JSON for Workflow or WorkflowRun.
 ---
 
 # Workflow Container Input Create

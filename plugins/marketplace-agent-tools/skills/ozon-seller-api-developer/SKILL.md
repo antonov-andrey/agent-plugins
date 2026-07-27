@@ -1,6 +1,6 @@
 ---
 name: ozon-seller-api-developer
-description: Develop or audit Ozon Seller API endpoints, schemas, pagination, buffered operations, provider configuration, snapshots, and consumers.
+description: Develop or audit Ozon Seller API endpoints, schemas, pagination, buffered operations, provider configuration, or consumers.
 ---
 
 # Ozon Seller API Developer

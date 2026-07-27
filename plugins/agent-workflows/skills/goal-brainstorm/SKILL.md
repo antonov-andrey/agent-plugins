@@ -1,6 +1,6 @@
 ---
 name: goal-brainstorm
-description: Clarify an implementation idea, revise stable design requirements, and prepare an optional harness-neutral specification and persistent goal.
+description: Clarify implementation ideas or design changes and prepare an approved specification and persistent goal.
 ---
 
 # Goal Brainstorm

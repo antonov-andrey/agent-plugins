@@ -1,11 +1,11 @@
 ---
 name: instruction-audit
-description: Use when the user explicitly requests the instruction-audit workflow or one validated instruction-audit report path under tmp/.
+description: Use only when explicitly asked for instruction-audit or its validated semantic report.
 ---
 
 # Instruction Audit
 
-Produce one evidence-backed semantic audit of current instruction artifacts against their real owner and precedence model. This skill owns generic scope derivation, section orchestration, report assembly, and handoff. Instruction structure and wording rules belong to `project-standards:project-instruction-developer`; project-specific contracts stay project-local.
+Produce one evidence-backed semantic audit of current instruction artifacts against their real owner and precedence model. This skill owns instruction scope derivation, owner closure, evidence semantics, report identity, and handoff. Shared section orchestration belongs to `lib/section-audit/protocol.md`; instruction structure and wording rules belong to `project-standards:project-instruction-developer`; project-specific contracts stay project-local.
 
 ## Owners
 
@@ -29,16 +29,10 @@ Build ordered checklist sections from that complete owner closure. Every normati
 
 ## Workflow
 
-1. Run the applicable exact mechanical validators and preserve their command, exit status, mechanical status, findings, and errors as a separate evidence block. Their inventory MUST NOT define semantic sections.
-2. State transport mode `agent_pool` when multiple checklist sections run concurrently, otherwise `direct_agent`.
-3. Create one task per checklist section with exact scope, complete owner sources, every assigned normative requirement in owner order, role mission, limits, evidence requirements, result path, and handoff rules.
-4. Require one semantic verdict with concrete current artifact evidence for every assigned requirement, or one explicit not-applicable reason grounded in the current owner boundary.
-5. Require concrete current artifact evidence for every finding.
-6. Validate each result with `lib/section-audit/tool/audit_section_result_check.py`, passing every assigned literal through one `--expected-requirement` argument. Formal validation checks artifact structure only and MUST NOT be treated as semantic validation.
-7. Send corrective feedback to the same current subagent while transport keeps it current.
-8. Before merge, compare returned coverage with the independently derived owner requirement inventory. Missing, duplicated, or checker-derived coverage is a finding and forbids a clean report.
-9. Merge validated section results in canonical owner order with `lib/section-audit/tool/audit_report_merge.py`, passing the exact separate mechanical status and command/result evidence.
-10. Validate the final `tmp/instruction-audit-<uuid>.md` with `lib/section-audit/tool/audit_report_check.py`.
-11. Return exactly the validated report path.
+Execute the complete `lib/section-audit/protocol.md` orchestration. This skill supplies each section's exact instruction scope, complete owner sources, and assigned normative requirements in owner order.
+
+Require one semantic verdict with concrete current artifact evidence for every assigned requirement, or one explicit not-applicable reason grounded in the current owner boundary. Every finding requires concrete current artifact evidence.
+
+The final report path is `tmp/instruction-audit-<uuid>.md`. Return exactly that validated path.
 
 The audit is read-only. A clean report requires both a successful applicable mechanical phase and complete independent semantic coverage with no findings. Mechanical validators never replace, narrow, seed, or close semantic instruction review.

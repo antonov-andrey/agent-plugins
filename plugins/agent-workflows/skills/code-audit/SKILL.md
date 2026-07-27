@@ -1,11 +1,11 @@
 ---
 name: code-audit
-description: Use when the user explicitly requests the code-audit workflow or one validated code-audit report path under tmp/.
+description: Use only when explicitly asked for the code-audit workflow or its validated report.
 ---
 
 # Code Audit
 
-Produce one evidence-backed audit of current code with separate exact mechanical verification and independent exhaustive semantic coverage against its actual owners. This skill owns generic scope derivation, section orchestration, report assembly, and handoff. It does not own reusable engineering checklist semantics or product-specific rules.
+Produce one evidence-backed audit of current code with separate exact mechanical verification and independent exhaustive semantic coverage against its actual owners. This skill owns code scope derivation, owner closure, evidence semantics, report identity, and handoff. It does not own shared section orchestration, reusable engineering checklist semantics, or product-specific rules.
 
 ## Owners
 
@@ -33,15 +33,10 @@ Do not derive semantic sections from checker identities, checker output, histori
 
 ## Workflow
 
-1. Run applicable exact mechanical validators and preserve their command, exit status, mechanical status, findings, and errors. Do not expose this output to semantic roles before their reports are complete.
-2. State transport mode `agent_pool` when multiple checklist sections run concurrently, otherwise `direct_agent`.
-3. Create one task per checklist section with exact scope entries, reviewed owner sources, every assigned normative requirement in canonical order, role mission, limits, evidence requirements, result path, and handoff rules.
-4. Require one `Satisfied`, `Problems`, or explicitly justified `Not applicable` result with current evidence for every assigned requirement. Require current file or line evidence for every finding and direct verification evidence where behavior is in question.
-5. Validate each result with `lib/section-audit/tool/audit_section_result_check.py`, passing every assigned literal through one `--expected-requirement` argument. Formal validation checks structure only.
-6. Send corrective feedback to the same current subagent while transport keeps it current.
-7. Compare returned coverage with the independently derived complete owner inventory. Missing or duplicated coverage forbids a clean report.
-8. Merge validated section results in canonical owner order with `lib/section-audit/tool/audit_report_merge.py`, passing the exact separate mechanical status and command/result evidence.
-9. Validate the final `tmp/code-audit-<uuid>.md` with `lib/section-audit/tool/audit_report_check.py`.
-10. Return exactly the validated report path.
+Execute the complete `lib/section-audit/protocol.md` orchestration. This skill supplies each section's exact code scope, reviewed owner sources, and assigned normative requirements in canonical order.
+
+Require one `Satisfied`, `Problems`, or explicitly justified `Not applicable` result with current evidence for every assigned requirement. Require current file or line evidence for every finding and direct verification evidence where behavior is in question.
+
+The final report path is `tmp/code-audit-<uuid>.md`. Return exactly that validated path.
 
 The audit is read-only. A clean report requires clean applicable mechanics and complete independent semantic coverage with no findings. Passing mechanical checks never replaces, narrows, seeds, or closes semantic review.

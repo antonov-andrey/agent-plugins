@@ -1,6 +1,6 @@
 ---
 name: explain-algorithm
-description: Use when the user asks to explain a current project algorithm, workflow, script run flow, object-selection logic, DB-selection logic, or step-by-step behavior from the actual code.
+description: Explain current algorithms, workflows, run flow, selection logic, and step order from actual project code.
 ---
 
 # Explain Algorithm

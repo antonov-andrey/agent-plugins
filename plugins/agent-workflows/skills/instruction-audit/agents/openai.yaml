@@ -1,5 +1,5 @@
 interface:
-  display_name: "Instruction Audit"
+  display_name: "Instruction Ownership Audit"
   short_description: "Audit instructions against their real owners."
   default_prompt: "Use $instruction-audit to produce one validated semantic instruction-audit report."
 policy:

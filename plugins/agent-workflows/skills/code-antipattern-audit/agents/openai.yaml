@@ -1,5 +1,5 @@
 interface:
-  display_name: "Code Anti-pattern Audit"
+  display_name: "Python Anti-pattern Evidence Audit"
   short_description: "Audit Python code for owned anti-patterns."
   default_prompt: "Use $code-antipattern-audit to audit the selected Python code and return the merged report path."
 policy:

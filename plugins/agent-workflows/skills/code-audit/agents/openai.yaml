@@ -1,5 +1,5 @@
 interface:
-  display_name: "Code Audit"
+  display_name: "Owner-Based Code Conformance Audit"
   short_description: "Audit code against every applicable owner."
   default_prompt: "Use $code-audit to produce one validated audit report for the current code scope."
 policy:

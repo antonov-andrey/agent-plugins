@@ -1,5 +1,18 @@
 # Goal Brainstorm Document Contract
 
+## Table Of Contents
+
+- [Document Owners](#document-owners)
+- [Document Selection](#document-selection)
+- [Artifact Directory](#artifact-directory)
+- [File Names](#file-names)
+- [Implementation Specification](#implementation-specification)
+- [Verification Design](#verification-design)
+- [Goal File](#goal-file)
+- [Terminal Completion Audit](#terminal-completion-audit)
+- [Lifecycle](#lifecycle)
+- [Semantic Review](#semantic-review)
+
 ## Document Owners
 
 - Applicable `AGENTS.md` files own durable project instructions and engineering constraints for their path scope.
