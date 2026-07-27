@@ -22,7 +22,7 @@ Use only non-interactive `codex review`; manual code audits, anti-pattern audits
 1. Inventory branch and dirty state with `git status --short --branch --untracked-files=all`.
 2. Resolve the review target through `Target Selection`.
 3. If branch-relative review was selected, verify the base branch exists with `git rev-parse --verify <base_branch>`.
-4. Before branch-relative review, use `agent-workflows:git-commit` for any visible uncommitted changes, then rerun the inventory command.
+4. Before branch-relative review, use `agent-workflows:git-commit` for any visible uncommitted changes, rerun the inventory command, and do not run the review until the worktree is clean.
 5. Run `codex review --uncommitted` or `codex review --base <base_branch>` for the selected target. Pass user focus notes as the prompt or through stdin.
 6. Treat any finding or comment as a failed review even when the command exits successfully.
 7. Fix every finding, run the required verification for changed files, and use `git-commit` again when branch-relative fixes make the worktree dirty.
