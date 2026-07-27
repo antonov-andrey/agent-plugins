@@ -118,9 +118,7 @@
         "agent-workflows:goal-brainstorm",
         "agent-workflows:instruction-migration"
       ],
-      "forbidden_skill_list": [
-        "agent-workflows:instruction-audit"
-      ],
+      "forbidden_skill_list": [],
       "semantic_invariant_list": [
         {
           "id": "task-artifact-owner",
