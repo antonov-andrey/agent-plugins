@@ -15,7 +15,8 @@ Read completely:
 
 - the applicable `AGENTS.md` chain;
 - `project-standards:project-instruction-developer`;
-- `project-standards:project-documentation-developer` when stable design or task-artifact ownership changes;
+- `project-standards:project-documentation-developer` when stable design changes;
+- `agent-workflows:goal-brainstorm` when task-artifact ownership or lifecycle changes;
 - every source owner, destination owner, and direct reference named by the approved ledger.
 
 Fail closed if a required owner is unavailable or the ledger leaves one source fragment without an approved destination.

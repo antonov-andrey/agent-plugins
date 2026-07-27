@@ -111,6 +111,29 @@
       ]
     },
     {
+      "id": "overlap-instruction-migration-task-artifacts",
+      "working_directory": "..",
+      "prompt": "Use $agent-workflows:instruction-migration for an approved ledger that removes copied .spec lifecycle rules from documentation and audit skills while retaining goal-brainstorm as the sole task-artifact owner. This evaluation is read-only, so explain the owner routing and migration boundary without changing files.",
+      "expected_skill_list": [
+        "agent-workflows:goal-brainstorm",
+        "agent-workflows:instruction-migration"
+      ],
+      "forbidden_skill_list": [
+        "project-standards:project-documentation-developer",
+        "project-standards:project-standard-audit"
+      ],
+      "semantic_invariant_list": [
+        {
+          "id": "task-artifact-owner",
+          "text": "The response reads goal-brainstorm as the sole normative task-artifact owner and does not route .spec lifecycle semantics through documentation or generic standards audit."
+        },
+        {
+          "id": "migration-boundary",
+          "text": "The response applies the approved source-to-target ledger without creating a compatibility owner or changing files in this read-only evaluation."
+        }
+      ]
+    },
+    {
       "id": "indirect-explain-algorithm-persistence",
       "working_directory": "..",
       "prompt": "Explain from the current code how `plugins/agent-workflows/lib/section-audit/tool/audit_report_merge.py` validates and merges section reports, which files it reads or writes, and where failure stops publication. Do not change anything.",
