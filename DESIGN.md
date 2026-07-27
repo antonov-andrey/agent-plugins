@@ -21,12 +21,11 @@ Repository и installable plugin `project-standards` являются отдел
 - project `AGENTS.md` владеет назначением и структурой конкретного проекта, локальными owner paths, runtime versions, точными командами, security boundaries, project-specific constraints, выбранными external standards и локальными overrides;
 - capability skill в `project-standards` владеет одним reusable opinionated engineering standard и его audit contract; mechanical checker и owner-local checker tests существуют только для самостоятельного замкнутого правила с полным детерминированным алгоритмом;
 - workflow skill в `agent-workflows` владеет повторяемой task procedure, её report or handoff contract, orchestration mechanics, tools и tests, но не копирует engineering standards;
+- `agent-workflows:goal-brainstorm` является единственным нормативным владельцем harness-neutral task artifacts и их lifecycle;
 - domain skill в одном independently installable domain plugin владеет reusable domain procedure, instructions, references, agent tools и tests, но не project-specific business logic;
 - корневой `DESIGN.md` владеет стабильной архитектурой проекта и служит её канонической точкой входа;
 - `design/*.md` владеет подробными стабильными контрактами отдельных областей, когда одного `DESIGN.md` недостаточно;
 - `docs/**` владеет пользовательской, эксплуатационной и другой документацией, которая не является архитектурным контрактом;
-- `.spec/*-spec.md` владеет временным task-level контрактом одной реализации независимо от её текущего состояния;
-- `.spec/*-goal.md` владеет краткой исполняемой целью той же реализации независимо от её текущего состояния.
 
 Project `AGENTS.md` обязан объявить полный текущий каталог `project-standards`, а также явно назвать требуемые task workflows из `agent-workflows` и skills из применимых domain plugins. Capability standard из полного каталога применяется только когда его provider-owned trigger соответствует фактическому состоянию проекта или текущей задаче; появление новой entity, technology, boundary, artifact family или workflow автоматически включает уже объявленный standard без изменения каталога. Не использовать или заменить применимый skill можно только по явному требованию пользователя; project-local convenience, существующее несоответствие или молчаливое решение agent не создают исключение. Если обязательный provider или skill недоступен, agent должен остановиться до изменения соответствующего scope. Молчаливое продолжение без объявленного provider contract запрещено.
 
@@ -41,27 +40,6 @@ Project `AGENTS.md` обязан объявить полный текущий к
 Task history, progress, rejected alternatives и завершённые implementation specifications не переносятся в `DESIGN.md` или `design/**`. После реализации туда переходят только устойчивые решения, которые продолжают ограничивать или объяснять работающую систему.
 
 Эксплуатационные runbooks, инструкции использования и справочные материалы остаются под `docs/**`. Каталог `doc/**` и смешение design, operations и task artifacts в одном documentation tree не являются целевой структурой.
-
-## Harness-neutral task artifacts
-
-Task artifacts живут в корневом каталоге `.spec/`, который фактически игнорируется корневым repository `.gitignore`; конкретная эквивалентная форма Git ignore pattern не нормируется. Ни один файл из этого каталога не отслеживается в Git. Каталог не принадлежит Codex или другому конкретному harness.
-
-Одна задача использует общий dated semantic prefix:
-
-```text
-.spec/YYYY-MM-DD-<semantic-name>-spec.md
-.spec/YYYY-MM-DD-<semantic-name>-goal.md
-```
-
-Оба файла используют обычный Markdown без vendor-specific frontmatter, session state, lock-файлов или cache data. `spec` содержит согласованный outcome, границы, решения, migration и verification contract. `goal` остаётся кратким, ссылается на `spec` и stable owners и не копирует их требования.
-
-Trivial work, для которого persistent goal не требуется, не создаёт эту пару. Любая задача, для которой создаётся persistent goal, получает оба файла. В режиме direct owner update specification только связывает outcome, изменяемых владельцев и verification и не повторяет их содержимое.
-
-Предполагаемое завершение persistent goal запускает terminal audit/fix cycle. Каждый audit заново проверяет полную goal, paired specification, stable source contracts и текущее состояние всего заявленного scope, независимо от implementation plan, уже закрытых checklist items, предыдущего audit или прошедших тестов. Любая новая находка незавершённого scope возвращает goal в fix phase; после исправления и повторной применимой verification полный audit начинается заново. Goal может перейти в `complete` только когда новый полный audit после последнего исправления не находит незавершённых требований. Этот цикл не создаёт отдельный ledger, completion report или другой обязательный evidence artifact.
-
-Multi-repository задача хранит одну пару в явно выбранном coordinating repository. Другие projects не получают копии этой пары.
-
-Перед завершением или отменой задачи semantic review подтверждает, что ни одно устойчивое требование не осталось только во временной specification. После любого изменения состояния задачи оба файла сохраняются в `.spec/`; завершение, отмена, блокировка, пауза или результат audit не дают права на их удаление. Удаление разрешено только по явному требованию пользователя.
 
 ## GitHub Repository Lifecycle
 
@@ -225,7 +203,7 @@ Global Codex configuration использует `project_doc_max_bytes = 524288`
 
 После provider cutover `workflow-control-center` и `marketplace-tr-priority` не сохраняют `.codex/config.toml`: их общие значения принадлежат global configuration, а named role entries заменяются provider-owned workflow contracts. Новый project-local harness config создаётся только при доказанном project-specific отличии.
 
-Полный provider catalog объявляется в `AGENTS.md`; отдельный project-standard manifest не создаётся без доказанной потребности в machine-readable boundary. Plugin installation и skill discovery могут быть harness-specific, но canonical standard, design и `.spec/` contracts остаются обычным Markdown.
+Полный provider catalog объявляется в `AGENTS.md`; отдельный project-standard manifest не создаётся без доказанной потребности в machine-readable boundary. Plugin installation и skill discovery могут быть harness-specific, но canonical standard и design contracts остаются обычным Markdown.
 
 Projects и объявленные provider catalogs для workspace standardization обнаруживаются по filesystem и project metadata относительно явно переданного workspace root. Generic implementation не содержит списка пользовательских checkout или абсолютного пути `/home/andrey/Projects`.
 
@@ -242,8 +220,7 @@ Workspace standardization verification подтверждает:
 - отсутствие local copies общих skills и orchestration assets в consumer projects;
 - отсутствие generated copies `project-standards` prose;
 - наличие корректного project `AGENTS.md` с `Required Standards`, owner paths, commands, local boundaries и overlays;
-- корректную классификацию stable design, прочих docs и временных task artifacts;
-- фактическое игнорирование корневого каталога `.spec` через корневой repository `.gitignore` и отсутствие отслеживаемых Git файлов под `.spec/` независимо от состояния соответствующих задач;
+- корректную классификацию stable design и прочих docs;
 - отсутствие абсолютных workspace paths и project-specific domain contracts в generic provider assets;
 - прохождение применимых проверок каждого изменённого project.
 

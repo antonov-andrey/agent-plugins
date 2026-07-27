@@ -14,7 +14,9 @@ Read completely:
 - the governed repository `AGENTS.md` chain;
 - every applicable provider skill selected in `Required Standards`;
 - applicable project `DESIGN.md`, `design/**`, and project-local retained skill contracts;
-- `agent-workflows` plugin support owners `lib/section-audit/protocol.md`, `lib/subagent-role-contract.md`, and `lib/subagent-transport/protocol.md`.
+- `agent-workflows` plugin support owners `lib/section-audit/protocol.md` for registry and current-harness-adapter context boundaries, `lib/subagent-role-contract.md` for role prompts, and `lib/subagent-transport/protocol.md` for lifecycle transport.
+
+When the user requests a read-only explanation instead of an audit run, explicitly report each requested orchestration and transport boundary from those canonical support owners.
 
 Fail closed when a selected provider is unavailable. Do not use a stale consumer-local copy.
 

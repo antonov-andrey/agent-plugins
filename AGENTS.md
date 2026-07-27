@@ -43,7 +43,6 @@ If one required provider skill is unavailable, continue read-only discovery only
 - Product-specific logic, configuration, prompts, validators, and data remain in their owning application repositories.
 - Versioned activation and semantic output scenarios for these providers live under `skill_behavior_eval/`; the shared model runner remains owned by `project-standards:project-instruction-developer`.
 - `DESIGN.md` owns the stable provider architecture and cross-project artifact model.
-- Task pairs live only under the ignored `.spec/` root, remain untracked, and MUST NOT be deleted unless the user explicitly requests their deletion.
 - The repository exposes no Python distribution or project-discovery CLI.
 
 ## Required Workflows

@@ -139,12 +139,12 @@
       "prompt": "AGENTS.md has grown too large. Inspect what is project-specific and what may belong in shared standards, then propose a classification. No migration has been approved.",
       "expected_skill_list": [
         "project-standards:project-foundation",
-        "project-standards:project-instruction-developer",
-        "project-standards:project-standard-audit"
+        "project-standards:project-instruction-developer"
       ],
       "forbidden_skill_list": [
         "agent-workflows:instruction-migration",
-        "agent-workflows:instruction-audit"
+        "agent-workflows:instruction-audit",
+        "project-standards:project-standard-audit"
       ],
       "semantic_invariant_list": [
         {
@@ -221,6 +221,29 @@
         {
           "id": "no-implementation",
           "text": "The response does not begin production implementation, commit, or push during goal brainstorm."
+        }
+      ]
+    },
+    {
+      "id": "indirect-spec-artifact-audit",
+      "working_directory": "..",
+      "prompt": "Inspect the current repository's harness-neutral .spec task pairs: verify the root ignore behavior and tracked-file boundary, preserve every retained pair, and report lifecycle violations without changing files.",
+      "expected_skill_list": [
+        "agent-workflows:goal-brainstorm",
+        "project-standards:project-foundation"
+      ],
+      "forbidden_skill_list": [
+        "project-standards:project-documentation-developer",
+        "project-standards:project-standard-audit"
+      ],
+      "semantic_invariant_list": [
+        {
+          "id": "exclusive-owner",
+          "text": "The response applies the goal-brainstorm task-artifact contract rather than treating .spec as maintained project documentation or a generic project-standard audit concern."
+        },
+        {
+          "id": "retention-boundary",
+          "text": "The response checks actual root ignore and tracked-file behavior, preserves every retained pair, and does not infer deletion authority from task state."
         }
       ]
     },
