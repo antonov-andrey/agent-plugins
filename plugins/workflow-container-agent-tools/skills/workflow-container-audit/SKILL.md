@@ -25,7 +25,7 @@ Fail closed when an affected owner design is unavailable or two owners conflict.
 3. Derive every applicable requirement from those owners and assign it exactly once. Record an explicit reason for every owner category that is not applicable.
 4. Review the current implementation and instruction artifacts against each requirement with direct path and behavior evidence.
 5. Cover these dimensions when their owner is applicable:
-   - source interface, versioning, complete public input, migrations, result envelope, and control payloads;
+   - source interface, versioning, complete current public input, result envelope, and control payloads;
    - dependency direction, runtime class ownership, DBOS checkpoint boundaries, concurrency, and capability transport;
    - instance identity, standard files, artifacts, atomic publication, incremental state, retries, recovery, and replay;
    - prompt ownership, phase routing, action and verifier consistency, mechanical validation, and semantic verification;

@@ -10,10 +10,10 @@ Resolve these values before editing data:
 | Target version | Exact SemVer selected by the user or by the saved Workflow source version. |
 | Target schema | File at `source_root / WorkflowDefinition.input_schema_path`. |
 | Destination | File that will receive one complete JSON object. |
-| Existing input | Required for WorkflowRun revision and migration. |
-| Existing version and schema | Required when migration starts from an older contract. |
+| Existing input | Required for WorkflowRun revision. |
+| Existing version | Must equal the selected current source version. |
 
-Load `workflow.yaml` with `WorkflowDefinition.from_path(...)`, `versions.yaml` with `WorkflowVersionDefinition.from_path(...)`, and schemas with `WorkflowInputSchema.from_path(...)`. Do not reimplement their validation or migration graph logic.
+Load `workflow.yaml` with `WorkflowDefinition.from_path(...)`, `versions.yaml` with `WorkflowVersionDefinition.from_path(...)`, and schemas with `WorkflowInputSchema.from_path(...)`. Do not reimplement their validation.
 
 ## Public Object
 
@@ -29,20 +29,9 @@ Materialize every schema default into one new working object. Ask for each remai
 
 Copy the saved complete Workflow input into memory. Ask which values should differ for this run, one field at a time, and update that complete object. Never treat a user-supplied partial object as a machine patch or generic recursive merge.
 
-### Migration
+### Version Mismatch
 
-Require the exact source version, target version, unchanged complete source input, and source schema. Validate and migrate the unchanged source input before applying any desired changes. Desired partial values belong only to the complete target object after migration.
-
-1. Validate the unchanged complete source input with its exact source `WorkflowInputSchema`. If validation fails, run no script and leave the destination unchanged.
-2. Load declared edges from `WorkflowVersionDefinition.input_migration_list`.
-3. Resolve one path with `workflow_input_migration_path_list_get(...)`.
-4. For each edge, resolve `script_path` beneath the workflow source root and require the source-owned file to be executable.
-5. Execute it from the workflow source root. Send only the current complete JSON object to `stdin`. Capture `stdout` and `stderr` separately.
-6. Reject a non-zero exit, invalid JSON, a non-object JSON value, undeclared side effects, or output that cannot continue through the declared chain. Do not write any intermediate result to the destination.
-7. Validate the migrated object with the target `WorkflowInputSchema`.
-8. Apply confirmed user changes field by field to that complete target object and validate the resulting complete object again.
-
-Migration scripts are deterministic transforms. They receive no prompt answers, network state, marketplace state, or destination path. Diagnostics from `stderr` may be shown to the user but never become input data.
+The selected source version and the version owning an existing input must match exactly. Do not migrate, recursively merge, infer field correspondence, or execute source scripts. Leave the destination unchanged and offer creation of a separate new input from current schema defaults.
 
 ## Interactive Decisions
 
@@ -58,4 +47,4 @@ When validation succeeds, show the final object and destination. If the destinat
 
 ## Completion Report
 
-Report the selected source and target versions, schema path, destination path, whether migration ran, and the declared edges executed. State that no workflow was launched and no marketplace state was changed.
+Report the selected current source version, schema path, and destination path. State that no workflow was launched and no marketplace state was changed.

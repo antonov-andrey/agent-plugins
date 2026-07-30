@@ -381,6 +381,10 @@
           "text": "The response starts from the saved complete input, treats partial user values as decisions rather than a recursive patch, validates the whole schema, and writes one atomic complete replacement."
         },
         {
+          "id": "current-source-only",
+          "text": "The response requires the saved input and selected source version to match exactly; it does not offer migration, source-owned migration scripts, inferred field transfer, or another compatibility path."
+        },
+        {
           "id": "no-launch",
           "text": "The response does not launch a WorkflowRun or mutate marketplace state."
         }

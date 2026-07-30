@@ -11,7 +11,7 @@ Treat this skill as an owner router and implementation procedure. Stable source,
 
 Read the target repository `AGENTS.md` chain and its `DESIGN.md` before changing anything. Add only the designs required by the affected boundary:
 
-- source declarations, input schema, migrations, immutable run context, control payloads, and the open result envelope: `workflow-container-contract/DESIGN.md`;
+- source declarations, current input schema, immutable run context, control payloads, and the open result envelope: `workflow-container-contract/DESIGN.md`;
 - reusable workflow, step, Codex, prompt, artifact, persistence, verification, and recovery implementation: `workflow-container-runtime/DESIGN.md`;
 - image import, build, post-build conformance, scheduling, control service, replacement execution, Data acceptance, and capability orchestration: `workflow-control-center/DESIGN.md` plus the applicable document under `workflow-control-center/design/`;
 - browser process, Playwright MCP routing, physical profiles, and browser security: `browser-runtime/DESIGN.md`;
