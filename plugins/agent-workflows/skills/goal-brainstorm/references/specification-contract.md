@@ -21,6 +21,7 @@
 - `docs/**` owns user, operational, and other documentation that is not a stable design contract.
 - `.spec/*-spec.md` owns one temporary task-specific implementation contract.
 - `.spec/*-goal.md` owns one concise executable objective and exact references to its paired specification and approved stable source contracts.
+- `plugins/agent-workflows/skills/goal-brainstorm/references/worktree-contract.md` owns reusable task-worktree preparation, bootstrap, isolation, and repair semantics.
 
 A goal is not a second design or specification owner. A specification must not copy durable instructions or architecture already owned elsewhere. Task artifacts are not project documentation, remain ignored and untracked regardless of task state, and must not be deleted without an explicit user request.
 
@@ -38,11 +39,15 @@ Trivial work that does not need a persistent goal creates neither file. Every su
 
 ## Artifact Directory
 
-Task artifacts live under the harness-neutral root directory `.spec/`. Before creating them, ensure that the coordinating repository's root `.gitignore` actually ignores that root directory. Equivalent Git ignore patterns are allowed; no one textual pattern is required.
+Task artifacts live physically under the harness-neutral root directory `.spec/` in the coordinating main worktree. No other main or task worktree may own a duplicate physical pair.
 
-The directory contains ordinary Markdown only. Vendor-specific frontmatter, harness session state, lock files, caches, and project-global durable rules are forbidden there.
+Before creating the first artifact, ensure that the coordinating repository's root `.gitignore` actually ignores the physical directory. Before exposing the directory in a task worktree, ensure that effective ignore behavior also ignores the real `.spec` symbolic link. During first adoption, `Preparation Lifecycle` in `plugins/agent-workflows/skills/goal-brainstorm/references/worktree-contract.md` may provide this behavior through one exact recorded local exclude until the task worktree authors the durable tracked rule. Equivalent Git ignore patterns are allowed; no one textual pattern is required.
+
+The directory contains ordinary Markdown only. Each task artifact is one physical ordinary file with exactly one filesystem link. Vendor-specific frontmatter, harness session state, lock files, caches, and project-global durable rules are forbidden there.
 
 The directory may be absent when no task pair has been created or when the user explicitly requested deletion of every retained pair. Do not add `.gitkeep` or another tracked placeholder. No task artifact under `.spec/` may be tracked by Git.
+
+Each participating task worktree accesses this physical directory through the relative link owned by `Specification Link` in `plugins/agent-workflows/skills/goal-brainstorm/references/worktree-contract.md`. Stable owner changes and implementation remain in task worktrees; approved task-artifact writes pass through that link.
 
 ## File Names
 
@@ -54,6 +59,8 @@ Create one pair with the same creation date and stable semantic prefix:
 ```
 
 Reuse a same-day prefix only for the same task. Choose a more precise semantic name for a different task instead of adding a numeric suffix.
+
+The complete filename prefix before `-spec.md` or `-goal.md` is the task common prefix. `Task Identity` in `plugins/agent-workflows/skills/goal-brainstorm/references/worktree-contract.md` uses that exact value unchanged for the task branch and linked-worktree basename.
 
 Do not rename an existing specification while continuing the same task. Update an existing pair only while continuing the same inactive objective. Create a current-date pair for a new objective or a follow-up to a completed objective.
 
@@ -125,7 +132,7 @@ The goal states the outcome, essential constraints, and verification while givin
 
 Use root-relative paths for contracts in the coordinating repository. Cross-repository references must identify both the canonical repository and its root-relative contract path unambiguously without embedding one user-specific absolute workspace root.
 
-The persistent objective should name the goal file, treat that file and its paired specification as the completion contract, require the full applicable verification, and require `Terminal Completion Audit`. Keep detailed context in project files instead of expanding the objective.
+The persistent objective should name the goal file, treat that file and its paired specification as the completion contract, bind all repository work to the exact task roots returned by the sealed worktree state, require the full applicable verification, and require `Terminal Completion Audit`. Keep detailed context in project files instead of expanding the objective.
 
 ## Terminal Completion Audit
 
@@ -140,15 +147,17 @@ This terminal cycle uses the current task contracts and current system state dir
 ## Lifecycle
 
 1. Inspect persistent goal state before modifying an existing pair or creating a replacement for the same objective.
-2. Create or update the approved specification after the design decisions and owner changes it depends on are approved.
-3. Apply `Semantic Review` before creating or updating the paired goal.
-4. Show both files and their stable source contracts before asking separately whether to activate the goal.
-5. Keep the pair for every task state, including active, blocked, paused, completed, or abandoned.
-6. Before presumed completion, move every durable resulting rule into its stable owner and confirm that the pair is not the only owner of any current durable contract.
-7. Run `Terminal Completion Audit` to its zero-finding fixed point.
-8. Retain both files after the task is completed or explicitly abandoned. Delete task artifacts only when the user explicitly requests their deletion.
+2. After design approval, create or update the approved specification in the coordinating main worktree's physical `.spec/`.
+3. Prepare every participating task worktree through `Preparation Lifecycle` in `plugins/agent-workflows/skills/goal-brainstorm/references/worktree-contract.md`.
+4. Update approved stable owners only in prepared task worktrees, record `contracts_authored` through the worktree contract, then apply `Semantic Review` and resolve every finding.
+5. Create or update the paired goal through the task-worktree link.
+6. Complete worktree validation, seal the pair, and show both files, their stable source contracts, and the task-worktree diff before asking separately whether to activate the goal.
+7. Keep the pair for every task state, including active, blocked, paused, completed, or abandoned.
+8. Before presumed completion, move every durable resulting rule into its stable owner and confirm that the pair is not the only owner of any current durable contract.
+9. Run `Terminal Completion Audit` to its zero-finding fixed point.
+10. Retain both physical files after the task is completed or explicitly abandoned. Delete task artifacts only when the user explicitly requests their deletion.
 
-Workspace audit must verify the actual root `.spec` ignore behavior from the repository's root `.gitignore` and report every tracked file under `.spec/`. It must not require one particular equivalent pattern, classify a pair as stale because its task is completed or abandoned, or delete any task artifact without an explicit user request.
+Workspace audit must verify actual root `.spec` ignore behavior for both a physical directory and a task-worktree symbolic link, report every tracked file under `.spec/`, and validate every recorded link against its coordinating physical owner. It must not require one particular equivalent pattern, classify a pair as stale because its task is completed or abandoned, or delete any task artifact without an explicit user request.
 
 ## Semantic Review
 
@@ -158,6 +167,7 @@ Before creating the goal, reread all changed and directly affected documents as 
 - references identify exact source documents or sections without duplicating their content;
 - public interfaces and ownership boundaries are explicit;
 - state transitions, failure behavior, and recovery are complete when applicable;
+- task identity, participating repository roots, bootstrap ownership, and isolation recovery agree with `plugins/agent-workflows/skills/goal-brainstorm/references/worktree-contract.md`;
 - verification design satisfies `Verification Design` for every changed observable behavior;
 - no open decision, contradiction, unnecessary wrapper, duplicated carrier, or transition-only target remains;
 - the paired task artifacts contain no durable rule that belongs in `AGENTS.md`, `DESIGN.md`, `design/**`, `docs/**`, code, or a public interface.
