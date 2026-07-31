@@ -381,12 +381,32 @@
           "text": "The response starts from the saved complete input, treats partial user values as decisions rather than a recursive patch, validates the whole schema, and writes one atomic complete replacement."
         },
         {
-          "id": "current-source-only",
-          "text": "The response requires the saved input and selected source version to match exactly; it does not offer migration, source-owned migration scripts, inferred field transfer, or another compatibility path."
-        },
-        {
           "id": "no-launch",
           "text": "The response does not launch a WorkflowRun or mutate marketplace state."
+        }
+      ]
+    },
+    {
+      "id": "indirect-workflow-input-migrate",
+      "working_directory": "../../brand-size-chart",
+      "prompt": "Migrate one saved complete Workflow input from its exact source version to a newer selected source version through the source-declared migration graph. Validate the source and target objects and replace the destination atomically. Do not launch the run.",
+      "expected_skill_list": [
+        "workflow-container-agent-tools:workflow-container-input-create",
+        "project-standards:project-foundation"
+      ],
+      "forbidden_skill_list": [
+        "workflow-container-agent-tools:workflow-container-developer",
+        "agent-workflows:goal-brainstorm",
+        "agent-workflows:git-commit"
+      ],
+      "semantic_invariant_list": [
+        {
+          "id": "declared-chain-only",
+          "text": "The response validates the unchanged complete source input, resolves the one declared forward path, executes each source-owned edge in order, and validates the complete target object."
+        },
+        {
+          "id": "no-heuristic-migration",
+          "text": "The response does not infer field correspondence, skip or combine edges, write an intermediate result, launch a WorkflowRun, or mutate marketplace state."
         }
       ]
     }
