@@ -3,9 +3,9 @@ __pycache__/
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
-/.spec/
+/.spec
 .superpowers/
-.worktrees/
+/.worktree/
 .venv/
 build/
 dist/

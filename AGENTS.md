@@ -3,6 +3,7 @@
 ## Table Of Contents
 
 - [Required Standards](#required-standards)
+- [Key Directory Map](#key-directory-map)
 - [Project Contract](#project-contract)
 - [Required Workflows](#required-workflows)
 - [Commands](#commands)
@@ -33,16 +34,46 @@
 
 If one required provider skill is unavailable, continue read-only discovery only and do not mutate this repository until the provider is restored.
 
+## Key Directory Map
+
+```text
+agent-plugins/
+  .agents/
+    plugins/
+      marketplace.json
+  DESIGN.md
+  .gitignore
+  plugins/
+    agent-workflows/
+    marketplace-agent-tools/
+    workflow-container-agent-tools/
+  README.md
+  skill_behavior_eval/
+    corpus-v1.json
+  .spec/
+  test/
+  .worktree/
+  worktree-bootstrap.toml
+```
+
+- `.agents/plugins/marketplace.json` owns marketplace discovery and the installable plugin catalog for this repository.
+- `DESIGN.md` owns the stable provider architecture and cross-project artifact model.
+- `.gitignore` owns tracked repository-local ignore behavior.
+- `plugins/agent-workflows/` owns generic task workflows.
+- `plugins/marketplace-agent-tools/` owns reusable marketplace-domain agent procedures.
+- `plugins/workflow-container-agent-tools/` owns reusable workflow-container agent procedures.
+- `README.md` owns user-facing repository documentation.
+- `skill_behavior_eval/corpus-v1.json` owns versioned activation and semantic output scenarios for this repository's providers; the shared model runner remains owned by `project-standards:project-instruction-developer`.
+- `.spec/` binds this repository's harness-neutral task-artifact root to the reusable semantics owned by `agent-workflows:goal-brainstorm`.
+- `test/` owns repository-level provider tests.
+- `.worktree/` is the task-worktree container whose reusable semantics are owned by `agent-workflows:goal-brainstorm`.
+- `worktree-bootstrap.toml` binds this repository's bootstrap resources to the reusable manifest contract owned by `agent-workflows:goal-brainstorm`.
+
 ## Project Contract
 
 - This repository is the canonical Codex marketplace source `agent-plugins`.
-- Generic task workflows live only under `plugins/agent-workflows/`.
-- Reusable marketplace-domain agent procedures live only under `plugins/marketplace-agent-tools/`.
-- Reusable workflow-container agent procedures live only under `plugins/workflow-container-agent-tools/`.
 - This repository is not a runtime dependency of application or workflow-container code.
 - Product-specific logic, configuration, prompts, validators, and data remain in their owning application repositories.
-- Versioned activation and semantic output scenarios for these providers live under `skill_behavior_eval/`; the shared model runner remains owned by `project-standards:project-instruction-developer`.
-- `DESIGN.md` owns the stable provider architecture and cross-project artifact model.
 - The repository exposes no Python distribution or project-discovery CLI.
 
 ## Required Workflows
