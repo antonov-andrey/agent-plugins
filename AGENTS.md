@@ -50,10 +50,9 @@ agent-plugins/
   README.md
   skill_behavior_eval/
     corpus-v1.json
-  .spec/
   test/
   .worktree/
-  worktree-bootstrap.toml
+  worktree-bootstrap.yaml
 ```
 
 - `.agents/plugins/marketplace.json` owns marketplace discovery and the installable plugin catalog for this repository.
@@ -64,10 +63,9 @@ agent-plugins/
 - `plugins/workflow-container-agent-tools/` owns reusable workflow-container agent procedures.
 - `README.md` owns user-facing repository documentation.
 - `skill_behavior_eval/corpus-v1.json` owns versioned activation and semantic output scenarios for this repository's providers; the shared model runner remains owned by `project-standards:project-instruction-developer`.
-- `.spec/` binds this repository's harness-neutral task-artifact root to the reusable semantics owned by `agent-workflows:goal-brainstorm`.
 - `test/` owns repository-level provider tests.
 - `.worktree/` is the task-worktree container whose reusable semantics are owned by `agent-workflows:goal-brainstorm`.
-- `worktree-bootstrap.toml` binds this repository's bootstrap resources to the reusable manifest contract owned by `agent-workflows:goal-brainstorm`.
+- `worktree-bootstrap.yaml` binds this repository's bootstrap resources to the reusable manifest contract owned by `agent-workflows:goal-brainstorm`; task artifacts themselves live only in `project-goals`.
 
 ## Project Contract
 
@@ -78,9 +76,12 @@ agent-plugins/
 
 ## Required Workflows
 
-- `agent-workflows:instruction-migration` applies only to explicitly approved multi-owner instruction migrations.
 - `agent-workflows:git-commit` applies when repository changes are committed or pushed.
 - `agent-workflows:goal-brainstorm` applies when stable design or a persistent implementation goal is prepared.
+- `agent-workflows:goal-checkpoint` applies when an explicitly approved cross-repository closing-commit snapshot is published.
+- `agent-workflows:goal-delete` applies when the user explicitly requests synchronized deletion of one exact task.
+- `agent-workflows:goal-merge` applies in one exclusive thread when one published checkpoint is merged and accepted on the primary environment.
+- `agent-workflows:instruction-migration` applies only to explicitly approved multi-owner instruction migrations.
 - `marketplace-agent-tools:ozon-seller-api-developer` applies to its owned marketplace-domain skill.
 - `workflow-container-agent-tools:workflow-container-developer` applies to workflow-container plugin content.
 

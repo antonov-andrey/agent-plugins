@@ -4,10 +4,11 @@
 
 - [Ownership And Boundary](#ownership-and-boundary)
 - [Task Identity](#task-identity)
+- [Coordination Main Transaction](#coordination-main-transaction)
 - [Repository Set](#repository-set)
 - [Bootstrap Manifest](#bootstrap-manifest)
 - [Resource Classes](#resource-classes)
-- [Specification Link](#specification-link)
+- [External Cleanup Declaration](#external-cleanup-declaration)
 - [Preparation Lifecycle](#preparation-lifecycle)
 - [Submodules](#submodules)
 - [Private State](#private-state)
@@ -19,274 +20,225 @@
 
 ## Ownership And Boundary
 
-This reference is the canonical reusable owner of task-worktree identity, preparation, bootstrap resources, submodule handling, isolation validation, and deterministic repair for `agent-workflows:goal-brainstorm`.
+This reference is the canonical reusable owner of task identity, central coordination binding, implementation-worktree preparation, bootstrap resources, submodule handling, isolation validation, deterministic repair, pre-activation revision, sealing, and activation for `agent-workflows:goal-brainstorm`.
 
-The applicable project `AGENTS.md` remains the owner of concrete project paths. Its `Key Directory Map` must bind `.spec/`, `.worktree/`, and root `worktree-bootstrap.toml` to `agent-workflows:goal-brainstorm` without copying this contract. The root `worktree-bootstrap.toml` owns only that repository boundary's concrete bootstrap resource paths.
+`project-goals/DESIGN.md` owns tracked task-directory, checkpoint, merge, and deletion semantics. `agent-workflows:goal-checkpoint`, `agent-workflows:goal-merge`, and `agent-workflows:goal-delete` own those operations. `goal-brainstorm` must not expose a cleanup, checkpoint, or merge command and must not infer authorization for them.
 
-The workflow prepares repository state. It does not authorize commit, push, merge, worktree removal, destructive recovery, or publication.
+Applicable project `AGENTS.md` files own concrete project paths. Each participating implementation repository binds `.worktree/` and root `worktree-bootstrap.yaml` to this contract without copying reusable semantics. The `project-goals` repository uses only canonical `main` and has neither path. The current workflow creates no project-local `.spec/` or task-artifact link and ignores inert pre-cutover files instead of treating them as identity or deleting them.
+
+The workflow may commit and push only its exact approved coordination path set directly to `project-goals/main`. A task-artifact operation owns only its exact task directory; an approved `project-goals` stable-owner operation owns only its explicitly declared stable paths. The workflow never commits, pushes, merges, or deletes implementation-project source.
 
 ## Task Identity
 
 One common prefix identifies the complete task:
 
 ```text
-.spec/<common-prefix>-spec.md
-.spec/<common-prefix>-goal.md
-.worktree/<common-prefix>/
+project-goals/<common-prefix>/spec.md
+project-goals/<common-prefix>/goal.md
+project-goals/<common-prefix>/checkpoint.yaml
+<project>/.worktree/<common-prefix>/
 refs/heads/<common-prefix>
 ```
 
-The workflow derives the prefix from the specification filename and uses it unchanged for the paired goal filename, branch name, and linked-worktree basename. It must be one filesystem basename, pass `git check-ref-format --branch` unchanged, and contain no path separator.
+The prefix is derived from the task directory basename and used unchanged for every participating implementation branch and linked-worktree basename. It must be one canonical filesystem basename, pass `git check-ref-format --branch`, and contain no path separator.
 
-The project-local worktree container is singular `.worktree/`. Git's internal `.git/worktrees/` administration directory is not a project-local alternative.
+The workflow verifies the canonical `project-goals` repository identity, clean local `main`, exact `origin/main`, exact task directory, registered implementation worktrees, target paths, and private state before adoption. Existing state is reusable only for the same inactive task with matching identity. A colliding implementation path, branch, worktree registration, or task directory belonging to another task is a blocker and is never renamed or overwritten automatically.
 
-Before preparation, inspect the specification pair, local branch refs, registered worktrees, target filesystem paths, and private workflow state. Reuse is allowed only for the same inactive task with matching recorded identity.
+Before creating a branch or worktree, the provider writes durable pending ownership below Git administration state. Resumption accepts only the exact recorded baseline, branch, registered path, Git common directory, index state, and provider-owned outputs. Partial checkouts, substituted directories, redirected `.git` pointers, staged drift, or unknown objects are not adoption evidence.
 
-When private state is absent after an interrupted or tool-less bootstrap, the workflow may adopt an existing worktree only when its common prefix, branch, canonical path, baseline relation, specification link, participating repository set, and observable main state match one unambiguous inactive task. It reconstructs private state before tracked work continues. Any unrelated or underdetermined collision must not be overwritten.
+## Coordination Main Transaction
 
-Worktree creation records a durable pending marker below the repository's Git administration path before it creates the task branch or filesystem checkout. Resumption accepts only the marker's exact baseline, exact registered branch and path, an unchanged baseline index, and working-tree differences attributable solely to already proven provider bootstrap outputs or clean repairable submodule drift. A partial checkout, staged change, redirected `.git` pointer, or ordinary directory substituted for a registered worktree is never an adoption candidate.
+Every `project-goals` mutation is one short provider-owned transaction. Before reading mutable coordination state, the command obtains one non-blocking workspace-global write lock in the canonical repository Git common directory. It verifies the expected origin identity, checked-out `main`, an empty index and working tree, and exact local equality with fetched `origin/main`.
+
+The transaction records durable intent, applies only the exact closed coordination path set owned by the command, rejects every unrelated index or working-tree change, creates one ordinary commit whose parent is the verified remote tip, and pushes it to `origin/main` without force. It releases the lock only after local `main`, `origin/main`, the index, and the working tree are synchronized and clean.
+
+If the remote advances first through disjoint coordination paths, the command fetches the new tip, reapplies the unchanged exact delta, and retries. A concurrent change that overlaps the owned path set is a semantic conflict. Crash recovery resumes or rolls back only the recorded transaction phase and never discards unknown local or remote state.
 
 ## Repository Set
 
-One coordinating repository owns the physical specification pair. The workflow determines that repository and every other affected top-level repository from approved project contracts and the current task scope. It must not scan a broader workspace and infer participating projects from proximity, names, or dirty state.
+The workflow receives the complete affected top-level repository set from approved contracts and current task scope. It must not scan a workspace and infer participants from proximity, names, submodules, or dirty state.
 
-Each participating top-level repository starts from the selected committed `main` baseline and receives the same task branch name and worktree basename. Pre-existing main-worktree index, tracked modifications, untracked paths, and submodule state are user state and must be recorded before preparation.
+The `project-goals` repository is the coordination carrier, never receives a task branch or linked worktree, and is never a checkpoint entry. Stable changes to that repository use the same direct-main coordination transaction and may not create a self-referential checkpoint entry.
 
-Recursive submodules are repository boundaries discovered from recorded gitlinks, not additional top-level worktrees. Each initialized submodule applies its own instructions. A submodule becomes a participating manifest boundary only when the task changes its repository content or uses its local bootstrap resources.
+For each top-level participant, discover recursive submodules before creating worktrees and classify each boundary as:
 
-`prepare` may extend the top-level repository set or task-owned submodule set only while lifecycle state is `repository_prepared`. The complete set is immutable after `contracts_authored` is recorded. A later discovery that genuinely changes either set requires returning to design and preparing a new task identity; it must not bypass stable-owner review by extending the recorded task in place.
+- read-only at the recorded gitlink; or
+- explicitly task-owned with its own branch, worktree identity, and verification.
+
+Undeclared dirty submodule state blocks preparation until its ownership is understood. `prepare` may extend the top-level or task-owned-submodule set only in `repository_prepared`. `contracts_authored` and `goal_ready` freeze the candidate set for review but do not mean approval. Before activation, `revise` returns the same task to `repository_prepared`, after which expansion is allowed. Revision never silently removes an existing participant or possible task work.
 
 ## Bootstrap Manifest
 
-Every participating top-level repository and every task-owned submodule boundary must have one tracked root `worktree-bootstrap.toml`:
+Every participating implementation top-level repository and task-owned submodule boundary has one tracked root `worktree-bootstrap.yaml`:
 
-```toml
-schema_version = 1
-
-[resource]
-copy_optional_path_list = []
-copy_required_path_list = []
-link_optional_path_list = []
-link_required_path_list = []
+```yaml
+schema_version: 2
+resource:
+  copy_optional_path_list: []
+  copy_required_path_list: []
+  link_optional_path_list: []
+  link_required_path_list: []
 ```
 
-The schema is closed. Unknown keys, unknown tables, and unsupported versions are invalid.
+An owner with task-scoped external resources may add:
 
-Every list entry must be an exact POSIX path relative to the owning repository root. Reject:
+```yaml
+cleanup:
+  command_argument_list:
+    - python
+    - development_environment_manage.py
+    - destroy
+    - --git-worktree
+    - "{common_prefix}"
+```
 
-- empty paths, absolute paths, globs, and platform-specific separators;
-- `.` or `..` path segments;
-- `.git`, `.spec`, `.worktree`, the manifest itself, and descendants of those paths;
-- duplicates across or within lists;
-- parent-child overlaps across or within lists;
-- a path that crosses into a submodule boundary.
+The schema is closed and follows the shared machine-readable format contract: UTF-8, one YAML 1.2 document, `.yaml`, exact scalar and collection types, and rejection of duplicate keys, custom tags, anchors, aliases, merge keys, and unknown fields. No TOML or `.yml` compatibility reader remains in the target implementation.
 
-The provider must not infer a resource class from a filename, directory name, project name, or file content. A missing manifest is an adoption state that the workflow repairs before implementation by creating the empty versioned manifest in that task checkout. If implementation needs an unclassified local resource, its owner must classify it before that dependency is used.
+Each resource path is one normalized root-relative POSIX path with no empty, absolute, `.`, `..`, NUL, backslash, or escape component. Duplicates, ancestor/descendant overlaps, cross-class overlaps, submodule crossings, special files, hardlinks, and reserved paths are rejected. Reserved paths include `.git`, `.worktree`, the manifest itself, and their descendants.
 
-After the first merged adoption, a missing manifest is a project-contract violation rather than an optional configuration.
+The provider never infers a resource class from a name, project, or content. A missing manifest is repaired in the task worktree before implementation by creating the empty current-version manifest. It does not trigger workspace-wide migration.
 
 ## Resource Classes
 
-A copy resource is an isolated snapshot from the recorded main worktree into the task checkout. Task writes may change, rename, or delete only the copy; after its initial materialization is durably recorded, an absent destination is task state and is not recreated by validation. Copy preserves ordinary files, directories, executable bits, and symbolic links whose resolved targets stay inside the copied source tree. It rejects sockets, devices, FIFOs, external symbolic links, hardlinked regular files, and any source that changes during materialization.
+- `copy_required_path_list`: source must exist; copy the exact file, directory, or internal symbolic-link graph into the task worktree. The copy is independent and preserves type, mode, bytes, empty directories, and link targets without hardlinks.
+- `copy_optional_path_list`: copy with the same semantics when present; exact source absence is a recorded skip.
+- `link_required_path_list`: source must exist; create one relative symbolic link to the main-worktree object.
+- `link_optional_path_list`: link when present; exact source absence is a recorded skip.
 
-A link resource is an explicitly shared, read-only dependency. The task checkout receives a relative symbolic link to the main-worktree source. The workflow records the source identity and content fingerprint and treats any task-time source change as isolation drift. Any resource that implementation may mutate must be classified as copy, never link.
+Required absence blocks preparation. Links may target only inside the declared source object and may not traverse or resolve outside repository ownership. A committed destination must match declared semantics; no tracked destination is replaced automatically. Copy-source drift remains observable through full fingerprints, including ignored files.
 
-A required resource must exist and satisfy its class contract. An absent optional resource is reported in preparation output and skipped without creating a destination.
+## External Cleanup Declaration
 
-Before materialization, the destination must be absent or be a previously recorded provider-created object with no independent changes. Before sealing, tracked project ignore rules must ignore the destination as its actual object type. During first adoption, an exact recorded local exclude may cover a provider-created destination only until the task worktree authors and verifies the durable tracked rule. The workflow must test the real file, directory, or symbolic link; checking only a hypothetical child path is insufficient. After materialization, both copy and link source fingerprints remain protected task inputs. Main drift at, above, or below a materialized resource boundary is not independent user work; skipped absent resources are not materialized boundaries and retain their separate absent-state check.
+The optional `cleanup` mapping declares one project-owned idempotent external-resource hook for later use by `agent-workflows:goal-delete`. `goal-brainstorm` validates and seals the declaration but never executes it.
 
-The source and destination are canonicalized against their owning roots before filesystem mutation. Resource preparation must not overwrite tracked files, cross repository boundaries, or follow a destination link during replacement. Every protected regular file, including a resource source, transaction object, private preimage, manifest, specification, or goal, must have exactly one filesystem link; a hardlink makes mutation provenance and alias isolation ambiguous and is rejected without changing either name.
+`command_argument_list` is a non-empty direct argv list. Shell evaluation, word splitting, environment expansion, operators, substring interpolation, and unknown placeholders are forbidden. The only replacement is an argument exactly equal to `{common_prefix}`.
 
-## Specification Link
+Sealing binds the normalized declaration and manifest fingerprint into private state. A task-scoped resource creator must verify the same binding before its first mutation. A self-hosting task that introduces this current schema and its first consumer may bind the exact declaration specified by the sealed task contract once, before any external mutation, through a crash-safe content-free receipt. A later declaration change or missing receipt fails closed.
 
-`Artifact Directory` in `plugins/agent-workflows/skills/goal-brainstorm/references/specification-contract.md` owns physical task-artifact placement. Each participating top-level task worktree exposes that coordinating directory as a relative `.spec` symbolic link. The link target is computed from canonical roots; no workspace path is embedded in provider code or project artifacts.
-
-Tracked ignore behavior must ignore both the physical directory and the symbolic link before sealing. During first adoption, an exact recorded local exclude may protect the symbolic link until the task worktree authors and verifies the durable tracked rule. Equivalent ignore rules are allowed, but validation must exercise both real object forms. Preparation validates or creates the initial manifest, derives required ignore paths, authors and verifies task-root tracked ignore behavior, and only then exposes the `.spec` link or materializes a resource. A later preparation failure must therefore never leave an unignored link or provider-created resource.
-
-The `.spec` link is reserved workflow behavior and must not appear in `worktree-bootstrap.toml`. Creating and updating the approved specification and goal through this link is the only task-artifact write intentionally directed to the coordinating main worktree. After sealing, both artifacts are immutable inputs until the inactive goal is explicitly revised and sealed again through the goal lifecycle.
+Detailed request/result schema, external absence proof, journal, execution order, and deletion authorization belong to `agent-workflows:goal-delete`; they are not duplicated here.
 
 ## Preparation Lifecycle
 
-The workflow uses these states:
+The lifecycle is monotonic except for explicit inactive revision:
 
-1. `designing`: inspect owners, goal state, participating repositories, and current repository state without tracked task writes.
-2. `design_approved`: write the approved specification to the coordinating main worktree's physical `.spec/`.
-3. `worktree_created`: create each task branch and linked worktree from its recorded committed baseline.
-4. `repository_prepared`: initialize recursive submodules, validate or create participating manifests, author minimum durable ignore rules, install any exact temporary local excludes needed for first adoption, materialize resources, and create specification links.
-5. `contracts_authored`: write approved tracked owner changes only inside prepared task roots, pass full worktree validation, and explicitly record the transition before semantic review.
-6. `goal_ready`: complete semantic review, create the paired goal through the specification link, pass full validation, seal the task artifacts, and show the resulting contract set.
-7. `active`: create the persistent goal and bind all implementation work to the recorded task roots.
+1. `discovery`: inspect repositories, task state, stable owners, code, and verification without writes.
+2. `design_approved`: create or update the task directory through one serialized direct-main transaction and bind the published `project-goals/main` commit.
+3. `repository_identified`: validate every participant and record exact baselines before creating implementation worktrees.
+4. `worktree_created`: create each branch and linked worktree from its recorded committed baseline.
+5. `repository_prepared`: initialize recursive submodules, validate or create current bootstrap manifests, author minimum durable `.worktree/` ignore behavior, materialize declared resources, and validate every boundary.
+6. `contracts_authored`: validate the complete set after approved implementation-task-root changes and any approved direct-main `project-goals` owner change, then explicitly record that authoring is finished.
+7. `goal_ready`: complete semantic review, create `goal.md` and initial `checkpoint.yaml`, publish any exact final task-directory delta through the direct-main transaction, validate the exact candidate, and seal its exact commit and hashes. This state is not approval.
+8. `active`: after the harness successfully creates the persistent goal, record activation and freeze task identity, participants, `spec.md`, and `goal.md`.
 
-The workflow may add exact provider-owned patterns to a participating repository's local Git exclude when committed ignore rules do not yet cover the `.worktree/` container, the `.spec` link, or a declared bootstrap destination. It must add only the minimum root-relative patterns required for real objects and record every entry it added. During preparation, each task branch adds and verifies minimum durable tracked ignore rules for those same objects. Each temporary local entry is removed only after the corresponding durable rule is present in merged `main`.
+Before `active`, `revise` may return `contracts_authored` or `goal_ready` to `repository_prepared`. From `goal_ready`, it first proves the sealed coordination commit and files unchanged. It retains prior candidate identity as provenance, preserves all implementation worktrees and changes, and allows task-contract edits and participant expansion. The complete `contracts-authored` → semantic review → `seal` cycle then repeats. `revise` is idempotent in `repository_prepared` and forbidden in `active`.
 
-Creating a missing initial manifest and authoring its minimum durable ignore rules are the only tracked preparation writes allowed before all required repository boundaries reach `repository_prepared`. No other tracked contract authoring or implementation may begin before that state.
+Temporary provider-owned local excludes are limited to exact `.worktree/` or declared bootstrap destinations needed during first adoption. They are recorded and removed only after a durable merged ignore rule supersedes them.
 
 ## Submodules
 
-For every recursive submodule, run the semantic equivalent of these commands against the exact task root:
+Preparation runs recursive synchronization and initialization from each task worktree and validates every nested boundary. A task-owned submodule uses a physical independent checkout, never a symlink to main, and receives its own private-state replica and manifest processing.
 
-```text
-git submodule sync --recursive
-git submodule update --init --recursive --checkout
-```
+Read-only submodules remain at exact recorded gitlinks. Task-owned submodules may advance only to descendants of their recorded baselines, and their parent gitlinks remain explicit task changes. Scheduling and mutation never cross from a parent owner into delegated submodule internals.
 
-This synchronizes configured URLs and initializes each checkout at the exact gitlink recorded by its parent task worktree. Verify recursive status and every effective commit after Git reports success. Each recursive root must also be the exact physical, non-symbolic filesystem path recorded below its parent task root; resolving both an expected path and a redirected path to the same external checkout is not an identity check and must fail before any recursive Git command crosses that boundary.
-
-Each initialized submodule is its own instruction boundary. A parent manifest must not classify any path inside it.
-
-A submodule that stays read-only at its recorded gitlink does not receive a manifest change only because initialization occurred. When the task changes submodule content or needs local bootstrap resources inside it, that submodule becomes participating. The workflow creates or validates its root manifest before the first such use.
-
-Every participating submodule is declared to `prepare` as its top-level participating main root plus its exact recursive root-relative path. If a nested submodule participates, every submodule ancestor participates too, because the ancestor owns the dirty descendant gitlink. The workflow records a baseline commit, manifest fingerprint, resource state, nested main commit, nested main status fingerprints, recoverable preimages, and leak provenance for each declared boundary. Subsequent preparation supplies the complete same declaration set. Top-level Git status collapses descendant edits to a gitlink path, so isolation and `recover-main-leak` attribute a path below a participating boundary to that submodule's own main/task roots instead of treating the gitlink as the file owner.
-
-Read-only submodules retain exact recorded index gitlinks and effective commits. A participating submodule may advance its effective commit and parent index gitlink only to descendants of its recorded baseline; its dirty implementation state is preserved and validated rather than reset. An uninitialized submodule, stale URL configuration, or clean read-only checkout at the wrong commit has a deterministic repair: synchronize recursively and update to the recorded gitlink. An undeclared dirty checkout must first be inspected for its branch, tracked diff, untracked paths, nested submodule state, and relation to recorded task work.
-
-Every Git comparison and status query explicitly disables repository-level submodule ignore suppression. Submodule paths are transported as literal paths, including names that resemble pathspec magic. Before a clean checkout repair, validation compares ignored untracked objects with the target gitlink tree and blocks rather than overwriting any collision.
-
-Never reset a dirty submodule automatically. Never move a linked worktree that contains initialized submodules.
+Every Git query disables repository-level submodule-ignore suppression and uses literal path handling. Before repairing a clean checkout, validation checks ignored untracked collisions against the target tree. Dirty or unavailable state that could contain user work is preserved and reported rather than reset.
 
 ## Private State
 
-Store workflow state below the per-worktree Git administration path resolved through `git rev-parse --git-path`. Do not store harness state, locks, caches, or recovery snapshots in `.spec/` or another tracked project path.
+Store harness-independent workflow state only below per-worktree Git administration paths resolved by Git. Replicate complete state across participating Git common directories so any recorded task root can recover the task without workspace scanning. Do not store task-file content in private state.
 
-Schema-v2 private state records:
+State binds at least:
 
-- the common prefix, current lifecycle state, and coordinating repository;
-- canonical main and task roots for each top-level repository;
-- each Git common directory, baseline commit, branch, and worktree registration;
-- main index and working-state fingerprints plus sufficient private preimages to preserve pre-existing dirty paths at top-level and participating-submodule boundaries;
-- recursive gitlinks plus each explicitly task-owned submodule baseline, manifest, resources, physical roots, nested main state, and intended descendant state;
-- exact caller attestations that accept one full current main commit and its complete reported overlapping path set without changing either checkout;
-- caller-recorded provenance for an exact agent-created main leak while recovery is in progress;
-- manifest hashes, classified resources, materialization results, and source fingerprints;
-- specification and goal hashes after sealing;
-- exact temporary local excludes added by the workflow.
+- schema version and common prefix;
+- canonical `project-goals` repository, task directory, exact local and remote `main` commit, sealed commit, and task-file fingerprints;
+- each main root, task root, branch, baseline commit, Git administration identity, index, and dirty-state fingerprint;
+- task-owned submodules and delegated boundaries;
+- manifest fingerprints, resource states, skipped optional resources, and cleanup-declaration binding;
+- accepted caller attestations, main-leak provenance, provider-owned excludes, and pending durable transactions.
 
-Private state must not be printed with file content or secrets. Filesystem path text is transported with the platform filesystem encoding and surrogate escape so a non-UTF-8 name or link target is preserved rather than rejected or rewritten. Tree fingerprints are type-tagged and length-delimited, include modes, file bytes, directory structure, and raw link targets, and cannot collide merely by redistributing bytes between adjacent fields. An interrupted write uses atomic replacement so the last complete state remains recoverable.
+Writes use atomic replacement, file fsync, and parent-directory fsync. Pending worktree, resource, repair, coordination-publication, private-write, and migration operations expose durable intent before mutation. Staging identities are unpredictable and owned only by matching recorded intent; deterministic filenames alone never prove ownership. Fingerprints include object type, mode, structure, raw link target, and length-delimited bytes, preserving non-UTF-8 names without lossy conversion.
 
-Filesystem mutations use durable provider transactions. Resource transactions preserve the previous destination and stage the exact copy, link, or removal before exposure. Main-leak transactions stage the complete target object and record both working-object and index preimages before touching main. Ordinary project text writes record the previous and target fingerprints before atomic replacement. Private file writes and clone-based main/resource preimage or copy-fingerprint-migration operations create an unpredictable staging identity only after atomically exposing a matching intent marker; process death can therefore discard partial provider-owned stages without treating a predictable filename as provenance. Resource source preimages carry closed path/fingerprint metadata, their owner directory is close-scanned, and an exact obsolete snapshot is retired only after every state replica durably drops that resource. A later command completes or rolls back only when the observed object matches one recorded phase; it reports that repair once. Proven metadata-less pre-marker staging is removed and reported, while unknown files, changed fingerprints, symlinked parents, escaped ownership boundaries, and metadata-less obsolete legacy snapshots remain blockers.
-
-Pending worktree ownership, completed mutation transactions, and obsolete preimages are retired only after the complete schema-v2 state has been written to every participating replica. A crash at any earlier point therefore resumes from durable ownership rather than inferring provenance from current bytes.
-
-A valid schema-v1 replica is migrated deterministically to schema v2 on first access. Before fallback migration, the workflow searches every repository discoverable from that legacy state for a valid schema-v2 secondary replica and treats one agreeing v2 set as authoritative. Migration adds empty task-owned-submodule and main-leak-provenance state, writes complete schema-v2 replicas atomically, and leaves task content unchanged. After all v2 replicas are written, every obsolete v1 replica is atomically retired so loss of one v2 replica cannot reactivate stale lifecycle, repository, submodule, or recovery state.
+No obsolete state or preimage is retired until every current replica records the successor. Recovery completes or rolls back only an exact known phase and reports each repair once. Unknown or contradictory state fails closed.
 
 ## Isolation Validation
 
-Before and after every tracked authoring, implementation, verification, or Git phase, resolve `git rev-parse --show-toplevel` and compare it with the recorded task root. Run repository commands with an explicit recorded working directory.
+Before and after tracked implementation authoring, implementation, verification, or implementation-repository Git phases, resolve the current Git top level and compare it with the recorded task root. Coordination authoring runs only inside `Coordination Main Transaction` against the canonical `project-goals` root. Commands use explicit working directories.
 
-Complete validation confirms:
+Complete validation proves:
 
-- the common prefix, branch ref, worktree registration, canonical task root, and baseline relation;
-- the physical linked-worktree identity, including its exact Git common directory, registered administration record, branch, HEAD, and ordinary `.git` pointer;
-- the absence of task-owned tracked changes in every main worktree;
-- preservation of every recorded unrelated main-worktree change;
-- the physical coordinating `.spec/` directory and every relative task-worktree link;
-- sealed specification and goal hashes after sealing and while active;
-- recursive submodule initialization, physical non-symbolic roots, strict read-only gitlinks, and baseline-descendant task-owned submodule state with independent nested-main isolation;
-- manifest schema, manifest hash, resource object type, link target, copy independence, ignore behavior, and source fingerprint;
-- consistency between private state and observable Git and filesystem state.
+- common prefix, central task path, clean synchronized coordination `main`, bound commit, and current lifecycle;
+- every implementation branch, worktree registration, canonical task root, baseline relation, Git common directory, `.git` pointer, and HEAD;
+- no task-owned tracked change leaked into main and every recorded unrelated main change remains preserved;
+- sealed `spec.md` and `goal.md` hashes after sealing and while active;
+- recursive submodule state, physical ownership, exact read-only gitlinks, and baseline-descendant task-owned changes;
+- current YAML manifest schema/hash, resource type and fingerprint, link/copy behavior, ignore behavior, and cleanup binding;
+- consistency of every private-state replica with observable Git and filesystem state.
 
-Main may receive independent user work while the task is active. A new main commit or dirty path that is provably outside task provenance and does not overlap the task diff or a materialized prepared resource is preserved, classified as unrelated, and added to the recorded fingerprints without stopping the task. Overlap means equality, ancestor, or descendant, not only one identical Git path. Copy-source fingerprint drift catches ignored filesystem changes that Git status cannot expose. An overlapping change or unclear provenance remains ambiguous and must not be reverted.
+Main may receive independent user work. A new main commit or dirty path is recorded as unrelated only when provenance is clear and it neither overlaps task diffs nor prepared resource boundaries. Overlap includes equality, ancestor, and descendant paths. Matching bytes do not prove provenance. Ambiguous overlap is preserved and requires explicit user classification.
 
-Starting from the wrong directory is not itself a blocker. When task identity is unambiguous, rerun the operation against the recorded task root and report the reroute.
+Starting in the wrong directory is repairable when one recorded task identity is unambiguous: reroute to the exact task root and report it.
 
 ## Diagnosis And Repair
 
-A validation failure starts diagnosis. Identify the changed object, its repository owner, recorded state, current state, likely producing operation, and smallest correction that preserves user work.
+A failed validation first identifies the changed object, owner, recorded and current state, likely producer, and smallest safe correction. Deterministic repairs include:
 
-Apply deterministic repairs without asking the user, including:
-
-- rerouting an operation from the wrong root;
-- restoring a missing or redirected linked-worktree `.git` pointer and running `git worktree repair` only when registered administration state, complete private ownership, exact manifest, specification link, branch, HEAD, and common Git directory prove one identity;
-- recreating a missing or incorrect `.spec` link when its path contains no independent content;
-- restoring a provider-created local exclude or incomplete private-state write;
-- reconstructing absent private state from one fully matching, unambiguous inactive task worktree;
+- rerouting from a wrong root;
+- repairing a linked-worktree `.git` pointer or registration only from complete exact ownership proof;
+- restoring a provider-created exclude or interrupted private-state write;
+- reconstructing missing inactive private state from one complete agreeing replica;
 - synchronizing and initializing missing recursive submodules;
-- returning a clean drifted submodule to its recorded gitlink;
-- completing or rolling back a pending initial copy transaction before its resource state is durable; a later task deletion or rename of a committed copy is preserved;
-- creating a missing initial manifest before implementation;
-- recording a provably independent, non-overlapping main commit or dirty-state change as unrelated user work;
-- after one explicit user decision, recording the exact current commit and complete overlap path set as accepted independent committed main drift without changing main, the task branch, or task content;
-- recording caller-known agent provenance for exact leaked paths, then restoring their exact recorded main preimages only while current main and task fingerprints still match that record.
+- restoring a clean read-only submodule to its recorded gitlink after collision checks;
+- completing or rolling back a known pending resource or coordination transaction;
+- creating a missing initial current-version manifest;
+- recording provably independent non-overlapping main work;
+- restoring caller-known leaked paths from exact recorded preimages;
+- recording explicitly accepted independent committed overlap for one exact owner, commit, and complete path set.
 
-Matching main and task bytes alone never prove that the main change belongs to the agent. Ordinary validation must preserve overlapping committed or dirty main state and report ambiguity. The agent calls `recover-main-leak` without asking the user only for dirty paths it knows it wrote during the current task; the command verifies task ownership and byte identity, records provenance in private state, restores the exact preimage, and repeats complete validation. It rejects inferred, stale, differing, or unrecorded paths.
-
-When the user explicitly confirms that overlapping committed main history is independent work to preserve, the agent calls `accept-main-commit-drift` with the exact full current commit and every exact overlap path reported for that repository owner. The owner root is either one participating top-level main worktree or one explicitly task-owned submodule main root; each path is relative to that exact owner, and a parent owner cannot attest across a delegated submodule boundary. The command rejects a changed commit, a missing or additional path, a nonparticipating owner, nonlinear history, or a path not present in that owner's committed history. If an accepted commit made a previously recorded dirty main object clean, validation reconciles that transition only when the committed object exactly matches the captured working preimage; a changed object or a new dirty layer remains ambiguous. The durable attestation applies only to the named net path at that accepted commit; another path and a later committed change to the same path remain unaccepted. The command never resets, rebases, checks out, stages, commits, or changes either working tree. Ordinary `validate` never infers or creates this attestation.
-
-After a repair set, rerun complete validation from current state. Continue the diagnose, repair, and validate cycle until it passes or one genuine ambiguity or external blocker remains.
-
-Ask the user only when a correction would overwrite or reinterpret possible user work, select among multiple valid owner contracts, classify a resource whose write semantics are unknown, require unavailable external state, or perform an unauthorized destructive or publication action.
+Never infer agent provenance from byte equality, reset or overwrite possible user work, cross a delegated submodule boundary, or broaden one attestation to later drift. After every repair set, rerun complete validation until it passes or one real ambiguity, unavailable dependency, external-state requirement, or unauthorized destructive/publication action remains.
 
 ## Library And Script Interface
 
-The reusable implementation module is `plugins/agent-workflows/lib/goal-brainstorm/worktree.py`. It is a library module and must not parse process arguments, print command output, or expose a direct-execution guard.
+Reusable lifecycle code is organized as cohesive packages by responsibility: coordination publication, task/repository model, Git access, bootstrap manifest, private state and transactions, worktree/submodule preparation, validation/repair, and workflow sequencing. A facade owns only dependency wiring and phase order. No single module or class may accumulate these independent owners.
 
-The thin skill-local executable is `plugins/agent-workflows/skills/goal-brainstorm/scripts/worktree.py`. It owns only CLI parsing, process output, and exit status. It delegates repository behavior to the library module.
-
-Owner-local library and script behavior tests live under `plugins/agent-workflows/lib/goal-brainstorm/test/`. The plugin exposes no `plugins/agent-workflows/lib/goal-brainstorm/tool/` path.
-
-The script exposes:
+The thin skill-local executable owns argument parsing, output, and exit status only. Its public operations are:
 
 ```text
-plugins/agent-workflows/skills/goal-brainstorm/scripts/worktree.py prepare --coordinating-repository <main-root> --specification <root-relative-spec-path> [--repository <main-root>]... [--participating-submodule <main-root> <recursive-root-relative-path>]...
-plugins/agent-workflows/skills/goal-brainstorm/scripts/worktree.py contracts-authored --coordinating-repository <main-root> --specification <root-relative-spec-path>
-plugins/agent-workflows/skills/goal-brainstorm/scripts/worktree.py recover-main-leak --coordinating-repository <main-root> --specification <root-relative-spec-path> --main-repository <main-root> --path <root-relative-path> [--path <root-relative-path>]...
-plugins/agent-workflows/skills/goal-brainstorm/scripts/worktree.py accept-main-commit-drift --coordinating-repository <main-root> --specification <root-relative-spec-path> --main-repository <participating-main-owner-root> --commit <full-current-commit> --path <owner-relative-overlap-path> [--path <owner-relative-overlap-path>]...
-plugins/agent-workflows/skills/goal-brainstorm/scripts/worktree.py activate --coordinating-repository <main-root> --specification <root-relative-spec-path>
-plugins/agent-workflows/skills/goal-brainstorm/scripts/worktree.py validate --coordinating-repository <main-root> --specification <root-relative-spec-path> --required-state <state>
-plugins/agent-workflows/skills/goal-brainstorm/scripts/worktree.py seal --coordinating-repository <main-root> --specification <root-relative-spec-path> --goal <root-relative-goal-path>
+worktree.py prepare --goals-repository <project-goals-main-root> --common-prefix <prefix> [--specification-input <ordinary-file>] [--repository <main-root>]... [--participating-submodule <main-root> <recursive-root-relative-path>]...
+worktree.py revise --goals-repository <project-goals-main-root> --common-prefix <prefix>
+worktree.py contracts-authored --goals-repository <project-goals-main-root> --common-prefix <prefix> [--goals-owner-input <root-relative-path> <ordinary-file>]...
+worktree.py recover-main-leak --goals-repository <project-goals-main-root> --common-prefix <prefix> --main-repository <owner-root> --path <owner-relative-path> [--path <owner-relative-path>]...
+worktree.py accept-main-commit-drift --goals-repository <project-goals-main-root> --common-prefix <prefix> --main-repository <owner-root> --commit <full-current-commit> --path <owner-relative-overlap-path> [--path <owner-relative-overlap-path>]...
+worktree.py seal --goals-repository <project-goals-main-root> --common-prefix <prefix> [--goal-input <ordinary-file>]
+worktree.py activate --goals-repository <project-goals-main-root> --common-prefix <prefix>
+worktree.py validate --goals-repository <project-goals-main-root> --common-prefix <prefix> --required-state <state>
 ```
 
-`prepare` includes the coordinating repository automatically; repeated `--repository` values add affected top-level repositories. Repeated `--participating-submodule` pairs declare the complete task-owned recursive-submodule set by participating main root. It derives task identity, creates or resumes matching worktrees, prepares every repository boundary, and reaches `repository_prepared`.
+`prepare` reads an approved specification from `--specification-input` when the central specification is new or changed, publishes those exact bytes directly to `project-goals/main`, then creates or resumes the complete implementation set. `contracts-authored` may receive the complete approved `project-goals` stable-owner delta as repeated `--goals-owner-input` pairs, publishes only those exact normalized paths, validates the complete contract set, and records no semantic approval. `seal` reads a new or changed goal from `--goal-input`, creates the closed initial checkpoint when absent, validates, commits, and compare-and-swap publishes only the exact final coordination task-directory delta before binding its commit and hashes. Each input is an ordinary single-link UTF-8 file outside every participating repository tree; the provider reads it without modifying or retaining it. Omit an input only when the corresponding published file already exists and is unchanged. `activate` runs only after persistent-goal creation. `revise` is the only path from a sealed inactive candidate back to editing. None of these operations checkpoints, merges, or deletes implementation state.
 
-`contracts-authored` is called after approved stable-owner changes are complete and before semantic review begins. It validates the complete repository set, explicitly advances `repository_prepared` to `contracts_authored`, and is idempotent in `contracts_authored`. It does not perform or infer semantic approval, create the paired goal, seal artifacts, or accept a later lifecycle state.
-
-`validate` loads recorded identity, diagnoses drift, performs every safe deterministic repair, repeats complete validation, and succeeds only at or beyond the requested lifecycle state.
-
-`recover-main-leak` is an explicit caller-provenance operation, not a general validation heuristic. The calling agent lists only exact participating-main paths it knows it wrote. The command verifies that each path is one current task path with identical current content before it records recovery ownership and invokes complete validation.
-
-`accept-main-commit-drift` is an explicit caller-attestation operation, not a general validation heuristic. It records only an exact full current commit and the complete exact committed overlap set confirmed by the user at one participating top-level or task-owned-submodule owner boundary, persists that decision before complete validation, and is idempotent for the same commit and path set. It preserves both main and task content and does not authorize later commit drift.
-
-`seal` requires recorded `contracts_authored` and a semantically approved goal-ready pair, validates the complete repository set, records task-artifact hashes, leaves the workflow in sealed `goal_ready`, and returns the exact task roots that the persistent objective must bind. It rejects a direct transition from `repository_prepared`. Calling `seal` again from inactive `goal_ready` is the explicit reseal operation for an intentionally revised pair after the workflow has inspected persistent goal state; ordinary `prepare` and `validate` continue to reject sealed artifact drift.
-
-`activate` is called only after the harness has successfully created the persistent goal. It revalidates sealed state, records `active` in every private-state replica, is idempotent for the same active task, and never creates a harness-specific goal itself. Active task artifacts remain sealed, and resealing is rejected until the persistent goal is no longer active.
-
-Successful commands emit one machine-readable JSON object to standard output containing the task prefix, lifecycle state, exact top-level task roots, task-owned submodule roots, performed repairs, and skipped optional resources. Human diagnostics go to standard error. A nonzero result identifies one remaining ambiguity, invalid contract, unavailable dependency, or external blocker and does not claim preparation success.
-
-The library and script accept explicit paths only and canonicalize them before use. They contain no project-name, workspace-root, profile, environment, or concrete resource-path allowlist. They never commit, push, merge, or remove worktrees.
+Successful commands emit one closed machine-readable JSON object with common prefix, lifecycle, coordination repository/path/commit, exact task roots, task-owned submodule roots, performed repairs, and skipped optional resources. Diagnostics use standard error. Paths are explicit and canonicalized; implementation contains no workspace scan, project allowlist, cloud profile, or application resource name.
 
 ## Publication Handoff
 
-Goal activation may proceed only after `seal` succeeds, persistent goal state is known to allow creation, and a fresh validation confirms the sealed hashes and repository state. The persistent objective names the paired goal and binds all implementation and verification to the returned exact task roots.
+Activation may proceed only after `seal`, known persistent-goal availability, and fresh sealed validation. The persistent objective names `project-goals/<common-prefix>/goal.md` and binds work to the returned task roots.
 
-A later explicit publication request uses `agent-workflows:git-commit`. Before merge, full validation must pass and main tracked state must still match its recorded baseline plus unrelated user changes. After the task branch is merged into `main`, remove only provider-added temporary local excludes whose durable replacement is now effective. Worktree removal remains a separately authorized cleanup action.
-
-The physical task pair remains retained in the coordinating main worktree for every goal state, including after merge, completion, abandonment, or worktree cleanup.
+Later implementation-source commits and pushes belong to `agent-workflows:git-commit`. A user-approved closing snapshot belongs to `goal-checkpoint`; one-checkpoint merge and primary acceptance belong to `goal-merge`; resource/worktree/ref/task-directory deletion belongs to `goal-delete`. None is implied by sealing, activation, completion, or abandonment.
 
 ## Verification Contract
 
-Executable behavior tests use temporary real Git repositories and cover:
+Executable tests use temporary real Git repositories and cover:
 
-- arbitrary valid task prefixes and every identity collision;
-- physical specification ownership, relative links, and ignore behavior for directory and link objects;
-- required and optional copy and link resources with arbitrary names;
-- copy independence, committed-copy deletion and rename, read-only link drift, safe internal links, hardlink rejection, and rejected special or escaping objects;
-- ignored and committed main drift at, above, or below materialized copy and link resource boundaries;
-- closed manifest parsing, path canonicalization, duplicates, overlaps, reserved paths, and submodule boundaries;
-- recursive and nested submodules at exact gitlinks and exact physical non-symbolic roots;
-- missing, clean-drifted, dirty, unavailable, read-only, explicitly task-owned, and nested task-owned submodule states with independent nested-main isolation and leak recovery;
-- pre-existing and later independent main-worktree preservation, overlapping drift classification, and absence of task changes in main;
-- exact caller-attested committed-overlap acceptance at top-level and task-owned-submodule owner boundaries, exact recorded dirty-to-committed reconciliation, mismatched-preimage rejection, idempotence, complete path-set binding, delegated-boundary isolation, later-drift rejection, and preservation of both checkouts;
-- explicit agent-provenance recovery of exact main leaks and rejection of byte-equality inference;
-- wrong-root rerouting and deterministic worktree, link, state, manifest, copy, and submodule repairs;
-- ambiguous user changes that must not be overwritten;
-- interruption and partial-bootstrap recovery;
-- durable pending-worktree, resource, main-leak, and ordinary-text transaction resumption plus random private-write, preimage, and copy-fingerprint-migration recovery with one-time repair reporting;
-- rejected incomplete pending checkouts, substituted registered paths, redirected Git pointers, and staged baseline drift before bootstrap writes;
-- literal pathspec-like submodule names, repository-level `ignore = all`, and ignored-untracked checkout collisions;
-- sealed task-artifact immutability under ordinary preparation and validation, plus explicit inactive resealing;
-- explicit and idempotent `contracts_authored` recording after stable-owner authoring and before semantic review, rejection of direct sealing from `repository_prepared`, and rejection of repository or task-owned-submodule set expansion after that transition;
-- explicit activation only from sealed state, idempotent active recording, and active task-artifact immutability;
-- deterministic schema-v1 to schema-v2 private-state and collision-safe fingerprint migration, v2-secondary precedence, and retirement of every legacy replica;
-- complete revalidation after every repair.
+- arbitrary valid prefixes, central task-directory identity, absence of a `project-goals` task branch/worktree/bootstrap manifest, and every implementation path/ref collision;
+- clean canonical-main preconditions, workspace-global write serialization, compare-and-swap candidate publication, unrelated concurrent coordination updates, same-task conflict rejection, clean synchronized return, and interruption recovery before/after commit and push;
+- exact approved stable-owner path publication, path normalization and overlap rejection without broad coordination-tree staging;
+- complete participant discovery input, extension only after revision, and no workspace inference;
+- required/optional copy and link resources, independence, exact mode/bytes/links, absent optional paths, special files, hardlinks, escapes, overlaps, and submodule boundaries;
+- strict current YAML schema, `.yaml` naming, duplicate/tag/anchor/alias/merge/unknown-key rejection, exact types, and absence of TOML/`.yml` compatibility;
+- cleanup-declaration validation and seal-time binding without execution;
+- recursive read-only and task-owned submodules, nested ownership, exact gitlinks, dirty/unavailable handling, and ignored-file collision safety;
+- main/user-state preservation, overlap classification, caller-provenance leak recovery, exact committed-overlap attestation, and later-drift rejection;
+- wrong-root rerouting and deterministic worktree, state, manifest, resource, and submodule repair;
+- crash recovery for pending worktree, resource, coordination publication, private write, fingerprint migration, and repair transactions;
+- sealed immutability, ordinary inactive `revise`, preserved task content, participant expansion, repeated authoring/review/seal, and active-state rejection;
+- explicit `contracts_authored`, rejection of direct seal from `repository_prepared` or `goal_ready`, explicit activation, idempotence, and fresh full validation after every repair;
+- absence of checkpoint, merge, cleanup, Product publication, project-specific cloud logic, or broad filesystem discovery in `goal-brainstorm`.
 
-Tests assert observable Git, filesystem, JSON output, and exit behavior. They do not assert private call order or substitute mocked Git interactions for required repository behavior.
+Tests assert observable Git, filesystem, closed output, and exit behavior. They do not assert private call order or substitute mocked Git interactions for required repository behavior. Stable prose is verified semantically, not through string-presence tests.

@@ -225,7 +225,7 @@
     {
       "id": "direct-goal-brainstorm",
       "working_directory": "..",
-      "prompt": "Use $agent-workflows:goal-brainstorm to turn a proposed multi-repository architecture change with common prefix 2026-07-30-multi-repository-architecture into approved stable contracts and a persistent spec/goal pair. The approved exact repository roots are /workspace/architecture-owner as coordinating repository and /workspace/runtime-owner as the other affected repository. One repository has no worktree bootstrap manifest and one clean initialized submodule has drifted from its recorded gitlink. Explain the required sequence among design approval, physical specification creation, isolated worktree preparation, stable-owner document updates, paired goal creation, sealing, and later goal activation. Do not implement it.",
+      "prompt": "Use $agent-workflows:goal-brainstorm to turn a proposed multi-repository architecture change with common prefix 2026-07-30-multi-repository-architecture into approved stable contracts and a persistent spec/goal pair. The canonical coordination repository is /workspace/project-goals and the approved implementation roots are /workspace/architecture-owner and /workspace/runtime-owner. One implementation repository has no worktree bootstrap manifest and one clean initialized submodule has drifted from its recorded gitlink. Explain the required sequence among design approval, central specification publication, isolated worktree preparation, stable-owner document updates, paired goal creation, sealing, and later goal activation. Do not implement it.",
       "expected_skill_list": [
         "agent-workflows:goal-brainstorm"
       ],
@@ -236,11 +236,11 @@
       "semantic_invariant_list": [
         {
           "id": "approval-before-contract-write",
-          "text": "The response obtains design approval, creates the physical specification in the coordinating main worktree, prepares every affected worktree before stable-owner changes, explicitly records contracts_authored after validated stable-owner authoring and before semantic review or paired-goal creation, seals both artifacts only from that recorded state after semantic review, and asks separately about later goal activation; only after successful persistent-goal creation does it record and freshly validate active worktree state."
+          "text": "The response obtains design approval, publishes the central specification through the serialized direct-main project-goals transaction, prepares every implementation worktree before stable-owner changes, explicitly records contracts_authored after validated authoring and before semantic review or goal sealing, and asks separately about later goal activation; only after successful persistent-goal creation does it record and freshly validate active state."
         },
         {
           "id": "worktree-isolation",
-          "text": "In one explicit handoff, the response names .spec/2026-07-30-multi-repository-architecture-spec.md, .spec/2026-07-30-multi-repository-architecture-goal.md, branch 2026-07-30-multi-repository-architecture, /workspace/architecture-owner/.worktree/2026-07-30-multi-repository-architecture, and /workspace/runtime-owner/.worktree/2026-07-30-multi-repository-architecture; it states that every task-root .spec is a relative link to the coordinating physical .spec directory and binds subsequent commands to those exact task roots until an authorized merge."
+          "text": "In one explicit handoff, the response names /workspace/project-goals, its 2026-07-30-multi-repository-architecture/spec.md, goal.md, and checkpoint.yaml, branch 2026-07-30-multi-repository-architecture, and both exact implementation worktree roots. It states that project-goals has no task branch, linked worktree, bootstrap manifest, local .spec copy, or task-artifact symlink and binds implementation commands to those roots until goal-merge."
         },
         {
           "id": "repair-before-question",
@@ -248,14 +248,14 @@
         },
         {
           "id": "no-implementation",
-          "text": "The response does not begin production implementation, commit, push, merge, or remove worktrees during goal brainstorm."
+          "text": "The response does not begin Product implementation, checkpoint, merge, or deletion; it distinguishes the authorized exact project-goals direct-main contract commits and pushes from forbidden implementation-repository publication."
         }
       ]
     },
     {
       "id": "direct-goal-brainstorm-accepted-main-commit-drift",
       "working_directory": "..",
-      "prompt": "Use $agent-workflows:goal-brainstorm for an active task rooted at /workspace/architecture-owner/.worktree/2026-07-30-multi-repository-architecture. Validation reports committed main overlap in /workspace/architecture-owner at exact current commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa for AGENTS.md and DESIGN.md. I explicitly confirm that this commit is independent main work that must be preserved. Explain and perform the next workflow action conceptually; do not change real files.",
+      "prompt": "Use $agent-workflows:goal-brainstorm for an active task coordinated by /workspace/project-goals and rooted at /workspace/architecture-owner/.worktree/2026-07-30-multi-repository-architecture. Validation reports committed main overlap in /workspace/architecture-owner at exact current commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa for AGENTS.md and DESIGN.md. I explicitly confirm that this commit is independent main work that must be preserved. Explain and perform the next workflow action conceptually; do not change real files.",
       "expected_skill_list": [
         "agent-workflows:goal-brainstorm"
       ],
@@ -266,7 +266,7 @@
       "semantic_invariant_list": [
         {
           "id": "exact-attested-command",
-          "text": "Because the user already confirmed the ambiguity, the response does not ask again. It invokes or names accept-main-commit-drift with coordinating repository /workspace/architecture-owner, the active task specification identity, main repository /workspace/architecture-owner, full commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, and both exact paths AGENTS.md and DESIGN.md."
+          "text": "Because the user already confirmed the ambiguity, the response does not ask again. It invokes or names accept-main-commit-drift with goals repository /workspace/project-goals, common prefix 2026-07-30-multi-repository-architecture, main repository /workspace/architecture-owner, full commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, and both exact paths AGENTS.md and DESIGN.md."
         },
         {
           "id": "preserve-and-revalidate",
@@ -279,9 +279,76 @@
       ]
     },
     {
+      "id": "direct-goal-checkpoint",
+      "working_directory": "..",
+      "prompt": "Use $agent-workflows:goal-checkpoint to publish the next closing snapshot for approved task 2026-07-30-multi-repository-architecture coordinated by /workspace/project-goals. Explain the validation and publication boundary without changing real files.",
+      "expected_skill_list": [
+        "agent-workflows:goal-checkpoint"
+      ],
+      "forbidden_skill_list": [
+        "agent-workflows:goal-brainstorm",
+        "agent-workflows:goal-merge",
+        "agent-workflows:git-commit"
+      ],
+      "semantic_invariant_list": [
+        {
+          "id": "complete-snapshot",
+          "text": "The response validates every sealed participant task branch as clean, fully pushed, and descendant of its baseline, then appends one sorted complete project_path and full git_commit_final snapshot through the serialized project-goals main transaction."
+        },
+        {
+          "id": "publication-boundary",
+          "text": "The response does not merge implementation main, accept the checkpoint, delete resources, or infer authorization from goal completion."
+        }
+      ]
+    },
+    {
+      "id": "direct-goal-merge",
+      "working_directory": "..",
+      "prompt": "Use $agent-workflows:goal-merge to merge checkpoint-0002 of task 2026-07-30-multi-repository-architecture coordinated by /workspace/project-goals, then describe the separate primary acceptance update. This evaluation is read-only.",
+      "expected_skill_list": [
+        "agent-workflows:goal-merge"
+      ],
+      "forbidden_skill_list": [
+        "agent-workflows:goal-brainstorm",
+        "agent-workflows:goal-delete"
+      ],
+      "semantic_invariant_list": [
+        {
+          "id": "exclusive-resumable-merge",
+          "text": "The response obtains the exclusive workspace merge lock, preflights the complete selected snapshot before the first mutation, resumes exact fast-forward-only main publication from a durable journal, and never substitutes a later task commit."
+        },
+        {
+          "id": "acceptance-boundary",
+          "text": "The response runs primary acceptance only after all main refs exactly match the checkpoint and updates accepted_checkpoint_id separately through project-goals main only after success."
+        }
+      ]
+    },
+    {
+      "id": "direct-goal-delete",
+      "working_directory": "..",
+      "prompt": "Use $agent-workflows:goal-delete for explicitly requested deletion of accepted task 2026-07-30-multi-repository-architecture coordinated by /workspace/project-goals. Explain the resumable order and authorization checks without deleting real state.",
+      "expected_skill_list": [
+        "agent-workflows:goal-delete"
+      ],
+      "forbidden_skill_list": [
+        "agent-workflows:goal-brainstorm",
+        "agent-workflows:goal-merge"
+      ],
+      "semantic_invariant_list": [
+        {
+          "id": "ordered-cleanup",
+          "text": "The response requires explicit deletion authority, current-harness proof that no bound goal is unfinished, and latest accepted checkpoint proof, then resumes exact external resources, worktrees, remote refs, local refs, and task-directory deletion in that order."
+        },
+        {
+          "id": "history-retained",
+          "text": "The response deletes the current central task directory only at the end while preserving its prior Git history and does not infer cleanup from completion or abandonment."
+        }
+      ]
+    },
+    {
       "id": "indirect-spec-artifact-audit",
       "working_directory": "..",
-      "prompt": "Inspect the current repository's harness-neutral .spec task pairs: verify the root ignore behavior and tracked-file boundary, preserve every retained pair, and report lifecycle violations without changing files.",
+      "prompt": "Inspect the canonical project-goals repository's harness-neutral tracked task directories: verify central main ownership, exact spec.md, goal.md, and checkpoint.yaml boundaries, preserve every retained task, and report lifecycle violations without changing files.",
       "expected_skill_list": [
         "agent-workflows:goal-brainstorm",
         "project-standards:project-foundation"
@@ -293,11 +360,11 @@
       "semantic_invariant_list": [
         {
           "id": "exclusive-owner",
-          "text": "The response applies the goal-brainstorm task-artifact contract rather than treating .spec as maintained project documentation or a generic project-standard audit concern."
+          "text": "The response applies the goal lifecycle task-artifact contract rather than treating project-goals task directories as maintained Product documentation or a generic project-standard audit concern."
         },
         {
           "id": "retention-boundary",
-          "text": "The response checks actual root ignore and tracked-file behavior, preserves every retained pair, and does not infer deletion authority from task state."
+          "text": "The response checks canonical project-goals main, tracked task-directory shape, and absence of project-local copies or links, preserves every retained task, and does not infer deletion authority from lifecycle state."
         }
       ]
     },
