@@ -225,7 +225,7 @@
     {
       "id": "direct-goal-brainstorm",
       "working_directory": "..",
-      "prompt": "Use $agent-workflows:goal-brainstorm to turn a proposed multi-repository architecture change into approved stable contracts and a persistent spec/goal pair. Explain the required sequence among design approval, stable-owner document updates, task-pair creation, and later goal activation. Do not implement it.",
+      "prompt": "Use $agent-workflows:goal-brainstorm to turn a proposed multi-repository architecture change with common prefix 2026-07-30-multi-repository-architecture into approved stable contracts and a persistent spec/goal pair. The approved exact repository roots are /workspace/architecture-owner as coordinating repository and /workspace/runtime-owner as the other affected repository. One repository has no worktree bootstrap manifest and one clean initialized submodule has drifted from its recorded gitlink. Explain the required sequence among design approval, physical specification creation, isolated worktree preparation, stable-owner document updates, paired goal creation, sealing, and later goal activation. Do not implement it.",
       "expected_skill_list": [
         "agent-workflows:goal-brainstorm"
       ],
@@ -236,11 +236,45 @@
       "semantic_invariant_list": [
         {
           "id": "approval-before-contract-write",
-          "text": "The response separates design approval, owner-document updates, task-pair creation, and later goal activation."
+          "text": "The response obtains design approval, creates the physical specification in the coordinating main worktree, prepares every affected worktree before stable-owner changes, explicitly records contracts_authored after validated stable-owner authoring and before semantic review or paired-goal creation, seals both artifacts only from that recorded state after semantic review, and asks separately about later goal activation; only after successful persistent-goal creation does it record and freshly validate active worktree state."
+        },
+        {
+          "id": "worktree-isolation",
+          "text": "In one explicit handoff, the response names .spec/2026-07-30-multi-repository-architecture-spec.md, .spec/2026-07-30-multi-repository-architecture-goal.md, branch 2026-07-30-multi-repository-architecture, /workspace/architecture-owner/.worktree/2026-07-30-multi-repository-architecture, and /workspace/runtime-owner/.worktree/2026-07-30-multi-repository-architecture; it states that every task-root .spec is a relative link to the coordinating physical .spec directory and binds subsequent commands to those exact task roots until an authorized merge."
+        },
+        {
+          "id": "repair-before-question",
+          "text": "The response treats the missing initial manifest and clean submodule drift as deterministic preparation repairs, then repeats complete validation instead of stopping or asking the user to choose an unambiguous correction."
         },
         {
           "id": "no-implementation",
-          "text": "The response does not begin production implementation, commit, or push during goal brainstorm."
+          "text": "The response does not begin production implementation, commit, push, merge, or remove worktrees during goal brainstorm."
+        }
+      ]
+    },
+    {
+      "id": "direct-goal-brainstorm-accepted-main-commit-drift",
+      "working_directory": "..",
+      "prompt": "Use $agent-workflows:goal-brainstorm for an active task rooted at /workspace/architecture-owner/.worktree/2026-07-30-multi-repository-architecture. Validation reports committed main overlap in /workspace/architecture-owner at exact current commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa for AGENTS.md and DESIGN.md. I explicitly confirm that this commit is independent main work that must be preserved. Explain and perform the next workflow action conceptually; do not change real files.",
+      "expected_skill_list": [
+        "agent-workflows:goal-brainstorm"
+      ],
+      "forbidden_skill_list": [
+        "agent-workflows:git-commit",
+        "agent-workflows:instruction-migration"
+      ],
+      "semantic_invariant_list": [
+        {
+          "id": "exact-attested-command",
+          "text": "Because the user already confirmed the ambiguity, the response does not ask again. It invokes or names accept-main-commit-drift with coordinating repository /workspace/architecture-owner, the active task specification identity, main repository /workspace/architecture-owner, full commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, and both exact paths AGENTS.md and DESIGN.md."
+        },
+        {
+          "id": "preserve-and-revalidate",
+          "text": "The response preserves both main and task content, does not edit private state directly, and requires complete active validation after the durable attestation."
+        },
+        {
+          "id": "no-git-transition",
+          "text": "The response does not reset, checkout, rebase, commit, merge, push, remove a worktree, or treat the attestation as authorization for later drift."
         }
       ]
     },
