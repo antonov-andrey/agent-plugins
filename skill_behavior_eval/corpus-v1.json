@@ -5,6 +5,7 @@
     {
       "id": "direct-code-audit",
       "working_directory": "..",
+      "working_directory_mode": "same-branch",
       "prompt": "Use $agent-workflows:code-audit. In this read-only evaluation, explain its exact owner-derived execution, one-section registry state, context-inheritance boundary, and terminal report contract for the current Python scope without creating the actual report.",
       "expected_skill_list": [
         "agent-workflows:code-audit"
@@ -35,6 +36,7 @@
     {
       "id": "direct-code-antipattern-audit",
       "working_directory": "..",
+      "working_directory_mode": "same-branch",
       "prompt": "Use $agent-workflows:code-antipattern-audit. In this read-only evaluation, explain its exact audit workflow, delegated-versus-local semantic-role transport state, and terminal contract for the current changed Python scope without creating report artifacts.",
       "expected_skill_list": [
         "agent-workflows:code-antipattern-audit"
@@ -61,6 +63,7 @@
     {
       "id": "direct-instruction-audit",
       "working_directory": "..",
+      "working_directory_mode": "same-branch",
       "prompt": "Use $agent-workflows:instruction-audit. In this read-only evaluation, explain its exact canonical-owner semantic audit, one-section registry state, and terminal report contract without creating report artifacts.",
       "expected_skill_list": [
         "agent-workflows:instruction-audit"
@@ -87,6 +90,7 @@
     {
       "id": "direct-instruction-migration",
       "working_directory": "..",
+      "working_directory_mode": "same-branch",
       "prompt": "Use $agent-workflows:instruction-migration for an already approved source-to-target ledger, but in this read-only evaluation explain the exact migration and fresh semantic recheck sequence without changing files.",
       "expected_skill_list": [
         "agent-workflows:instruction-migration"
@@ -113,6 +117,7 @@
     {
       "id": "overlap-instruction-migration-task-artifacts",
       "working_directory": "..",
+      "working_directory_mode": "same-branch",
       "prompt": "Use $agent-workflows:instruction-migration for an approved ledger that removes copied .spec lifecycle rules from documentation and audit skills while retaining goal-brainstorm as the sole task-artifact owner. This evaluation is read-only, so explain the owner routing and migration boundary without changing files.",
       "expected_skill_list": [
         "agent-workflows:goal-brainstorm",
@@ -133,6 +138,7 @@
     {
       "id": "indirect-explain-algorithm-persistence",
       "working_directory": "..",
+      "working_directory_mode": "same-branch",
       "prompt": "Explain from the current code how `plugins/agent-workflows/lib/section-audit/tool/audit_report_merge.py` validates and merges section reports, which files it reads or writes, and where failure stops publication. Do not change anything.",
       "expected_skill_list": [
         "agent-workflows:explain-algorithm",
@@ -156,6 +162,7 @@
     {
       "id": "incomplete-instruction-change",
       "working_directory": "..",
+      "working_directory_mode": "same-branch",
       "prompt": "AGENTS.md has grown too large. Inspect what is project-specific and what may belong in shared standards, then propose a classification. No migration has been approved.",
       "expected_skill_list": [
         "project-standards:project-foundation",
@@ -180,6 +187,7 @@
     {
       "id": "negative-ordinary-python-fix",
       "working_directory": "..",
+      "working_directory_mode": "same-branch",
       "prompt": "Fix a small bug in one ordinary non-Legacy Python function and add a focused pytest regression test.",
       "expected_skill_list": [
         "project-standards:project-foundation",
@@ -202,6 +210,7 @@
     {
       "id": "overlap-workflow-container-audit",
       "working_directory": "..",
+      "working_directory_mode": "same-branch",
       "prompt": "Semantically audit a workflow-container project's prompts, step recovery, artifact boundaries, and runtime integration without changing files. No target repository was supplied, so state the exact design-owner set and finding contract required before prioritized findings can be produced.",
       "expected_skill_list": [
         "workflow-container-agent-tools:workflow-container-audit",
@@ -225,6 +234,7 @@
     {
       "id": "direct-goal-brainstorm",
       "working_directory": "..",
+      "working_directory_mode": "same-branch",
       "prompt": "Use $agent-workflows:goal-brainstorm to turn a proposed multi-repository architecture change with common prefix 2026-07-30-multi-repository-architecture into approved stable contracts and a persistent spec/goal pair. The canonical coordination repository is /workspace/project-goals and the approved implementation roots are /workspace/architecture-owner and /workspace/runtime-owner. One implementation repository has no worktree bootstrap manifest and one clean initialized submodule has drifted from its recorded gitlink. Explain the required sequence among design approval, central specification publication, isolated worktree preparation, stable-owner document updates, paired goal creation, sealing, and later goal activation. Do not implement it.",
       "expected_skill_list": [
         "agent-workflows:goal-brainstorm"
@@ -255,6 +265,7 @@
     {
       "id": "direct-goal-brainstorm-accepted-main-commit-drift",
       "working_directory": "..",
+      "working_directory_mode": "same-branch",
       "prompt": "Use $agent-workflows:goal-brainstorm for an active task coordinated by /workspace/project-goals and rooted at /workspace/architecture-owner/.worktree/2026-07-30-multi-repository-architecture. Validation reports committed main overlap in /workspace/architecture-owner at exact current commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa for AGENTS.md and DESIGN.md. I explicitly confirm that this commit is independent main work that must be preserved. Explain and perform the next workflow action conceptually; do not change real files.",
       "expected_skill_list": [
         "agent-workflows:goal-brainstorm"
@@ -281,6 +292,7 @@
     {
       "id": "direct-goal-checkpoint",
       "working_directory": "..",
+      "working_directory_mode": "same-branch",
       "prompt": "Use $agent-workflows:goal-checkpoint to publish the next closing snapshot for approved task 2026-07-30-multi-repository-architecture coordinated by /workspace/project-goals. Explain the validation and publication boundary without changing real files.",
       "expected_skill_list": [
         "agent-workflows:goal-checkpoint"
@@ -304,6 +316,7 @@
     {
       "id": "direct-goal-merge",
       "working_directory": "..",
+      "working_directory_mode": "same-branch",
       "prompt": "Use $agent-workflows:goal-merge to merge checkpoint-0002 of task 2026-07-30-multi-repository-architecture coordinated by /workspace/project-goals, then describe the separate primary acceptance update. This evaluation is read-only.",
       "expected_skill_list": [
         "agent-workflows:goal-merge"
@@ -326,6 +339,7 @@
     {
       "id": "direct-goal-delete",
       "working_directory": "..",
+      "working_directory_mode": "same-branch",
       "prompt": "Use $agent-workflows:goal-delete for explicitly requested deletion of accepted task 2026-07-30-multi-repository-architecture coordinated by /workspace/project-goals. Explain the resumable order and authorization checks without deleting real state.",
       "expected_skill_list": [
         "agent-workflows:goal-delete"
@@ -348,6 +362,7 @@
     {
       "id": "indirect-spec-artifact-audit",
       "working_directory": "..",
+      "working_directory_mode": "same-branch",
       "prompt": "Inspect the canonical project-goals repository's harness-neutral tracked task directories: verify central main ownership, exact spec.md, goal.md, and checkpoint.yaml boundaries, preserve every retained task, and report lifecycle violations without changing files.",
       "expected_skill_list": [
         "agent-workflows:goal-brainstorm",
@@ -371,6 +386,7 @@
     {
       "id": "indirect-explain-interface",
       "working_directory": "..",
+      "working_directory_mode": "same-branch",
       "prompt": "Explain from current code every external boundary of plugins/agent-workflows/lib/section-audit/tool/audit_report_merge.py, including CLI inputs, files read and written, validation failures, and the evidence for each claim. Do not modify anything.",
       "expected_skill_list": [
         "agent-workflows:explain-interface",
@@ -390,6 +406,7 @@
     {
       "id": "indirect-explain-internal-api",
       "working_directory": "../../project-standards",
+      "working_directory_mode": "same-branch",
       "prompt": "Show the current internal classes, functions, signatures, decorators, and owned fields of plugins/project-standards/skills/project-instruction-developer/scripts/skill_behavior_eval.py as declaration-style Python blocks. Do not change files.",
       "expected_skill_list": [
         "agent-workflows:explain-internal-api",
@@ -409,6 +426,7 @@
     {
       "id": "indirect-explain-internal-map",
       "working_directory": "../../marketplace-tr-priority",
+      "working_directory_mode": "synchronized-main",
       "prompt": "Draw an internal runtime interaction map for .agents/skills/trendyol-size-chart-parse/tool/run_prepare.py, including its workflow owner, database boundaries, image download boundary, generated files, and transaction labels. Do not change files.",
       "expected_skill_list": [
         "agent-workflows:explain-internal-map",
@@ -428,6 +446,7 @@
     {
       "id": "indirect-git-commit",
       "working_directory": "..",
+      "working_directory_mode": "same-branch",
       "prompt": "Commit and push every current change in this repository, preserving logical commit boundaries and publishing dirty submodules before the superproject. This evaluation is read-only, so explain the exact procedure without executing it.",
       "expected_skill_list": [
         "agent-workflows:git-commit",
@@ -447,6 +466,7 @@
     {
       "id": "indirect-goal-review",
       "working_directory": "..",
+      "working_directory_mode": "same-branch",
       "prompt": "Run a non-interactive Codex review of the current branch against main, fix every finding, and repeat until a fresh review is clean. This evaluation is read-only, so state the exact target-selection and loop contract without executing it.",
       "expected_skill_list": [
         "agent-workflows:goal-review",
@@ -466,6 +486,7 @@
     {
       "id": "indirect-workflow-input-create",
       "working_directory": "../../brand-size-chart",
+      "working_directory_mode": "synchronized-main",
       "prompt": "Prepare one complete Workflow input JSON for a saved WorkflowRun by starting from its saved complete input, asking for changed values, validating the whole selected source schema, and replacing the destination atomically. Do not launch the run.",
       "expected_skill_list": [
         "workflow-container-agent-tools:workflow-container-input-create",
@@ -490,6 +511,7 @@
     {
       "id": "indirect-workflow-input-migrate",
       "working_directory": "../../brand-size-chart",
+      "working_directory_mode": "synchronized-main",
       "prompt": "Migrate one saved complete Workflow input from its exact source version to a newer selected source version through the source-declared migration graph. Validate the source and target objects and replace the destination atomically. Do not launch the run.",
       "expected_skill_list": [
         "workflow-container-agent-tools:workflow-container-input-create",
