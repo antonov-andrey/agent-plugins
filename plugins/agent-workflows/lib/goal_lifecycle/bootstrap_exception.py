@@ -9,7 +9,7 @@ from pathlib import Path
 from goal_lifecycle.error import GoalLifecycleError
 from goal_lifecycle.git import Git
 from goal_lifecycle.io import atomic_json_write, json_object_load
-from goal_lifecycle.model import commit_validate, common_prefix_validate
+from goal_lifecycle.identity import commit_validate, common_prefix_validate
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,7 +52,11 @@ class CoordinationBootstrapException:
                 or any(character not in "0123456789abcdef" for character in value)
             ):
                 raise GoalLifecycleError(f"Coordination bootstrap {field_name} is malformed")
-        for field_name in ("goal_carrier_path", "specification_carrier_path", "task_root"):
+        for field_name in (
+            "goal_carrier_path",
+            "specification_carrier_path",
+            "task_root",
+        ):
             value = payload[field_name]
             if not isinstance(value, str) or not Path(value).is_absolute():
                 raise GoalLifecycleError(f"Coordination bootstrap {field_name} must be absolute")
@@ -119,7 +123,10 @@ def coordination_bootstrap_exception_write(
     if command.commit_get(task, f"refs/remotes/origin/{common_prefix}") != bootstrap_commit:
         raise GoalLifecycleError("Coordination bootstrap task branch is not fully pushed")
     command.ancestor_require(
-        root, bootstrap_commit, command.commit_get(root), label="coordination bootstrap publication"
+        root,
+        bootstrap_commit,
+        command.commit_get(root),
+        label="coordination bootstrap publication",
     )
     specification_path, specification_sha256 = _carrier_get(specification_carrier_path, label="specification")
     goal_path, goal_sha256 = _carrier_get(goal_carrier_path, label="goal")
@@ -190,7 +197,11 @@ def coordination_bootstrap_exception_validate(
         label="coordination bootstrap main ancestry",
     )
     for carrier_path, expected_sha256, label in (
-        (Path(exception.specification_carrier_path), exception.sealed_specification_sha256, "specification"),
+        (
+            Path(exception.specification_carrier_path),
+            exception.sealed_specification_sha256,
+            "specification",
+        ),
         (Path(exception.goal_carrier_path), exception.sealed_goal_sha256, "goal"),
     ):
         _path, actual_sha256 = _carrier_get(carrier_path, label=label)

@@ -18,7 +18,9 @@ from goal_lifecycle.error import GoalLifecycleError
 from goal_lifecycle.git import Git
 from goal_lifecycle.io import atomic_json_write, directory_sync, json_object_load
 from goal_lifecycle.lock import ExclusiveFileLock
-from goal_lifecycle.model import commit_validate, common_prefix_validate
+from goal_lifecycle.identity import commit_validate, common_prefix_validate
+
+TASK_ARTIFACT_NAME_SET = frozenset({"checkpoint.yaml", "goal.md", "spec.md"})
 
 
 class CoordinationRepository:
@@ -88,12 +90,30 @@ class CoordinationRepository:
         return local
 
     def file_bytes_get(self, common_prefix: str, name: str) -> bytes:
-        if name not in {"spec.md", "goal.md", "checkpoint.yaml"}:
+        if name not in TASK_ARTIFACT_NAME_SET:
             raise GoalLifecycleError("Unknown task artifact name")
         path = self.task_directory_get(common_prefix) / name
         if path.is_symlink() or not path.is_file() or path.stat().st_nlink != 1:
             raise GoalLifecycleError(f"Tracked task artifact is unavailable: {path}")
         return path.read_bytes()
+
+    def task_directory_shape_require(self, common_prefix: str, *, complete: bool) -> set[str]:
+        """Require one physical task directory with no unknown or non-file entries."""
+
+        task_directory = self.task_directory_get(common_prefix)
+        if task_directory.is_symlink() or not task_directory.is_dir():
+            raise GoalLifecycleError(f"Tracked task directory is unavailable: {task_directory}")
+        entry_by_name_map = {entry.name: entry for entry in task_directory.iterdir()}
+        entry_name_set = set(entry_by_name_map)
+        if "spec.md" not in entry_name_set or not entry_name_set <= TASK_ARTIFACT_NAME_SET:
+            raise GoalLifecycleError("Tracked task directory has an invalid artifact set")
+        if complete and entry_name_set != TASK_ARTIFACT_NAME_SET:
+            raise GoalLifecycleError("Tracked task directory must contain exactly three task artifacts")
+        for name in sorted(entry_name_set):
+            path = entry_by_name_map[name]
+            if path.is_symlink() or not path.is_file() or path.stat().st_nlink != 1:
+                raise GoalLifecycleError(f"Tracked task artifact is unavailable: {path}")
+        return entry_name_set
 
     def publish(
         self,
@@ -109,7 +129,7 @@ class CoordinationRepository:
         if not relative_payload_by_path_map:
             raise GoalLifecycleError("Coordination publication has no path delta")
         path_list = sorted(relative_payload_by_path_map)
-        self._path_list_validate(path_list, common_prefix=common_prefix)
+        _coordination_path_list_validate(path_list, common_prefix=common_prefix)
         task_lock = nullcontext() if task_lock_already_held else self.task_lock(common_prefix)
         with task_lock, ExclusiveFileLock(self._private_root / "lock" / "coordination-write.lock"):
             requested_sha256_by_name_map = {
@@ -257,7 +277,7 @@ class CoordinationRepository:
             )
         ):
             raise GoalLifecycleError("Coordination publication journal path inventory is malformed")
-        self._path_list_validate(sorted(path_sha256_by_name_map), common_prefix=common_prefix)
+        _coordination_path_list_validate(sorted(path_sha256_by_name_map), common_prefix=common_prefix)
         parent_list = self._git.text(self.root, ["show", "-s", "--format=%P", commit]).split()
         if parent_list != [base]:
             raise GoalLifecycleError("Coordination pending commit has another parent")
@@ -283,8 +303,11 @@ class CoordinationRepository:
             journal_path.unlink()
             directory_sync(journal_path.parent)
             return commit, path_sha256_by_name_map
-        if local == base and (remote == commit or self._is_ancestor(commit, remote)):
-            self._git.run(self.root, ["merge", "--ff-only", remote])
+        if self._is_ancestor(commit, remote) and self._is_ancestor(local, remote):
+            if not self._recorded_payload_matches(remote, path_sha256_by_name_map):
+                raise GoalLifecycleError("Concurrent project-goals update overlaps this exact path set")
+            if local != remote:
+                self._git.run(self.root, ["merge", "--ff-only", remote])
             journal_path.unlink()
             directory_sync(journal_path.parent)
             return commit, path_sha256_by_name_map
@@ -298,7 +321,14 @@ class CoordinationRepository:
         if self._is_ancestor(base, remote) and not self._is_ancestor(commit, remote):
             changed = self._git.run(
                 self.root,
-                ["diff", "--quiet", base, remote, "--", *sorted(path_sha256_by_name_map)],
+                [
+                    "diff",
+                    "--quiet",
+                    base,
+                    remote,
+                    "--",
+                    *sorted(path_sha256_by_name_map),
+                ],
                 check=False,
             )
             if changed.returncode == 0 and local in {base, remote}:
@@ -308,6 +338,18 @@ class CoordinationRepository:
                 directory_sync(journal_path.parent)
                 return None
         raise GoalLifecycleError("Interrupted coordination publication cannot be resumed without ambiguity")
+
+    def _recorded_payload_matches(self, ref: str, path_sha256_by_name_map: Mapping[str, str]) -> bool:
+        """Return whether one tree still contains the operation's exact recorded delta."""
+
+        for path, expected_sha256 in path_sha256_by_name_map.items():
+            blob = self._git.run(self.root, ["show", f"{ref}:{path}"], check=False)
+            if expected_sha256:
+                if blob.returncode != 0 or hashlib.sha256(blob.stdout).hexdigest() != expected_sha256:
+                    return False
+            elif blob.returncode == 0:
+                return False
+        return True
 
     def _is_ancestor(self, ancestor: str, descendant: str) -> bool:
         return (
@@ -319,19 +361,24 @@ class CoordinationRepository:
             == 0
         )
 
-    @staticmethod
-    def _path_list_validate(path_list: list[str], *, common_prefix: str) -> None:
-        allowed_task_prefix = common_prefix + "/"
-        for value in path_list:
-            path = PurePosixPath(value)
-            if (
-                not value
-                or value.startswith("/")
-                or "\\" in value
-                or any(part in {"", ".", ".."} for part in path.parts)
-                or not (
-                    value.startswith(allowed_task_prefix)
-                    or value in {"AGENTS.md", "DESIGN.md", "README.md", ".gitignore"}
-                )
-            ):
-                raise GoalLifecycleError(f"Coordination publication path is outside its closed owner set: {value}")
+
+def _coordination_path_list_validate(path_list: list[str], *, common_prefix: str) -> None:
+    """Require every direct-main mutation path to belong to the closed owner set."""
+
+    allowed_path_set = {
+        *(f"{common_prefix}/{name}" for name in TASK_ARTIFACT_NAME_SET),
+        "AGENTS.md",
+        "DESIGN.md",
+        "README.md",
+        ".gitignore",
+    }
+    for value in path_list:
+        path = PurePosixPath(value)
+        if (
+            not value
+            or value.startswith("/")
+            or "\\" in value
+            or any(part in {"", ".", ".."} for part in path.parts)
+            or value not in allowed_path_set
+        ):
+            raise GoalLifecycleError(f"Coordination publication path is outside its closed owner set: {value}")

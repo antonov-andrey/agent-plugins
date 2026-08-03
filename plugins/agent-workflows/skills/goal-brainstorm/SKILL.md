@@ -18,14 +18,14 @@ Turn an implementation idea into approved stable contracts, one tracked `project
 2. Identify the real requirement owners and complete participant set. Before editing, show the user the direct-owner or dedicated-specification choice, common prefix, central task directory, implementation task branch, every planned implementation worktree, and why each owner belongs.
 3. Resolve outcome, scope, non-goals, ownership, interfaces, data and state transitions, failure and recovery, compatibility, and verification. Ask only about material decisions that cannot be discovered. Offer alternatives only when a real choice remains and recommend one with its tradeoff.
 4. Present the design and verification obligations in reviewable sections. Obtain explicit approval before writing the corresponding contracts.
-5. Create or revise `project-goals/<common-prefix>/spec.md` through the serialized direct-main transaction, then prepare every participating implementation repository through `Preparation Lifecycle` in `worktree-contract.md`. Reach `repository_prepared` everywhere before tracked stable-owner authoring.
+5. Create or revise `project-goals/<common-prefix>/spec.md` through the serialized direct-main transaction, then prepare every participating implementation repository through `Preparation Lifecycle` in `worktree-contract.md`. A missing initial bootstrap manifest and a clean read-only submodule checkout that differs from its recorded gitlink are deterministic preparation repairs: create the empty current manifest or restore the exact gitlink after collision checks without reopening an already approved participant classification. After the complete repair set, rerun complete preparation validation across every participant and boundary. Reach `repository_prepared` everywhere before tracked stable-owner authoring.
 6. Bind every implementation-repository command to the recorded task roots and update its approved stable owners only there. Apply an approved `project-goals` stable-owner change only through the direct-main transaction. Revalidate isolation before and after each authoring phase, then run `contracts-authored`; do not begin semantic review or seal while state is `repository_prepared`.
 7. Apply `Semantic Review` from `specification-contract.md` to the complete changed contract set and resolve every finding. Prepare the approved goal input; `seal` creates the initial `checkpoint.yaml` and publishes both files through the direct-main transaction. Require `Terminal Completion Audit` in the goal and persistent objective.
 8. Run complete validation and `seal`. Sealing commits and pushes only the exact final task-directory delta to `project-goals/main`, binds the published commit and fingerprints, and never publishes implementation repositories. Show the published candidate, stable-source changes, and task-root diff. `goal_ready` means internally consistent review candidate, not user approval.
 9. Before activation, handle every correction or scope addition as an ordinary revision of the same task. Inspect goal state, run `revise`, preserve task content and worktrees, extend participants through `prepare` when needed, then repeat authoring, `contracts-authored`, semantic review, and `seal`. Never create a prerequisite or replacement goal merely because a candidate was sealed.
 10. Ask separately whether to activate the displayed candidate. After explicit confirmation, inspect goal state and rerun sealed validation:
     - If an unfinished goal exists, do not activate another one.
-    - If no unfinished goal exists and a goal-creation tool is available, create the persistent goal, record `active`, and require fresh `active` validation.
+    - If no unfinished goal exists and a goal-creation tool is available, require successful persistent-goal creation before recording `active`, then freshly validate the complete newly active state across the whole participant set.
     - If state cannot be inspected or automatic creation is unavailable, report the exact limitation and provide the semantic `/goal` command below.
 
 Checkpoint publication belongs to `agent-workflows:goal-checkpoint`, merge and primary acceptance to `agent-workflows:goal-merge`, and deletion to `agent-workflows:goal-delete`. Goal completion alone authorizes none of them.
@@ -49,9 +49,16 @@ Execution boundary: every implementation-repository command stays in the exact t
 
 List every participant in that block with exact resolved paths when known. Do not scatter identity facts or refer back to an earlier list.
 
+The same contiguous handoff MUST say that `project-goals` has no task branch, linked worktree, bootstrap manifest, project-local `.spec` copy, or task-artifact symlink. Those absences are part of the identity, not implied implementation detail.
+
+## Read-Only Task Artifact Audit
+
+When the request is to inspect rather than create or revise a task, apply the same lifecycle owner without mutating state. Verify canonical `project-goals/main` ownership and the exact tracked `spec.md`, `goal.md`, and `checkpoint.yaml` shape. Inspect every participant for forbidden project-local task-artifact copies or links, including `.spec`; report violations, preserve every retained task, and never infer deletion authority from completion, merge, acceptance, age, or any other lifecycle state.
+
 ## Terminal Rules
 
 - Preserve unrelated user work and diagnose deterministic repairs before declaring a blocker.
+- Do not ask the user to choose an unambiguous repair already owned by the approved task contract. Apply the complete deterministic repair set, then rerun complete preparation validation rather than a narrower isolation recheck.
 - Never infer participants from workspace proximity, repository names, or dirty state.
 - If this agent leaked a task patch into a participating main worktree, use recorded caller provenance and `recover-main-leak`; matching bytes alone are not provenance.
 - Accept overlapping committed main drift only after explicit user confirmation of the exact owner, commit, and complete overlap set.

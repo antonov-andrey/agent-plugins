@@ -140,6 +140,8 @@ Preparation runs recursive synchronization and initialization from each task wor
 
 Read-only submodules remain at exact recorded gitlinks. Task-owned submodules may advance only to descendants of their recorded baselines, and their parent gitlinks remain explicit task changes. Scheduling and mutation never cross from a parent owner into delegated submodule internals.
 
+Once approved contracts fix the participant and task-owned-submodule sets, a clean read-only checkout at the wrong commit remains read-only and is restored to the recorded gitlink after collision checks. It is not reclassified, promoted into task ownership, or returned to the user as a choice merely because it drifted.
+
 Every Git query disables repository-level submodule-ignore suppression and uses literal path handling. Before repairing a clean checkout, validation checks ignored untracked collisions against the target tree. Dirty or unavailable state that could contain user work is preserved and reported rather than reset.
 
 ## Private State
@@ -193,7 +195,7 @@ A failed validation first identifies the changed object, owner, recorded and cur
 - restoring caller-known leaked paths from exact recorded preimages;
 - recording explicitly accepted independent committed overlap for one exact owner, commit, and complete path set.
 
-Never infer agent provenance from byte equality, reset or overwrite possible user work, cross a delegated submodule boundary, or broaden one attestation to later drift. After every repair set, rerun complete validation until it passes or one real ambiguity, unavailable dependency, external-state requirement, or unauthorized destructive/publication action remains.
+Never infer agent provenance from byte equality, reset or overwrite possible user work, cross a delegated submodule boundary, or broaden one attestation to later drift. Apply all unambiguous repairs owned by the current lifecycle phase before asking a question. After every repair set, rerun the phase's complete validation across every participant and nested boundary until it passes or one real ambiguity, unavailable dependency, external-state requirement, or unauthorized destructive/publication action remains; a narrower isolation-only recheck is insufficient.
 
 ## Library And Script Interface
 

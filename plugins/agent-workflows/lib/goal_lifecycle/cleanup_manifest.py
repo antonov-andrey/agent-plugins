@@ -10,7 +10,7 @@ from typing import Any
 from goal_lifecycle.error import GoalLifecycleError
 from goal_lifecycle.git import Git
 from goal_lifecycle.io import atomic_json_write, json_object_load
-from goal_lifecycle.model import common_prefix_validate
+from goal_lifecycle.identity import common_prefix_validate
 from goal_lifecycle.yaml_document import yaml_document_load
 
 BOOTSTRAP_MANIFEST_NAME = "worktree-bootstrap.yaml"
@@ -125,6 +125,7 @@ def cleanup_binding_receipt_write(
     provider_state_generation: int,
     sealed_specification_sha256: str,
     git: Git | None = None,
+    storage_repository_root: Path | None = None,
 ) -> Path:
     """Bind one sealed manifest declaration before external task-resource mutation."""
 
@@ -136,7 +137,11 @@ def cleanup_binding_receipt_write(
     manifest_path = repository_root / BOOTSTRAP_MANIFEST_NAME
     manifest = bootstrap_manifest_load(manifest_path)
     cleanup_sha256 = manifest.cleanup.normalized_sha256_get() if manifest.cleanup else ""
-    path = cleanup_binding_receipt_path_get(repository_root, common_prefix=common_prefix, git=git)
+    path = cleanup_binding_receipt_path_get(
+        storage_repository_root or repository_root,
+        common_prefix=common_prefix,
+        git=git,
+    )
     expected = {
         "schema_version": 1,
         "common_prefix": common_prefix,
@@ -160,11 +165,16 @@ def cleanup_binding_receipt_validate(
     provider_state_generation: int,
     sealed_specification_sha256: str,
     git: Git | None = None,
+    storage_repository_root: Path | None = None,
 ) -> dict[str, Any]:
     """Require an exact current receipt before task-scoped external mutation."""
 
     manifest = bootstrap_manifest_load(repository_root / BOOTSTRAP_MANIFEST_NAME)
-    path = cleanup_binding_receipt_path_get(repository_root, common_prefix=common_prefix, git=git)
+    path = cleanup_binding_receipt_path_get(
+        storage_repository_root or repository_root,
+        common_prefix=common_prefix,
+        git=git,
+    )
     payload = json_object_load(path, label="cleanup binding receipt")
     cleanup_sha256 = manifest.cleanup.normalized_sha256_get() if manifest.cleanup else ""
     recorded_provider_state_generation = payload.get("provider_state_generation")

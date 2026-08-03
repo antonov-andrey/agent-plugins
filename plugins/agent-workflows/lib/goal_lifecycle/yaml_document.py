@@ -26,18 +26,54 @@ _STANDARD_TAG_SET = {
 
 
 class _UniqueKeySafeLoader(yaml.SafeLoader):
-    """Safe loader that rejects duplicate and merge keys."""
+    """Isolated YAML 1.2 Core loader that rejects duplicate and merge keys."""
+
+    # PyYAML still ships YAML 1.1 implicit resolvers.  Copy the registry before
+    # replacing it so importing this module cannot mutate ``yaml.SafeLoader``
+    # process-wide.
+    yaml_implicit_resolvers: dict[object, list[tuple[str, re.Pattern[str]]]] = {}
 
 
-for first_character, resolver_list in tuple(_UniqueKeySafeLoader.yaml_implicit_resolvers.items()):
-    _UniqueKeySafeLoader.yaml_implicit_resolvers[first_character] = [
-        item for item in resolver_list if item[0] != "tag:yaml.org,2002:bool"
-    ]
+_UniqueKeySafeLoader.add_implicit_resolver(
+    "tag:yaml.org,2002:null",
+    re.compile(r"^(?:~|null|Null|NULL|)$"),
+    ["~", "n", "N", ""],
+)
 _UniqueKeySafeLoader.add_implicit_resolver(
     "tag:yaml.org,2002:bool",
-    re.compile(r"^(?:true|false)$", re.IGNORECASE),
+    re.compile(r"^(?:true|True|TRUE|false|False|FALSE)$"),
     list("tTfF"),
 )
+_UniqueKeySafeLoader.add_implicit_resolver(
+    "tag:yaml.org,2002:int",
+    re.compile(r"^[-+]?(?:0o[0-7]+|0x[0-9a-fA-F]+|[0-9]+)$"),
+    list("-+0123456789"),
+)
+_UniqueKeySafeLoader.add_implicit_resolver(
+    "tag:yaml.org,2002:float",
+    re.compile(
+        r"^[-+]?(?:"
+        r"(?:[0-9]+)?\.[0-9]+(?:[eE][-+]?[0-9]+)?"
+        r"|[0-9]+(?:[eE][-+]?[0-9]+)"
+        r"|\.(?:inf|Inf|INF)"
+        r"|\.(?:nan|NaN|NAN)"
+        r")$"
+    ),
+    list("-+0123456789."),
+)
+
+
+def _integer_construct(loader: _UniqueKeySafeLoader, node: ScalarNode) -> int:
+    """Construct a YAML 1.2 integer without PyYAML's YAML 1.1 octal rules."""
+
+    value = loader.construct_scalar(node)
+    sign = -1 if value.startswith("-") else 1
+    unsigned_value = value[1:] if value.startswith(("-", "+")) else value
+    if unsigned_value.startswith("0o"):
+        return sign * int(unsigned_value[2:], 8)
+    if unsigned_value.startswith("0x"):
+        return sign * int(unsigned_value[2:], 16)
+    return sign * int(unsigned_value, 10)
 
 
 def _mapping_construct(loader: _UniqueKeySafeLoader, node: MappingNode, deep: bool = False) -> dict[object, object]:
@@ -60,6 +96,7 @@ _UniqueKeySafeLoader.add_constructor(
     yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
     _mapping_construct,
 )
+_UniqueKeySafeLoader.add_constructor("tag:yaml.org,2002:int", _integer_construct)
 
 
 def _node_validate(node: Node, *, seen_identity_set: set[int]) -> None:

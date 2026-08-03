@@ -1,4 +1,4 @@
-"""Bootstrap resource materialization, fingerprinting, and validation."""
+"""Crash-safe bootstrap resource materialization, fingerprinting, and validation."""
 
 from __future__ import annotations
 
@@ -11,14 +11,17 @@ import stat
 from goal_lifecycle.cleanup_manifest import BootstrapManifest
 from goal_lifecycle.error import GoalLifecycleError
 from goal_lifecycle.git import Git
-from goal_lifecycle.model import BootstrapResourceState
+from goal_lifecycle.io import atomic_json_write, directory_sync, json_object_load
+from goal_lifecycle.task.model import BootstrapResourceState
+from goal_lifecycle.task.repair import TaskRepairReport
 
 
 class BootstrapResourceManager:
-    """Materialize and prove the exact copy/link resources of one worktree."""
+    """Materialize exact copy/link resources through durable per-path transactions."""
 
-    def __init__(self, *, git: Git | None = None) -> None:
+    def __init__(self, *, git: Git | None = None, repair_report: TaskRepairReport | None = None) -> None:
         self._git = git or Git()
+        self._repair_report = repair_report or TaskRepairReport()
 
     def materialize(
         self,
@@ -26,64 +29,139 @@ class BootstrapResourceManager:
         main_root: Path,
         task_root: Path,
         manifest: BootstrapManifest,
+        previous_state_list: tuple[BootstrapResourceState, ...] = (),
     ) -> tuple[BootstrapResourceState, ...]:
+        """Apply one complete manifest without losing an interrupted destination mutation."""
+
         submodule_path_set = self._submodule_path_set_get(task_root)
-        result: list[BootstrapResourceState] = []
+        previous_by_path_map = {item.path: item for item in previous_state_list}
+        desired_by_path_map: dict[str, tuple[str, bool, str, str]] = {}
         for resource_class, path_list in manifest.resource_by_key_map.items():
             strategy = resource_class.split("_", maxsplit=1)[0]
             required = "_required_" in resource_class
             for path_text in path_list:
-                self._submodule_crossing_reject(path_text, submodule_path_set)
+                _submodule_crossing_reject(path_text, submodule_path_set)
                 source = main_root / path_text
-                destination = task_root / path_text
                 source_present = source.exists() or source.is_symlink()
                 if not source_present:
                     if required:
                         raise GoalLifecycleError(f"Required bootstrap source is absent: {source}")
-                    if destination.exists() or destination.is_symlink():
-                        raise GoalLifecycleError(f"Skipped bootstrap destination unexpectedly exists: {destination}")
-                    result.append(
-                        BootstrapResourceState(
-                            path=path_text,
-                            resource_class=resource_class,
-                            skipped=True,
-                            source_fingerprint="",
-                            task_fingerprint="",
-                        )
-                    )
+                    desired_by_path_map[path_text] = (resource_class, True, "", "")
                     continue
                 source_fingerprint = _object_fingerprint(source, declared_root=source)
-                if strategy == "link":
-                    expected_target = os.path.relpath(source, start=destination.parent)
-                    if destination.exists() or destination.is_symlink():
-                        if not destination.is_symlink() or os.readlink(destination) != expected_target:
-                            raise GoalLifecycleError(f"Existing bootstrap link differs from declaration: {destination}")
-                    else:
-                        destination.parent.mkdir(parents=True, exist_ok=True)
-                        destination.symlink_to(expected_target)
-                    task_fingerprint = _link_fingerprint(destination)
-                else:
-                    if destination.exists() or destination.is_symlink():
-                        task_fingerprint = _object_fingerprint(destination, declared_root=destination)
-                        if task_fingerprint != source_fingerprint:
-                            raise GoalLifecycleError(f"Existing bootstrap copy differs from source: {destination}")
-                    else:
-                        destination.parent.mkdir(parents=True, exist_ok=True)
-                        _copy(source, destination)
-                        task_fingerprint = _object_fingerprint(destination, declared_root=destination)
-                    if task_fingerprint != source_fingerprint:
+                desired_fingerprint = (
+                    _expected_link_fingerprint(source=source, destination=task_root / path_text)
+                    if strategy == "link"
+                    else source_fingerprint
+                )
+                desired_by_path_map[path_text] = (
+                    resource_class,
+                    False,
+                    source_fingerprint,
+                    desired_fingerprint,
+                )
+
+        known_path_set = set(desired_by_path_map) | set(previous_by_path_map)
+        self._unknown_transaction_reject(task_root, known_path_set=known_path_set)
+        for path_text, previous in previous_by_path_map.items():
+            if path_text in desired_by_path_map:
+                continue
+            destination = task_root / path_text
+            if destination.exists() or destination.is_symlink():
+                current = _resource_destination_fingerprint(destination, resource_class=previous.resource_class)
+                if current != previous.task_fingerprint:
+                    raise GoalLifecycleError(
+                        f"Former bootstrap destination contains independent content: {destination}"
+                    )
+                self._transaction_apply(
+                    task_root=task_root,
+                    path_text=path_text,
+                    strategy="remove",
+                    source=None,
+                    source_fingerprint="",
+                    desired_fingerprint="",
+                    previous_fingerprint=previous.task_fingerprint,
+                    previous_strategy=previous.resource_class.split("_", maxsplit=1)[0],
+                )
+
+        result: list[BootstrapResourceState] = []
+        for path_text, (
+            resource_class,
+            skipped,
+            source_fingerprint,
+            desired_fingerprint,
+        ) in desired_by_path_map.items():
+            destination = task_root / path_text
+            previous = previous_by_path_map.get(path_text)
+            if skipped:
+                if destination.exists() or destination.is_symlink():
+                    if previous is None or previous.skipped:
+                        raise GoalLifecycleError(f"Skipped bootstrap destination unexpectedly exists: {destination}")
+                    current = _resource_destination_fingerprint(destination, resource_class=previous.resource_class)
+                    if current != previous.task_fingerprint:
                         raise GoalLifecycleError(
-                            f"Bootstrap copy fingerprint differs after materialization: {destination}"
+                            f"Optional bootstrap destination contains independent content: {destination}"
                         )
+                    self._transaction_apply(
+                        task_root=task_root,
+                        path_text=path_text,
+                        strategy="remove",
+                        source=None,
+                        source_fingerprint="",
+                        desired_fingerprint="",
+                        previous_fingerprint=previous.task_fingerprint,
+                        previous_strategy=previous.resource_class.split("_", maxsplit=1)[0],
+                    )
                 result.append(
                     BootstrapResourceState(
                         path=path_text,
                         resource_class=resource_class,
-                        skipped=False,
-                        source_fingerprint=source_fingerprint,
-                        task_fingerprint=task_fingerprint,
+                        skipped=True,
+                        source_fingerprint="",
+                        task_fingerprint="",
                     )
                 )
+                continue
+            strategy = resource_class.split("_", maxsplit=1)[0]
+            source = main_root / path_text
+            current_fingerprint = (
+                _resource_destination_fingerprint(destination, resource_class=resource_class)
+                if destination.exists() or destination.is_symlink()
+                else ""
+            )
+            if current_fingerprint != desired_fingerprint:
+                if previous is None or previous.skipped or current_fingerprint != previous.task_fingerprint:
+                    if current_fingerprint:
+                        raise GoalLifecycleError(f"Bootstrap destination contains independent content: {destination}")
+                    previous_fingerprint = ""
+                else:
+                    previous_fingerprint = previous.task_fingerprint
+                self._transaction_apply(
+                    task_root=task_root,
+                    path_text=path_text,
+                    strategy=strategy,
+                    source=source,
+                    source_fingerprint=source_fingerprint,
+                    desired_fingerprint=desired_fingerprint,
+                    previous_fingerprint=previous_fingerprint,
+                    previous_strategy=(
+                        previous.resource_class.split("_", maxsplit=1)[0]
+                        if previous is not None and not previous.skipped
+                        else strategy
+                    ),
+                )
+            actual_fingerprint = _resource_destination_fingerprint(destination, resource_class=resource_class)
+            if actual_fingerprint != desired_fingerprint:
+                raise GoalLifecycleError(f"Bootstrap destination differs after materialization: {destination}")
+            result.append(
+                BootstrapResourceState(
+                    path=path_text,
+                    resource_class=resource_class,
+                    skipped=False,
+                    source_fingerprint=source_fingerprint,
+                    task_fingerprint=actual_fingerprint,
+                )
+            )
         return tuple(sorted(result, key=lambda item: (item.path, item.resource_class)))
 
     def validate(
@@ -93,6 +171,9 @@ class BootstrapResourceManager:
         task_root: Path,
         state_list: tuple[BootstrapResourceState, ...],
     ) -> None:
+        """Prove every sealed source and destination without silently repairing drift."""
+
+        self._unknown_transaction_reject(task_root, known_path_set={item.path for item in state_list})
         for item in state_list:
             source = main_root / item.path
             destination = task_root / item.path
@@ -103,15 +184,148 @@ class BootstrapResourceManager:
             source_fingerprint = _object_fingerprint(source, declared_root=source)
             if source_fingerprint != item.source_fingerprint:
                 raise GoalLifecycleError(f"Bootstrap source drifted after preparation: {source}")
+            task_fingerprint = _resource_destination_fingerprint(destination, resource_class=item.resource_class)
+            if task_fingerprint != item.task_fingerprint:
+                raise GoalLifecycleError(f"Bootstrap task resource drifted after preparation: {destination}")
             if item.resource_class.startswith("link_"):
                 expected_target = os.path.relpath(source, start=destination.parent)
                 if not destination.is_symlink() or os.readlink(destination) != expected_target:
                     raise GoalLifecycleError(f"Bootstrap link drifted after preparation: {destination}")
-                task_fingerprint = _link_fingerprint(destination)
+
+    def _transaction_apply(
+        self,
+        *,
+        task_root: Path,
+        path_text: str,
+        strategy: str,
+        source: Path | None,
+        source_fingerprint: str,
+        desired_fingerprint: str,
+        previous_fingerprint: str,
+        previous_strategy: str,
+    ) -> None:
+        """Resume one durable transaction until the exact desired destination is exposed."""
+
+        transaction_root = self._transaction_path_get(task_root, path_text=path_text)
+        transaction_preexisting = transaction_root.exists()
+        metadata_path = transaction_root / "metadata.json"
+        expected = {
+            "schema_version": 1,
+            "desired_fingerprint": desired_fingerprint,
+            "path": path_text,
+            "previous_fingerprint": previous_fingerprint,
+            "previous_strategy": previous_strategy,
+            "source_fingerprint": source_fingerprint,
+            "strategy": strategy,
+        }
+        if transaction_root.exists():
+            if transaction_root.is_symlink() or not transaction_root.is_dir():
+                raise GoalLifecycleError(
+                    f"Bootstrap resource transaction is not a private directory: {transaction_root}"
+                )
+            if not metadata_path.exists():
+                if any(transaction_root.iterdir()):
+                    raise GoalLifecycleError(
+                        f"Bootstrap resource transaction lost its durable intent: {transaction_root}"
+                    )
+                transaction_root.rmdir()
+        if not transaction_root.exists():
+            transaction_root.mkdir(parents=True, mode=0o700)
+            directory_sync(transaction_root.parent)
+            atomic_json_write(metadata_path, expected)
+        elif json_object_load(metadata_path, label="bootstrap resource transaction") != expected:
+            raise GoalLifecycleError(
+                f"Bootstrap resource transaction differs from requested intent: {transaction_root}"
+            )
+
+        destination = task_root / path_text
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if transaction_root.stat().st_dev != destination.parent.stat().st_dev:
+            raise GoalLifecycleError(f"Bootstrap resource transaction cannot cross filesystems: {destination}")
+        replacement = transaction_root / "replacement"
+        previous = transaction_root / "previous"
+        current_fingerprint = _destination_optional_fingerprint(
+            destination,
+            strategy=(previous_strategy if destination.exists() or destination.is_symlink() else strategy),
+        )
+        if current_fingerprint == desired_fingerprint:
+            self._transaction_retire(transaction_root)
+            if transaction_preexisting:
+                self._repair_report.record(f"bootstrap-resource-transaction-recovered:{task_root}:{path_text}")
+            return
+        if current_fingerprint not in {"", previous_fingerprint}:
+            raise GoalLifecycleError(f"Bootstrap destination changed during its transaction: {destination}")
+        if source is not None and _object_fingerprint(source, declared_root=source) != source_fingerprint:
+            raise GoalLifecycleError(f"Bootstrap source changed during its transaction: {source}")
+        if strategy != "remove" and (replacement.exists() or replacement.is_symlink()):
+            if _destination_optional_fingerprint(replacement, strategy=strategy) != desired_fingerprint:
+                _path_remove(replacement)
+        if strategy != "remove" and not (replacement.exists() or replacement.is_symlink()):
+            if strategy == "copy":
+                if source is None:
+                    raise GoalLifecycleError("Copy transaction has no source")
+                _copy(source, replacement)
+                _tree_sync(replacement)
+            elif strategy == "link":
+                if source is None:
+                    raise GoalLifecycleError("Link transaction has no source")
+                replacement.symlink_to(os.path.relpath(source, start=destination.parent))
+                directory_sync(replacement.parent)
             else:
-                task_fingerprint = _object_fingerprint(destination, declared_root=destination)
-            if task_fingerprint != item.task_fingerprint:
-                raise GoalLifecycleError(f"Bootstrap task resource drifted after preparation: {destination}")
+                raise GoalLifecycleError(f"Unknown bootstrap transaction strategy: {strategy}")
+        if (
+            strategy != "remove"
+            and _destination_optional_fingerprint(replacement, strategy=strategy) != desired_fingerprint
+        ):
+            raise GoalLifecycleError(f"Bootstrap replacement staging differs: {replacement}")
+        if current_fingerprint == previous_fingerprint and current_fingerprint:
+            if previous.exists() or previous.is_symlink():
+                if _destination_optional_fingerprint(previous, strategy=previous_strategy) != previous_fingerprint:
+                    raise GoalLifecycleError(f"Bootstrap previous staging differs: {previous}")
+                _path_remove(destination)
+            else:
+                destination.replace(previous)
+                directory_sync(destination.parent)
+        if strategy != "remove":
+            if destination.exists() or destination.is_symlink():
+                raise GoalLifecycleError(f"Bootstrap destination reappeared during exposure: {destination}")
+            replacement.replace(destination)
+            directory_sync(destination.parent)
+        if _destination_optional_fingerprint(destination, strategy=strategy) != desired_fingerprint:
+            raise GoalLifecycleError(f"Bootstrap transaction did not expose the desired destination: {destination}")
+        self._transaction_retire(transaction_root)
+        if transaction_preexisting:
+            self._repair_report.record(f"bootstrap-resource-transaction-recovered:{task_root}:{path_text}")
+
+    def _transaction_retire(self, transaction_root: Path) -> None:
+        for name in ("replacement", "previous", "metadata.json"):
+            path = transaction_root / name
+            if path.exists() or path.is_symlink():
+                _path_remove(path)
+        unknown = list(transaction_root.iterdir())
+        if unknown:
+            raise GoalLifecycleError(f"Bootstrap transaction contains unknown content: {transaction_root}")
+        parent = transaction_root.parent
+        transaction_root.rmdir()
+        directory_sync(parent)
+
+    def _unknown_transaction_reject(self, task_root: Path, *, known_path_set: set[str]) -> None:
+        root = self._transaction_root_get(task_root)
+        if not root.exists():
+            return
+        if root.is_symlink() or not root.is_dir():
+            raise GoalLifecycleError(f"Bootstrap transaction owner is not a private directory: {root}")
+        known_name_by_path_map = {hashlib.sha256(path.encode()).hexdigest(): path for path in known_path_set}
+        for candidate in root.iterdir():
+            if candidate.name not in known_name_by_path_map:
+                raise GoalLifecycleError(f"Unknown bootstrap resource transaction blocks recovery: {candidate}")
+
+    def _transaction_root_get(self, task_root: Path) -> Path:
+        common_prefix = self._git.branch_get(task_root)
+        return self._git.common_directory_get(task_root) / "agent-workflows" / "task" / common_prefix / "resource"
+
+    def _transaction_path_get(self, task_root: Path, *, path_text: str) -> Path:
+        return self._transaction_root_get(task_root) / hashlib.sha256(path_text.encode()).hexdigest()
 
     def _submodule_path_set_get(self, task_root: Path) -> set[str]:
         payload = self._git.run(task_root, ["ls-files", "--stage", "-z"]).stdout
@@ -127,18 +341,6 @@ class BootstrapResourceManager:
                     raise GoalLifecycleError("Goal lifecycle requires UTF-8 submodule paths") from error
         return result
 
-    @staticmethod
-    def _submodule_crossing_reject(path_text: str, submodule_path_set: set[str]) -> None:
-        resource_path = PurePosixPath(path_text)
-        for submodule_text in submodule_path_set:
-            submodule_path = PurePosixPath(submodule_text)
-            if (
-                resource_path == submodule_path
-                or resource_path in submodule_path.parents
-                or submodule_path in resource_path.parents
-            ):
-                raise GoalLifecycleError(f"Bootstrap resource crosses a submodule boundary: {path_text}")
-
 
 def _copy(source: Path, destination: Path) -> None:
     if source.is_symlink():
@@ -149,6 +351,66 @@ def _copy(source: Path, destination: Path) -> None:
         shutil.copy2(source, destination, follow_symlinks=False)
     else:
         raise GoalLifecycleError(f"Bootstrap source type is unsupported: {source}")
+
+
+def _path_remove(path: Path) -> None:
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+    elif path.is_dir():
+        shutil.rmtree(path)
+    else:
+        raise GoalLifecycleError(f"Bootstrap transaction path is unavailable: {path}")
+
+
+def _tree_sync(path: Path) -> None:
+    """Fsync every copied ordinary file and directory before atomic exposure."""
+
+    if path.is_file() and not path.is_symlink():
+        with path.open("rb") as stream:
+            os.fsync(stream.fileno())
+        return
+    if not path.is_dir() or path.is_symlink():
+        return
+    for child in path.iterdir():
+        _tree_sync(child)
+    directory_sync(path)
+
+
+def _submodule_crossing_reject(path_text: str, submodule_path_set: set[str]) -> None:
+    resource_path = PurePosixPath(path_text)
+    for submodule_text in submodule_path_set:
+        submodule_path = PurePosixPath(submodule_text)
+        if (
+            resource_path == submodule_path
+            or submodule_path in resource_path.parents
+            or resource_path in submodule_path.parents
+        ):
+            raise GoalLifecycleError(f"Bootstrap resource crosses a submodule boundary: {path_text}")
+
+
+def _resource_destination_fingerprint(path: Path, *, resource_class: str) -> str:
+    return (
+        _link_fingerprint(path) if resource_class.startswith("link_") else _object_fingerprint(path, declared_root=path)
+    )
+
+
+def _destination_optional_fingerprint(path: Path, *, strategy: str) -> str:
+    if not (path.exists() or path.is_symlink()):
+        return ""
+    if strategy == "link":
+        return _link_fingerprint(path)
+    if strategy == "remove":
+        return "unexpected-present"
+    return _object_fingerprint(path, declared_root=path)
+
+
+def _expected_link_fingerprint(*, source: Path, destination: Path) -> str:
+    raw_target = os.fsencode(os.path.relpath(source, start=destination.parent))
+    digest = hashlib.sha256()
+    digest.update(b"L")
+    digest.update(len(raw_target).to_bytes(8, "big"))
+    digest.update(raw_target)
+    return digest.hexdigest()
 
 
 def _object_fingerprint(path: Path, *, declared_root: Path) -> str:
@@ -197,8 +459,7 @@ def _object_fingerprint(path: Path, *, declared_root: Path) -> str:
             except UnicodeEncodeError as error:
                 raise GoalLifecycleError("Goal lifecycle requires encodable bootstrap paths") from error
             for child in child_list:
-                child_relative = os.fsencode(child.relative_to(declared_root).as_posix())
-                visit(child, child_relative)
+                visit(child, os.fsencode(child.relative_to(declared_root).as_posix()))
             return
         raise GoalLifecycleError(f"Bootstrap object contains a special file: {current}")
 

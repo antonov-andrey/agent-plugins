@@ -30,7 +30,12 @@ def main(argv: list[str] | None = None) -> int:
     except GoalLifecycleError as error:
         print(str(error), file=sys.stderr)
         return 2
-    print(json.dumps({"checkpoint_id": checkpoint_id, "coordination_commit": commit}, sort_keys=True))
+    print(
+        json.dumps(
+            {"checkpoint_id": checkpoint_id, "coordination_commit": commit},
+            sort_keys=True,
+        )
+    )
     return 0
 
 

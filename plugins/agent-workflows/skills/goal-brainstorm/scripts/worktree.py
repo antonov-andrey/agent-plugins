@@ -35,6 +35,14 @@ def _parser_get() -> argparse.ArgumentParser:
         if command == "prepare":
             command_parser.add_argument("--specification-input", type=Path)
             command_parser.add_argument("--repository", action="append", default=[], type=Path)
+            command_parser.add_argument(
+                "--participating-submodule",
+                action="append",
+                default=[],
+                metavar=("MAIN_ROOT", "RECURSIVE_ROOT_RELATIVE_PATH"),
+                nargs=2,
+                type=Path,
+            )
         elif command == "contracts-authored":
             command_parser.add_argument(
                 "--goals-owner-input",
@@ -53,7 +61,12 @@ def _parser_get() -> argparse.ArgumentParser:
         elif command == "validate":
             command_parser.add_argument(
                 "--required-state",
-                choices=("repository_prepared", "contracts_authored", "goal_ready", "active"),
+                choices=(
+                    "repository_prepared",
+                    "contracts_authored",
+                    "goal_ready",
+                    "active",
+                ),
                 required=True,
             )
     return parser
@@ -67,6 +80,7 @@ def main(argv: list[str] | None = None) -> int:
             result = workflow.prepare(
                 common_prefix=args.common_prefix,
                 repository_root_list=args.repository,
+                participating_submodule_list=[tuple(item) for item in args.participating_submodule],
                 specification_input=args.specification_input,
             )
         elif args.command == "revise":

@@ -9,11 +9,10 @@ from typing import Iterable
 
 from goal_lifecycle.error import GoalLifecycleError
 from goal_lifecycle.git import Git
-from goal_lifecycle.model import (
+from goal_lifecycle.identity import commit_validate, repository_relative_path_validate
+from goal_lifecycle.task.model import (
     MainCommitDriftAttestation,
-    RepositoryState,
-    commit_validate,
-    repository_relative_path_validate,
+    RepositoryBoundaryState,
 )
 
 
@@ -23,7 +22,7 @@ class MainWorktreeIntegrity:
     def __init__(self, *, git: Git | None = None) -> None:
         self._git = git or Git()
 
-    def refresh_if_independent(self, repository: RepositoryState) -> RepositoryState:
+    def refresh_if_independent(self, repository: RepositoryBoundaryState) -> RepositoryBoundaryState:
         """Advance recorded main identity only when all drift is task-disjoint."""
 
         main_root = Path(repository.main_root)
@@ -49,7 +48,7 @@ class MainWorktreeIntegrity:
             current_commit,
         )
         overlap_set = _overlap_set_get(changed_path_set, task_path_set)
-        attestation = _attestation_get(repository, current_commit)
+        attestation = repository.main_commit_drift_attestation_get(current_commit)
         if overlap_set and (attestation is None or set(attestation.path_list) != overlap_set):
             raise GoalLifecycleError(
                 f"Committed main overlap requires exact user attestation in {main_root}: "
@@ -57,7 +56,7 @@ class MainWorktreeIntegrity:
             )
         return replace(repository, main_commit=current_commit)
 
-    def leak_recover(self, repository: RepositoryState, *, path_list: Iterable[str]) -> RepositoryState:
+    def leak_recover(self, repository: RepositoryBoundaryState, *, path_list: Iterable[str]) -> RepositoryBoundaryState:
         """Restore explicit caller-attested leaked paths from current main HEAD."""
 
         main_root = Path(repository.main_root)
@@ -86,7 +85,14 @@ class MainWorktreeIntegrity:
             if tracked:
                 self._git.run(
                     main_root,
-                    ["restore", "--source=HEAD", "--staged", "--worktree", "--", path_text],
+                    [
+                        "restore",
+                        "--source=HEAD",
+                        "--staged",
+                        "--worktree",
+                        "--",
+                        path_text,
+                    ],
                 )
             else:
                 _untracked_remove(main_root / path_text)
@@ -96,11 +102,11 @@ class MainWorktreeIntegrity:
 
     def commit_drift_accept(
         self,
-        repository: RepositoryState,
+        repository: RepositoryBoundaryState,
         *,
         commit: str,
         path_list: Iterable[str],
-    ) -> RepositoryState:
+    ) -> RepositoryBoundaryState:
         """Record one exact user-approved committed overlap and no broader authority."""
 
         main_root = Path(repository.main_root)
@@ -131,7 +137,7 @@ class MainWorktreeIntegrity:
             main_commit=current_commit,
         )
 
-    def validate(self, repository: RepositoryState) -> None:
+    def validate(self, repository: RepositoryBoundaryState) -> None:
         """Prove current main has no unclassified overlap with task work."""
 
         refreshed = self.refresh_if_independent(repository)
@@ -140,7 +146,7 @@ class MainWorktreeIntegrity:
                 f"Independent main commit drift must be recorded by a lifecycle transition: {repository.main_root}"
             )
 
-    def _task_path_set_get(self, repository: RepositoryState) -> set[str]:
+    def _task_path_set_get(self, repository: RepositoryBoundaryState) -> set[str]:
         task_root = Path(repository.task_root)
         return self._diff_path_set_get(task_root, repository.baseline_commit) | self._untracked_path_set_get(task_root)
 
@@ -148,7 +154,7 @@ class MainWorktreeIntegrity:
         return self._diff_path_set_get(root, "HEAD") | self._untracked_path_set_get(root)
 
     def _diff_path_set_get(self, root: Path, base: str) -> set[str]:
-        payload = self._git.run(root, ["diff", "--name-only", "-z", base, "--"]).stdout
+        payload = self._git.run(root, ["diff", "--name-only", "-z", "--ignore-submodules=none", base, "--"]).stdout
         return _nul_path_set_decode(payload)
 
     def _untracked_path_set_get(self, root: Path) -> set[str]:
@@ -156,15 +162,19 @@ class MainWorktreeIntegrity:
         return _nul_path_set_decode(payload)
 
     def _commit_path_set_get(self, root: Path, older: str, newer: str) -> set[str]:
-        payload = self._git.run(root, ["diff", "--name-only", "-z", older, newer, "--"]).stdout
+        payload = self._git.run(
+            root,
+            [
+                "diff",
+                "--name-only",
+                "-z",
+                "--ignore-submodules=none",
+                older,
+                newer,
+                "--",
+            ],
+        ).stdout
         return _nul_path_set_decode(payload)
-
-
-def _attestation_get(repository: RepositoryState, commit: str) -> MainCommitDriftAttestation | None:
-    for item in reversed(repository.accepted_main_commit_drift_list):
-        if item.commit == commit:
-            return item
-    return None
 
 
 def _nul_path_set_decode(payload: bytes) -> set[str]:
@@ -179,6 +189,8 @@ def _nul_path_set_decode(payload: bytes) -> set[str]:
 
 
 def _overlap_set_get(left_set: set[str], right_set: set[str]) -> set[str]:
+    """Return only left-owner paths that overlap the comparison path graph."""
+
     overlap_set: set[str] = set()
     for left in left_set:
         left_path = PurePosixPath(left)
@@ -186,7 +198,6 @@ def _overlap_set_get(left_set: set[str], right_set: set[str]) -> set[str]:
             right_path = PurePosixPath(right)
             if left_path == right_path or left_path in right_path.parents or right_path in left_path.parents:
                 overlap_set.add(left)
-                overlap_set.add(right)
     return overlap_set
 
 

@@ -8,38 +8,11 @@ import subprocess
 from typing import Sequence
 
 from goal_lifecycle.error import GoalLifecycleError
-from goal_lifecycle.model import commit_validate
+from goal_lifecycle.identity import commit_validate
 
 
 class Git:
     """Run Git with repository-redirection variables removed."""
-
-    @staticmethod
-    def _environment_get(*, extra: dict[str, str] | None = None) -> dict[str, str]:
-        environment = os.environ.copy()
-        for name in tuple(environment):
-            if name in {
-                "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-                "GIT_COMMON_DIR",
-                "GIT_CONFIG",
-                "GIT_CONFIG_COUNT",
-                "GIT_CONFIG_GLOBAL",
-                "GIT_CONFIG_NOSYSTEM",
-                "GIT_CONFIG_PARAMETERS",
-                "GIT_CONFIG_SYSTEM",
-                "GIT_DIR",
-                "GIT_INDEX_FILE",
-                "GIT_NAMESPACE",
-                "GIT_OBJECT_DIRECTORY",
-                "GIT_PREFIX",
-                "GIT_QUARANTINE_PATH",
-                "GIT_WORK_TREE",
-            } or name.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")):
-                environment.pop(name, None)
-        environment["GIT_TERMINAL_PROMPT"] = "0"
-        if extra:
-            environment.update(extra)
-        return environment
 
     def run(
         self,
@@ -54,7 +27,7 @@ class Git:
             ["git", "-C", str(repository), *argument_list],
             capture_output=True,
             check=False,
-            env=self._environment_get(extra=extra_environment),
+            env=_git_environment_get(extra=extra_environment),
             input=input_bytes,
         )
         if check and result.returncode != 0:
@@ -96,7 +69,10 @@ class Git:
         return value.resolve(strict=True)
 
     def commit_get(self, repository: Path, ref: str = "HEAD") -> str:
-        return commit_validate(self.text(repository, ["rev-parse", "--verify", f"{ref}^{{commit}}"]), label=ref)
+        return commit_validate(
+            self.text(repository, ["rev-parse", "--verify", f"{ref}^{{commit}}"]),
+            label=ref,
+        )
 
     def branch_get(self, repository: Path) -> str:
         branch = self.text(repository, ["symbolic-ref", "--quiet", "--short", "HEAD"])
@@ -105,14 +81,30 @@ class Git:
         return branch
 
     def clean_require(self, repository: Path) -> None:
-        if self.run(repository, ["status", "--porcelain=v1", "-z"]).stdout:
+        if self.run(repository, ["status", "--porcelain=v1", "-z", "--ignore-submodules=none"]).stdout:
             raise GoalLifecycleError(f"Repository must be clean before lifecycle mutation: {repository}")
 
     def fetch(self, repository: Path) -> None:
         self.run(repository, ["fetch", "--prune", "origin"])
 
+    def synchronized_main_require(self, repository: Path) -> str:
+        """Require one clean canonical main checkout equal to fetched origin/main."""
+
+        self.clean_require(repository)
+        if self.branch_get(repository) != "main":
+            raise GoalLifecycleError(f"Canonical main checkout is required: {repository}")
+        self.fetch(repository)
+        local_commit = self.commit_get(repository)
+        if local_commit != self.commit_get(repository, "refs/remotes/origin/main"):
+            raise GoalLifecycleError(f"Local and remote main differ: {repository}")
+        return local_commit
+
     def ancestor_require(self, repository: Path, ancestor: str, descendant: str, *, label: str) -> None:
-        result = self.run(repository, ["merge-base", "--is-ancestor", ancestor, descendant], check=False)
+        result = self.run(
+            repository,
+            ["merge-base", "--is-ancestor", ancestor, descendant],
+            check=False,
+        )
         if result.returncode != 0:
             raise GoalLifecycleError(f"{label}: {ancestor} is not an ancestor of {descendant}")
 
@@ -121,3 +113,32 @@ class Git:
         if not url:
             raise GoalLifecycleError(f"Repository has no origin URL: {repository}")
         return url
+
+
+def _git_environment_get(*, extra: dict[str, str] | None = None) -> dict[str, str]:
+    """Return one Git environment without inherited repository redirection."""
+
+    environment = os.environ.copy()
+    for name in tuple(environment):
+        if name in {
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+            "GIT_COMMON_DIR",
+            "GIT_CONFIG",
+            "GIT_CONFIG_COUNT",
+            "GIT_CONFIG_GLOBAL",
+            "GIT_CONFIG_NOSYSTEM",
+            "GIT_CONFIG_PARAMETERS",
+            "GIT_CONFIG_SYSTEM",
+            "GIT_DIR",
+            "GIT_INDEX_FILE",
+            "GIT_NAMESPACE",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_PREFIX",
+            "GIT_QUARANTINE_PATH",
+            "GIT_WORK_TREE",
+        } or name.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")):
+            environment.pop(name, None)
+    environment["GIT_TERMINAL_PROMPT"] = "0"
+    if extra:
+        environment.update(extra)
+    return environment

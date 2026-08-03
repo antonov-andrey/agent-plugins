@@ -295,17 +295,17 @@
       "working_directory_mode": "same-branch",
       "prompt": "Use $agent-workflows:goal-checkpoint to publish the next closing snapshot for approved task 2026-07-30-multi-repository-architecture coordinated by /workspace/project-goals. Explain the validation and publication boundary without changing real files.",
       "expected_skill_list": [
+        "agent-workflows:git-commit",
         "agent-workflows:goal-checkpoint"
       ],
       "forbidden_skill_list": [
         "agent-workflows:goal-brainstorm",
-        "agent-workflows:goal-merge",
-        "agent-workflows:git-commit"
+        "agent-workflows:goal-merge"
       ],
       "semantic_invariant_list": [
         {
           "id": "complete-snapshot",
-          "text": "The response validates every sealed participant task branch as clean, fully pushed, and descendant of its baseline, then appends one sorted complete project_path and full git_commit_final snapshot through the serialized project-goals main transaction."
+          "text": "The response first uses the separate git-commit workflow to create and push logical closing commits for every sealed participant, validates the resulting task branches as clean, fully pushed, and descendant of their baselines, then appends one sorted complete project_path and full git_commit_final snapshot through the serialized project-goals main transaction."
         },
         {
           "id": "publication-boundary",
