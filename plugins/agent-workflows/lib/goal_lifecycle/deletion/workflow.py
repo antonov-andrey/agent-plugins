@@ -1,4 +1,4 @@
-"""Explicit resumable resources-to-artifacts goal deletion workflow."""
+"""Explicit resumable cleanup that retains the tracked goal registry."""
 
 from __future__ import annotations
 
@@ -12,8 +12,9 @@ from goal_lifecycle.deletion.journal import (
     deletion_bootstrap_exception_get,
     deletion_journal_validate,
 )
-from goal_lifecycle.deletion.preflight import GoalDeletionPreflight
 from goal_lifecycle.deletion.repository import GoalTaskRepositoryRetirer
+from goal_lifecycle.deletion.registry import GoalDeletionRegistry
+from goal_lifecycle.deletion.scope import GoalDeletionScopeResolver
 from goal_lifecycle.deletion.state import GoalDeletionPrivateStateRetirer
 from goal_lifecycle.error import GoalLifecycleError
 from goal_lifecycle.git import Git
@@ -23,7 +24,7 @@ from goal_lifecycle.task.model import TaskState
 
 
 class GoalDeletionWorkflow:
-    """Sequence one exact accepted task through its durable deletion phases."""
+    """Delete one task's resources and retain its tracked historical record."""
 
     def __init__(self, goals_repository: Path, *, git: Git | None = None) -> None:
         """Initialize the goal deletion workflow dependencies.
@@ -35,9 +36,10 @@ class GoalDeletionWorkflow:
 
         self._git = git or Git()
         self._coordination = CoordinationRepository(goals_repository, git=self._git)
-        self._preflight = GoalDeletionPreflight(self._coordination, git=self._git)
+        self._scope = GoalDeletionScopeResolver(self._coordination, git=self._git)
         self._external_cleanup = GoalExternalResourceCleanup(git=self._git)
         self._repository_retirer = GoalTaskRepositoryRetirer(self._coordination, git=self._git)
+        self._registry = GoalDeletionRegistry(self._coordination, git=self._git)
         self._bootstrap_retirer = CoordinationBootstrapRetirer(
             self._coordination,
             git=self._git,
@@ -45,43 +47,51 @@ class GoalDeletionWorkflow:
         )
         self._private_state_retirer = GoalDeletionPrivateStateRetirer(self._coordination, git=self._git)
 
-    def delete(self, *, common_prefix: str, unfinished_goal_absent: bool) -> dict[str, object]:
-        """Delete one accepted task only after explicit current-harness completion proof.
+    def delete(self, *, common_prefix: str) -> dict[str, object]:
+        """Delete every remaining resource for one explicitly selected task.
 
         Args:
             common_prefix: Exact task common prefix.
-            unfinished_goal_absent: Unfinished goal absent.
 
         Returns:
             Final deletion result payload.
         """
 
         common_prefix_validate(common_prefix)
-        if not unfinished_goal_absent:
-            raise GoalLifecycleError("Explicit current-harness proof of no unfinished bound goal is required")
         with self._coordination.task_lock(common_prefix):
             state_path = self._coordination.state_path_get(common_prefix)
             journal_path = self._coordination.journal_path_get(common_prefix, "delete")
             if journal_path.exists():
                 journal = json_object_load(journal_path, label="goal deletion journal")
                 state = TaskState.from_payload(journal.get("task_state"))
-                if (
-                    state_path.exists()
-                    and TaskState.from_payload(json_object_load(state_path, label="task private state")) != state
-                ):
-                    raise GoalLifecycleError("Goal deletion journal and private task state differ")
                 deletion_journal_validate(journal, state=state)
             else:
+                if not state_path.exists():
+                    document = self._registry.document_get(common_prefix)
+                    if document.task_resource_state == "deleted":
+                        bootstrap_exception = self._scope.bootstrap_exception_get(common_prefix)
+                        self._bootstrap_retirer.carriers_retire(bootstrap_exception)
+                        self._bootstrap_retirer.exception_retire(bootstrap_exception)
+                        self._private_state_retirer.merge_owner_retire(common_prefix)
+                        self._private_state_retirer.coordination_task_state_retire(common_prefix)
+                        return {
+                            "schema_version": 3,
+                            "common_prefix": common_prefix,
+                            "phase": "complete",
+                            "task_resource_state": "deleted",
+                        }
+                    raise GoalLifecycleError("Task cleanup scope is unavailable")
                 state = TaskState.from_payload(json_object_load(state_path, label="task private state"))
                 journal = {
-                    "schema_version": 2,
+                    "schema_version": 3,
                     "common_prefix": common_prefix,
                     "operation_identity": secrets.token_hex(16),
                     "phase": "external-resources",
-                    "coordination_bootstrap_exception": self._preflight.bootstrap_exception_payload_get(state),
-                    "project_list": self._preflight.project_list_get(state),
-                    "submodule_list": self._preflight.submodule_list_get(state),
+                    "coordination_bootstrap_exception": self._scope.bootstrap_exception_payload_get(state),
+                    "project_list": self._scope.project_list_get(state),
+                    "submodule_list": self._scope.submodule_list_get(state),
                     "repository_index": 0,
+                    "task_resource_state": "retained",
                     "task_state": state.payload_get(),
                 }
                 atomic_json_write(journal_path, journal)
@@ -106,7 +116,6 @@ class GoalDeletionWorkflow:
             self._repository_retirer.worktrees_retire(
                 bootstrap_exception=bootstrap_exception,
                 journal=journal,
-                state=state,
             )
             phase = _journal_phase_update(journal, journal_path=journal_path, phase="remote-refs")
         if phase == "remote-refs":
@@ -124,15 +133,7 @@ class GoalDeletionWorkflow:
                 journal_path=journal_path,
                 state=state,
             )
-            phase = _journal_phase_update(journal, journal_path=journal_path, phase="provider-excludes")
-        if phase == "provider-excludes":
-            self._repository_retirer.provider_excludes_retire(state)
-            phase = _journal_phase_update(
-                journal,
-                journal_path=journal_path,
-                phase="bootstrap-carriers",
-                repository_index=len(state.repository_list),
-            )
+            phase = _journal_phase_update(journal, journal_path=journal_path, phase="bootstrap-carriers")
         if phase == "bootstrap-carriers":
             self._bootstrap_retirer.carriers_retire(bootstrap_exception)
             phase = _journal_phase_update(
@@ -142,19 +143,15 @@ class GoalDeletionWorkflow:
             )
         if phase == "coordination-bootstrap-retire":
             self._bootstrap_retirer.exception_retire(bootstrap_exception)
-            phase = _journal_phase_update(journal, journal_path=journal_path, phase="coordination-delete")
-        if phase == "coordination-delete":
-            self._coordination.publish(
-                common_prefix=state.common_prefix,
-                message=f"Delete completed task {state.common_prefix}",
-                relative_payload_by_path_map={
-                    f"{state.common_prefix}/checkpoint.yaml": None,
-                    f"{state.common_prefix}/goal.md": None,
-                    f"{state.common_prefix}/spec.md": None,
-                },
-                task_lock_already_held=True,
+            phase = _journal_phase_update(journal, journal_path=journal_path, phase="registry-update")
+        if phase == "registry-update":
+            self._registry.deleted_mark(state.common_prefix)
+            journal["task_resource_state"] = "deleted"
+            phase = _journal_phase_update(
+                journal,
+                journal_path=journal_path,
+                phase="complete",
             )
-            phase = _journal_phase_update(journal, journal_path=journal_path, phase="complete")
         if phase == "complete":
             self._private_state_retirer.retire(state, journal=journal, journal_path=journal_path)
 

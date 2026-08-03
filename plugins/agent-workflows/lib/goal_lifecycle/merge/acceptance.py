@@ -43,6 +43,7 @@ class AcceptedCheckpointPublisher:
         updated = CheckpointDocument(
             accepted_checkpoint_id=checkpoint.checkpoint_id,
             checkpoint_list=document.checkpoint_list,
+            task_resource_state=document.task_resource_state,
         )
         return self._coordination.publish(
             common_prefix=common_prefix,

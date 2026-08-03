@@ -25,7 +25,6 @@ from goal_lifecycle.checkpoint.model import CheckpointDocument
 from goal_lifecycle.checkpoint.publisher import GoalCheckpointPublisher
 from goal_lifecycle.bootstrap_exception import (
     coordination_bootstrap_exception_path_get,
-    coordination_bootstrap_exception_write,
 )
 from goal_lifecycle.cleanup_manifest import (
     bootstrap_manifest_load,
@@ -34,6 +33,7 @@ from goal_lifecycle.cleanup_manifest import (
 )
 from goal_lifecycle.coordination import CoordinationRepository
 from goal_lifecycle.deletion.workflow import GoalDeletionWorkflow
+from goal_lifecycle.deletion.state import GoalDeletionPrivateStateRetirer
 from goal_lifecycle.error import GoalLifecycleError
 from goal_lifecycle.git import Git
 from goal_lifecycle.merge.workflow import GoalMergeWorkflow
@@ -250,7 +250,13 @@ resource:
         encoding="utf-8",
     )
     (task_submodule / "task-change.txt").write_text("delegated task\n", encoding="utf-8")
-    _git(task_submodule, "add", ".gitignore", "worktree-bootstrap.yaml", "task-change.txt")
+    _git(
+        task_submodule,
+        "add",
+        ".gitignore",
+        "worktree-bootstrap.yaml",
+        "task-change.txt",
+    )
     _git(task_submodule, "commit", "-m", "Complete delegated task")
     if push_submodule_branch:
         _git(task_submodule, "push", "-u", "origin", PREFIX)
@@ -549,7 +555,7 @@ def test_checkpoint_merge_and_delete_publish_task_owned_submodule_before_its_par
     assert _git(project, "rev-parse", "origin/main") == parent_commit
     merge.accept(common_prefix=PREFIX, checkpoint_id=checkpoint_id)
 
-    GoalDeletionWorkflow(goals).delete(common_prefix=PREFIX, unfinished_goal_absent=True)
+    GoalDeletionWorkflow(goals).delete(common_prefix=PREFIX)
     assert not task_root.exists()
     _git(provider, "fetch", "--prune", "origin")
     assert _git_returncode(provider, "show-ref", "--verify", f"refs/remotes/origin/{PREFIX}") != 0
@@ -656,7 +662,14 @@ def test_validation_recovers_provider_omitted_submodule_inventory_from_pushed_co
         sealed_specification_sha256=state.sealed_spec_sha256,
     )
     replica_path = (
-        Path(_git(task_submodule, "rev-parse", "--path-format=absolute", "--git-common-dir"))
+        Path(
+            _git(
+                task_submodule,
+                "rev-parse",
+                "--path-format=absolute",
+                "--git-common-dir",
+            )
+        )
         / "agent-workflows"
         / "task"
         / PREFIX
@@ -816,8 +829,9 @@ def test_seal_rejects_prepopulated_checkpoint_before_goal_publication(
         relative_payload_by_path_map={
             f"{PREFIX}/checkpoint.yaml": yaml_document_bytes_get(
                 {
-                    "schema_version": 1,
+                    "schema_version": 2,
                     "accepted_checkpoint_id": "",
+                    "task_resource_state": "retained",
                     "checkpoint_list": [
                         {
                             "checkpoint_id": "checkpoint-0001",
@@ -1101,23 +1115,53 @@ def test_complete_prepare_checkpoint_merge_accept_and_delete_lifecycle(
         / PREFIX
     )
     assert (coordination_private_task_directory / "replica-index.json").is_file()
-
-    result = GoalDeletionWorkflow(goals).delete(
-        common_prefix=PREFIX,
-        unfinished_goal_absent=True,
+    merge_owner_path = CoordinationRepository(goals).merge_owner_path_get()
+    merge_owner_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "common_prefix": PREFIX,
+                "checkpoint_id": checkpoint_id,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
     )
+
+    result = GoalDeletionWorkflow(goals).delete(common_prefix=PREFIX)
     assert result["phase"] == "complete"
     assert not task_root.exists()
     assert _git_returncode(project, "show-ref", "--verify", f"refs/heads/{PREFIX}") != 0
-    assert not (goals / PREFIX).exists()
+    document = CheckpointDocument.from_payload(yaml_document_load(goals / PREFIX / "checkpoint.yaml"))
+    assert document.task_resource_state == "deleted"
+    assert (goals / PREFIX / "goal.md").is_file()
+    assert (goals / PREFIX / "spec.md").is_file()
     assert not coordination_private_task_directory.exists()
     assert not project_private_task_directory.exists()
+    assert not merge_owner_path.exists()
+    repeated = GoalDeletionWorkflow(goals).delete(common_prefix=PREFIX)
+    assert repeated["phase"] == "complete"
+    assert repeated["task_resource_state"] == "deleted"
+    merge_owner_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "common_prefix": PREFIX,
+                "checkpoint_id": checkpoint_id,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    repeated = GoalDeletionWorkflow(goals).delete(common_prefix=PREFIX)
+    assert repeated["phase"] == "complete"
+    assert not merge_owner_path.exists()
 
 
-def test_goal_delete_rejects_a_cleanup_manifest_changed_in_main_after_acceptance(
+def test_goal_delete_uses_the_current_cleanup_owner_after_manifest_evolution(
     tmp_path: Path,
 ) -> None:
-    """Deletion stops when clean synchronized main no longer carries the sealed hook.
+    """Deletion uses current clean owner code without coupling to an old manifest hash.
 
     Args:
         tmp_path: Temporary directory path.
@@ -1185,13 +1229,114 @@ cleanup:
     _git(project, "commit", "-m", "Evolve cleanup manifest after acceptance")
     _git(project, "push", "origin", "main")
 
-    with pytest.raises(GoalLifecycleError, match="Main cleanup manifest differs from sealed binding"):
-        GoalDeletionWorkflow(goals).delete(
-            common_prefix=PREFIX,
-            unfinished_goal_absent=True,
-        )
+    result = GoalDeletionWorkflow(goals).delete(common_prefix=PREFIX)
 
-    assert task_root.exists()
+    assert result["phase"] == "complete"
+    assert not task_root.exists()
+    document = CheckpointDocument.from_payload(yaml_document_load(goals / PREFIX / "checkpoint.yaml"))
+    assert document.task_resource_state == "deleted"
+
+
+def test_goal_delete_preserves_dirty_coordination_main_and_updates_remote_registry(
+    tmp_path: Path,
+) -> None:
+    """Unrelated canonical registry edits do not block or enter goal cleanup.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
+
+    goals, task_root_list = _accepted_task_create(tmp_path)
+    readme_path = goals / "README.md"
+    dirty_text = readme_path.read_text(encoding="utf-8") + "unrelated local edit\n"
+    readme_path.write_text(dirty_text, encoding="utf-8")
+
+    result = GoalDeletionWorkflow(goals).delete(common_prefix=PREFIX)
+
+    assert result["phase"] == "complete"
+    assert all(not task_root.exists() for task_root in task_root_list)
+    assert readme_path.read_text(encoding="utf-8") == dirty_text
+    remote = Path(_git(goals, "remote", "get-url", "origin"))
+    remote_document = CheckpointDocument.from_payload(
+        yaml.safe_load(_git(remote, "show", f"main:{PREFIX}/checkpoint.yaml"))
+    )
+    assert remote_document.task_resource_state == "deleted"
+    repeated = GoalDeletionWorkflow(goals).delete(common_prefix=PREFIX)
+    assert repeated["phase"] == "complete"
+    assert readme_path.read_text(encoding="utf-8") == dirty_text
+
+
+def test_goal_delete_keeps_its_durable_journal_until_other_private_replicas_are_retired(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A crash during private-state cleanup remains fully resumable.
+
+    Args:
+        tmp_path: Temporary directory path.
+        monkeypatch: Pytest monkeypatch fixture.
+    """
+
+    goals, task_root_list, _workflow = _active_task_create(
+        tmp_path,
+        project_name_list=("product-one", "product-two"),
+    )
+    for task_root in task_root_list:
+        _task_commit_push(task_root)
+    checkpoint_id, _ = GoalCheckpointPublisher(goals).publish(
+        common_prefix=PREFIX,
+        project_root_list=task_root_list,
+    )
+    merge = GoalMergeWorkflow(goals)
+    merge.merge(common_prefix=PREFIX, checkpoint_id=checkpoint_id)
+    merge.accept(common_prefix=PREFIX, checkpoint_id=checkpoint_id)
+    coordination_private_directory = CoordinationRepository(goals).state_path_get(PREFIX).parent
+    project_private_directory_list = [
+        Path(_git(tmp_path / name, "rev-parse", "--path-format=absolute", "--git-common-dir"))
+        / "agent-workflows"
+        / "task"
+        / PREFIX
+        for name in ("product-one", "product-two")
+    ]
+    original_retire = GoalDeletionPrivateStateRetirer._task_directory_retire
+    did_crash = False
+
+    def crash_after_first_project_replica(path: Path) -> None:
+        nonlocal did_crash
+        original_retire(path)
+        if path != coordination_private_directory and not did_crash:
+            did_crash = True
+            raise RuntimeError("simulated private-state cleanup crash")
+
+    monkeypatch.setattr(
+        GoalDeletionPrivateStateRetirer,
+        "_task_directory_retire",
+        staticmethod(crash_after_first_project_replica),
+    )
+    with pytest.raises(RuntimeError, match="simulated private-state cleanup crash"):
+        GoalDeletionWorkflow(goals).delete(common_prefix=PREFIX)
+    assert coordination_private_directory.exists()
+
+    monkeypatch.setattr(
+        GoalDeletionPrivateStateRetirer,
+        "_task_directory_retire",
+        staticmethod(original_retire),
+    )
+    result = GoalDeletionWorkflow(goals).delete(common_prefix=PREFIX)
+
+    assert result["phase"] == "complete"
+    assert not coordination_private_directory.exists()
+    assert all(not path.exists() for path in project_private_directory_list)
+    coordination_private_directory.mkdir(parents=True)
+    (coordination_private_directory / "partial-cleanup.tmp").write_text(
+        "residual\n",
+        encoding="utf-8",
+    )
+
+    repeated = GoalDeletionWorkflow(goals).delete(common_prefix=PREFIX)
+
+    assert repeated["phase"] == "complete"
+    assert not coordination_private_directory.exists()
 
 
 def _accepted_task_create(tmp_path: Path) -> tuple[Path, list[Path]]:
@@ -1634,10 +1779,9 @@ def test_merge_acceptance_resumes_after_durable_accepted_phase(
         "worktrees",
         "remote-refs",
         "local-refs",
-        "provider-excludes",
         "bootstrap-carriers",
         "coordination-bootstrap-retire",
-        "coordination-delete",
+        "registry-update",
         "complete",
     ],
 )
@@ -1675,11 +1819,12 @@ def test_goal_delete_resumes_after_every_durable_phase(
     monkeypatch.setattr(delete_module, "atomic_json_write", crash_after_phase)
     deletion = GoalDeletionWorkflow(goals)
     with pytest.raises(RuntimeError, match="simulated crash"):
-        deletion.delete(common_prefix=PREFIX, unfinished_goal_absent=True)
-    result = deletion.delete(common_prefix=PREFIX, unfinished_goal_absent=True)
+        deletion.delete(common_prefix=PREFIX)
+    result = deletion.delete(common_prefix=PREFIX)
     assert result["phase"] == "complete"
     assert not task_root_list[0].exists()
-    assert not (goals / PREFIX).exists()
+    document = CheckpointDocument.from_payload(yaml_document_load(goals / PREFIX / "checkpoint.yaml"))
+    assert document.task_resource_state == "deleted"
 
 
 def test_goal_delete_retires_project_external_cleanup_journal_only_in_final_state_phase(
@@ -1723,31 +1868,39 @@ def test_goal_delete_retires_project_external_cleanup_journal_only_in_final_stat
     monkeypatch.setattr(delete_module, "atomic_json_write", crash_before_worktrees)
     deletion = GoalDeletionWorkflow(goals)
     with pytest.raises(RuntimeError, match="before Git retirement"):
-        deletion.delete(common_prefix=PREFIX, unfinished_goal_absent=True)
+        deletion.delete(common_prefix=PREFIX)
     assert external_journal.exists()
 
-    deletion.delete(common_prefix=PREFIX, unfinished_goal_absent=True)
+    deletion.delete(common_prefix=PREFIX)
     assert not external_journal.exists()
 
 
-def test_goal_delete_rejects_absence_before_durable_journal(tmp_path: Path) -> None:
-    """Verify that goal delete rejects absence before durable journal.
+def test_goal_delete_accepts_worktree_and_refs_removed_before_its_journal(
+    tmp_path: Path,
+) -> None:
+    """Already removed in-scope Git resources are completed cleanup steps.
 
     Args:
         tmp_path: Temporary directory path.
     """
 
     goals, task_root_list = _accepted_task_create(tmp_path)
-    _git(tmp_path / "product-one", "worktree", "remove", str(task_root_list[0]))
-    with pytest.raises(GoalLifecycleError, match="absent before deletion was journaled"):
-        GoalDeletionWorkflow(goals).delete(common_prefix=PREFIX, unfinished_goal_absent=True)
+    main_root = tmp_path / "product-one"
+    _git(main_root, "worktree", "remove", str(task_root_list[0]))
+    _git(main_root, "push", "origin", f":refs/heads/{PREFIX}")
+    _git(main_root, "branch", "-D", PREFIX)
+    result = GoalDeletionWorkflow(goals).delete(common_prefix=PREFIX)
+
+    assert result["phase"] == "complete"
+    document = CheckpointDocument.from_payload(yaml_document_load(goals / PREFIX / "checkpoint.yaml"))
+    assert document.task_resource_state == "deleted"
 
 
-def test_goal_delete_resume_rechecks_clean_synchronized_main(
+def test_goal_delete_runs_cleanup_from_remote_main_without_touching_dirty_canonical_main(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A durable journal never bypasses the main checkout execution boundary.
+    """Unrelated canonical-main edits do not block or enter cleanup execution.
 
     Args:
         tmp_path: Temporary directory path.
@@ -1776,18 +1929,20 @@ def test_goal_delete_resume_rechecks_clean_synchronized_main(
     monkeypatch.setattr(delete_module, "atomic_json_write", crash_after_journal)
     deletion = GoalDeletionWorkflow(goals)
     with pytest.raises(RuntimeError, match="simulated crash"):
-        deletion.delete(common_prefix=PREFIX, unfinished_goal_absent=True)
+        deletion.delete(common_prefix=PREFIX)
 
     (main_root / "uncommitted.txt").write_text("do not execute cleanup here\n", encoding="utf-8")
-    with pytest.raises(GoalLifecycleError, match="must be clean"):
-        deletion.delete(common_prefix=PREFIX, unfinished_goal_absent=True)
+    result = deletion.delete(common_prefix=PREFIX)
+
+    assert result["phase"] == "complete"
+    assert (main_root / "uncommitted.txt").read_text(encoding="utf-8") == "do not execute cleanup here\n"
 
 
-def test_goal_delete_resume_rechecks_task_commit_before_worktree_removal(
+def test_goal_delete_removes_late_task_state_inside_the_explicit_scope(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A post-journal task commit must stop deletion before its worktree is removed.
+    """Explicit deletion owns later task-local state inside the exact task scope.
 
     Args:
         tmp_path: Temporary directory path.
@@ -1816,22 +1971,22 @@ def test_goal_delete_resume_rechecks_task_commit_before_worktree_removal(
     monkeypatch.setattr(delete_module, "atomic_json_write", crash_at_worktree_phase)
     deletion = GoalDeletionWorkflow(goals)
     with pytest.raises(RuntimeError, match="simulated crash"):
-        deletion.delete(common_prefix=PREFIX, unfinished_goal_absent=True)
+        deletion.delete(common_prefix=PREFIX)
 
     (task_root / "late-user-work.txt").write_text("preserve this commit\n", encoding="utf-8")
     _git(task_root, "add", "late-user-work.txt")
     _git(task_root, "commit", "-m", "Late user work")
-    with pytest.raises(GoalLifecycleError, match="Local task ref changed"):
-        deletion.delete(common_prefix=PREFIX, unfinished_goal_absent=True)
+    result = deletion.delete(common_prefix=PREFIX)
 
-    assert task_root.exists()
+    assert result["phase"] == "complete"
+    assert not task_root.exists()
 
 
-def test_goal_delete_remote_ref_removal_is_compare_and_swap(
+def test_goal_delete_removes_a_concurrently_advanced_exact_task_ref(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A concurrent remote task update must survive the destructive push boundary.
+    """Explicit task deletion includes a concurrent update to the exact task ref.
 
     Args:
         tmp_path: Temporary directory path.
@@ -1857,8 +2012,6 @@ def test_goal_delete_remote_ref_removal_is_compare_and_swap(
     (competitor_root / "concurrent.txt").write_text("preserve concurrent remote work\n", encoding="utf-8")
     _git(competitor_root, "add", "concurrent.txt")
     _git(competitor_root, "commit", "-m", "Concurrent task work")
-    concurrent_commit = _git(competitor_root, "rev-parse", "HEAD")
-
     deletion = GoalDeletionWorkflow(goals)
     real_run = deletion._git.run
     remote_advanced = False
@@ -1880,23 +2033,18 @@ def test_goal_delete_remote_ref_removal_is_compare_and_swap(
         """
 
         nonlocal remote_advanced
-        if (
-            not remote_advanced
-            and argument_list[:1] == ["push"]
-            and any(argument.startswith(f"--force-with-lease=refs/heads/{PREFIX}:") for argument in argument_list)
-        ):
+        if not remote_advanced and argument_list[:1] == ["push"] and f":refs/heads/{PREFIX}" in argument_list:
             _git(competitor_root, "push", "origin", PREFIX)
             remote_advanced = True
         return real_run(repository, argument_list, **keyword_by_name_map)
 
     monkeypatch.setattr(deletion._git, "run", advance_remote_before_delete)
 
-    with pytest.raises(GoalLifecycleError, match="stale info"):
-        deletion.delete(common_prefix=PREFIX, unfinished_goal_absent=True)
+    result = deletion.delete(common_prefix=PREFIX)
 
-    _git(main_root, "fetch", "origin")
     assert remote_advanced
-    assert _git(main_root, "rev-parse", f"origin/{PREFIX}") == concurrent_commit
+    assert result["phase"] == "complete"
+    assert _git_returncode(main_root, "ls-remote", "--exit-code", "--heads", "origin", PREFIX) == 2
     assert (goals / PREFIX).is_dir()
 
 
@@ -2310,8 +2458,9 @@ def test_checkpoint_document_rejects_noncanonical_or_self_referential_project_pa
     with pytest.raises(GoalLifecycleError):
         CheckpointDocument.from_payload(
             {
-                "schema_version": 1,
+                "schema_version": 2,
                 "accepted_checkpoint_id": "",
+                "task_resource_state": "retained",
                 "checkpoint_list": [
                     {
                         "checkpoint_id": "checkpoint-0001",
@@ -2333,8 +2482,9 @@ def test_checkpoint_document_rejects_a_changed_participant_set() -> None:
     with pytest.raises(GoalLifecycleError, match="same complete participant set"):
         CheckpointDocument.from_payload(
             {
-                "schema_version": 1,
+                "schema_version": 2,
                 "accepted_checkpoint_id": "",
+                "task_resource_state": "retained",
                 "checkpoint_list": [
                     {
                         "checkpoint_id": "checkpoint-0001",
@@ -2688,8 +2838,8 @@ def test_self_hosting_bootstrap_exception_is_removed_with_carriers_only_by_goal_
     exclude_path.write_text(exclude_path.read_text(encoding="utf-8") + "\n/.worktree/\n", encoding="utf-8")
     _git(goals, "worktree", "add", "-b", PREFIX, str(bootstrap_task_root), "main")
 
-    carrier_root = tmp_path / "bootstrap-carrier"
-    carrier_root.mkdir()
+    carrier_root = tmp_path / "legacy-owner" / ".spec"
+    carrier_root.mkdir(parents=True)
     specification_carrier = carrier_root / f"{PREFIX}-spec.md"
     goal_carrier = carrier_root / f"{PREFIX}-goal.md"
     specification_carrier.write_text("# Bootstrap spec\n", encoding="utf-8")
@@ -2701,7 +2851,7 @@ def test_self_hosting_bootstrap_exception_is_removed_with_carriers_only_by_goal_
     (task_directory / "spec.md").write_bytes(specification_carrier.read_bytes())
     (task_directory / "goal.md").write_bytes(goal_carrier.read_bytes())
     (task_directory / "checkpoint.yaml").write_text(
-        "schema_version: 1\naccepted_checkpoint_id: ''\ncheckpoint_list: []\n",
+        "schema_version: 2\naccepted_checkpoint_id: ''\ntask_resource_state: retained\ncheckpoint_list: []\n",
         encoding="utf-8",
     )
     _git(bootstrap_task_root, "add", "AGENTS.md", "DESIGN.md", PREFIX)
@@ -2710,12 +2860,21 @@ def test_self_hosting_bootstrap_exception_is_removed_with_carriers_only_by_goal_
     bootstrap_commit = _git(bootstrap_task_root, "rev-parse", "HEAD")
     _git(goals, "push", "origin", f"{bootstrap_commit}:refs/heads/main")
     _git(goals, "merge", "--ff-only", bootstrap_commit)
-    coordination_bootstrap_exception_write(
-        goals,
-        common_prefix=PREFIX,
-        goal_carrier_path=goal_carrier,
-        specification_carrier_path=specification_carrier,
-        task_root=bootstrap_task_root,
+    bootstrap_marker_path = coordination_bootstrap_exception_path_get(goals)
+    bootstrap_marker_path.parent.mkdir(parents=True, exist_ok=True)
+    bootstrap_marker_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "common_prefix": PREFIX,
+                "goal_carrier_path": str(goal_carrier),
+                "specification_carrier_path": str(specification_carrier),
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
     )
 
     workflow = GoalWorktreeWorkflow(goals)
@@ -2733,7 +2892,11 @@ def test_self_hosting_bootstrap_exception_is_removed_with_carriers_only_by_goal_
     merge.merge(common_prefix=PREFIX, checkpoint_id=checkpoint_id)
     merge.accept(common_prefix=PREFIX, checkpoint_id=checkpoint_id)
 
-    result = GoalDeletionWorkflow(goals).delete(common_prefix=PREFIX, unfinished_goal_absent=True)
+    _git(goals, "worktree", "remove", "--force", "--force", str(bootstrap_task_root))
+    _git(goals, "push", "origin", f":refs/heads/{PREFIX}")
+    _git(goals, "branch", "-D", PREFIX)
+
+    result = GoalDeletionWorkflow(goals).delete(common_prefix=PREFIX)
 
     assert result["phase"] == "complete"
     assert not specification_carrier.exists()
@@ -2741,6 +2904,7 @@ def test_self_hosting_bootstrap_exception_is_removed_with_carriers_only_by_goal_
     assert not bootstrap_task_root.exists()
     assert not worktree_container.exists()
     assert not coordination_bootstrap_exception_path_get(goals).exists()
-    assert not (goals / PREFIX).exists()
+    document = CheckpointDocument.from_payload(yaml_document_load(goals / PREFIX / "checkpoint.yaml"))
+    assert document.task_resource_state == "deleted"
     assert _git_returncode(goals, "show-ref", "--verify", f"refs/heads/{PREFIX}") != 0
     assert "/.worktree/" not in exclude_path.read_text(encoding="utf-8").splitlines()

@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
-import hashlib
 from pathlib import Path
+import shutil
 
 from goal_lifecycle.bootstrap_exception import (
     CoordinationBootstrapException,
     coordination_bootstrap_exception_path_get,
 )
 from goal_lifecycle.coordination import CoordinationRepository
-from goal_lifecycle.error import GoalLifecycleError
 from goal_lifecycle.git import Git
 from goal_lifecycle.io import directory_sync, json_object_load
 from goal_lifecycle.deletion.repository import GoalTaskRepositoryRetirer
@@ -39,7 +38,7 @@ class CoordinationBootstrapRetirer:
         self._repository_retirer = repository_retirer
 
     def carriers_retire(self, exception: CoordinationBootstrapException | None) -> None:
-        """Delete only exact content-bound legacy carrier files.
+        """Delete exact legacy carrier paths and accept prior absence.
 
         Args:
             exception: Exception.
@@ -47,20 +46,19 @@ class CoordinationBootstrapRetirer:
 
         if exception is None:
             return
-        for path, expected_sha256 in (
+        for path, expected_name in (
             (
                 Path(exception.specification_carrier_path),
-                exception.sealed_specification_sha256,
+                f"{exception.common_prefix}-spec.md",
             ),
-            (Path(exception.goal_carrier_path), exception.sealed_goal_sha256),
+            (Path(exception.goal_carrier_path), f"{exception.common_prefix}-goal.md"),
         ):
-            if not path.exists():
+            if path.name != expected_name:
                 continue
-            if path.is_symlink() or not path.is_file() or path.stat().st_nlink != 1:
-                raise GoalLifecycleError(f"Bootstrap carrier identity changed: {path}")
-            if hashlib.sha256(path.read_bytes()).hexdigest() != expected_sha256:
-                raise GoalLifecycleError(f"Bootstrap carrier content changed: {path}")
-            path.unlink()
+            if path.is_dir() and not path.is_symlink():
+                shutil.rmtree(path)
+            else:
+                path.unlink(missing_ok=True)
             directory_sync(path.parent)
 
     def exception_retire(self, exception: CoordinationBootstrapException | None) -> None:
@@ -77,15 +75,15 @@ class CoordinationBootstrapRetirer:
             current = CoordinationBootstrapException.from_payload(
                 json_object_load(marker_path, label="coordination bootstrap exception")
             )
-            if current != exception:
-                raise GoalLifecycleError("Coordination bootstrap exception changed during deletion")
-            marker_path.unlink()
-            directory_sync(marker_path.parent)
+            if current.common_prefix == exception.common_prefix:
+                marker_path.unlink()
+                directory_sync(marker_path.parent)
         worktree_container = self._coordination.root / ".worktree"
         if worktree_container.exists():
             try:
                 worktree_container.rmdir()
-            except OSError as error:
-                raise GoalLifecycleError("Coordination worktree container is not empty") from error
-            directory_sync(worktree_container.parent)
-        self._repository_retirer.worktree_exclude_retire(self._coordination.root)
+            except OSError:
+                pass
+            else:
+                directory_sync(worktree_container.parent)
+        self._repository_retirer.worktree_exclude_retire(self._git.common_directory_get(self._coordination.root))

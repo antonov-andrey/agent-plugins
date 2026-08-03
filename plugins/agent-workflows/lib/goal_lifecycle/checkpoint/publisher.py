@@ -68,6 +68,8 @@ class GoalCheckpointPublisher:
             self._coordination.task_directory_shape_require(common_prefix, complete=True)
             checkpoint_path = self._coordination.task_directory_get(common_prefix) / "checkpoint.yaml"
             document = CheckpointDocument.from_payload(yaml_document_load(checkpoint_path))
+            if document.task_resource_state == "deleted":
+                raise GoalLifecycleError("Task resources are deleted")
             previous_by_path_map = (
                 {item.project_path: item.git_commit_final for item in document.checkpoint_list[-1].project_list}
                 if document.checkpoint_list
@@ -152,6 +154,7 @@ class GoalCheckpointPublisher:
                     *document.checkpoint_list,
                     Checkpoint(checkpoint_id=checkpoint_id, project_list=tuple(snapshot_list)),
                 ),
+                task_resource_state=document.task_resource_state,
             )
             relative_path = f"{common_prefix}/checkpoint.yaml"
             commit = self._coordination.publish(

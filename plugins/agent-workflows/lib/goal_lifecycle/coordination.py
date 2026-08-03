@@ -125,7 +125,7 @@ class CoordinationRepository:
             raise GoalLifecycleError("project-goals canonical checkout must have main checked out")
         worktree_payload = self._git.run(self.root, ["worktree", "list", "--porcelain", "-z"]).stdout
         worktree_root_set = {
-            Path(item.removeprefix(b"worktree ").decode("utf-8")).resolve(strict=True)
+            Path(item.removeprefix(b"worktree ").decode("utf-8")).resolve(strict=False)
             for item in worktree_payload.split(b"\0")
             if item.startswith(b"worktree ")
         }

@@ -355,11 +355,11 @@
       "semantic_invariant_list": [
         {
           "id": "ordered-cleanup",
-          "text": "The response requires explicit deletion authority, current-harness proof that no bound goal is unfinished, and latest accepted checkpoint proof, then resumes exact external resources, worktrees, remote refs, local refs, and task-directory deletion in that order."
+          "text": "The response requires explicit deletion authority for one exact common prefix, treats missing in-scope resources as completed cleanup steps, and resumes external resources, worktrees, remote refs, local refs, retained registry-state update, and private state in that order without pristine, merged, or accepted-checkpoint preservation gates."
         },
         {
           "id": "history-retained",
-          "text": "The response deletes the current central task directory only at the end while preserving its prior Git history and does not infer cleanup from completion or abandonment."
+          "text": "The response retains the central task directory as the permanent goal registry, marks its task resources deleted, and does not infer cleanup from completion or abandonment."
         }
       ]
     },

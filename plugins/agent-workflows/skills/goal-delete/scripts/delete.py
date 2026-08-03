@@ -26,16 +26,12 @@ def main(argv: list[str] | None = None) -> int:
         Zero on success or 2 when the lifecycle contract rejects the request.
     """
 
-    parser = argparse.ArgumentParser(description="Delete one exact accepted goal lifecycle.")
+    parser = argparse.ArgumentParser(description="Delete task-owned resources and retain the goal registry.")
     parser.add_argument("--goals-repository", required=True, type=Path)
     parser.add_argument("--common-prefix", required=True)
-    parser.add_argument("--unfinished-goal-absent", action="store_true")
     args = parser.parse_args(argv)
     try:
-        result = GoalDeletionWorkflow(args.goals_repository).delete(
-            common_prefix=args.common_prefix,
-            unfinished_goal_absent=args.unfinished_goal_absent,
-        )
+        result = GoalDeletionWorkflow(args.goals_repository).delete(common_prefix=args.common_prefix)
     except GoalLifecycleError as error:
         print(str(error), file=sys.stderr)
         return 2

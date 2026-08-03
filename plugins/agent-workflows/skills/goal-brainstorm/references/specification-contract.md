@@ -21,11 +21,11 @@
 - `docs/**` owns user, operational, and other maintained documentation that is not a stable design contract.
 - `project-goals/<common-prefix>/spec.md` owns one temporary task-specific implementation contract.
 - `project-goals/<common-prefix>/goal.md` owns one concise executable objective and exact references to its paired specification and approved stable source contracts.
-- `project-goals/<common-prefix>/checkpoint.yaml` owns published cross-repository closing-commit snapshots and accepted-checkpoint identity; `agent-workflows:goal-checkpoint` owns its mutation contract.
+- `project-goals/<common-prefix>/checkpoint.yaml` owns published cross-repository closing-commit snapshots, accepted-checkpoint identity, and retained/deleted task-resource state; its lifecycle skills own their respective mutations.
 - `plugins/agent-workflows/skills/goal-brainstorm/references/worktree-contract.md` owns reusable task-worktree preparation, bootstrap, isolation, revision, sealing, and activation semantics.
-- `agent-workflows:goal-merge` owns checkpoint merge and primary-environment acceptance; `agent-workflows:goal-delete` owns explicitly authorized synchronized deletion.
+- `agent-workflows:goal-merge` owns checkpoint merge and primary-environment acceptance; `agent-workflows:goal-delete` owns explicitly authorized idempotent cleanup and retained registry-state transition.
 
-A goal is not a second design or specification owner. A specification must not copy durable instructions or architecture already owned elsewhere. Task artifacts are tracked coordination state, not project documentation or Product source. Their Git history is retained, and current task-directory deletion requires an explicit user request through `agent-workflows:goal-delete`.
+A goal is not a second design or specification owner. A specification must not copy durable instructions or architecture already owned elsewhere. Task artifacts are tracked coordination state, not project documentation or Product source. Their directory is a permanent registry record; `agent-workflows:goal-delete` removes task-owned runtime resources and records that deletion without removing the directory.
 
 ## Document Selection
 
@@ -141,7 +141,7 @@ This cycle uses current task contracts and system state directly. It must not re
 8. Activate only after separate explicit user approval and a fresh sealed validation. Active `spec.md`, `goal.md`, task identity, and participant set are immutable.
 9. Before presumed completion, move every durable resulting rule into its stable owner and confirm the task artifacts are not the only owner of a current durable contract.
 10. Run `Terminal Completion Audit` to its zero-finding fixed point.
-11. Completion, abandonment, checkpointing, or merge never deletes the task directory. Deletion belongs only to an explicitly invoked `agent-workflows:goal-delete` operation and remains visible in prior Git history.
+11. Completion, abandonment, checkpointing, merge, and `goal-delete` never remove the task directory. Explicit `goal-delete` removes task-owned resources and records the deleted resource state in its retained checkpoint document.
 
 ## Semantic Review
 

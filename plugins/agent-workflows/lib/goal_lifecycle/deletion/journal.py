@@ -14,10 +14,9 @@ DELETION_PHASE_SET = frozenset(
         "worktrees",
         "remote-refs",
         "local-refs",
-        "provider-excludes",
         "bootstrap-carriers",
         "coordination-bootstrap-retire",
-        "coordination-delete",
+        "registry-update",
         "complete",
     }
 )
@@ -42,10 +41,12 @@ def deletion_journal_validate(journal: dict[str, object], *, state: TaskState) -
             "project_list",
             "repository_index",
             "submodule_list",
+            "task_resource_state",
             "task_state",
         }
-        or journal.get("schema_version") != 2
+        or journal.get("schema_version") != 3
         or journal.get("common_prefix") != state.common_prefix
+        or journal.get("task_resource_state") not in {"deleted", "retained"}
     ):
         raise GoalLifecycleError("Goal deletion journal has another shape or task identity")
     if journal.get("phase") not in DELETION_PHASE_SET:
@@ -70,7 +71,15 @@ def deletion_journal_validate(journal: dict[str, object], *, state: TaskState) -
         not isinstance(project_list, list)
         or len(project_list) != len(state.repository_list)
         or any(
-            not isinstance(item, dict) or set(item) != {"git_commit_final", "main_root", "project_path", "task_root"}
+            not isinstance(item, dict)
+            or set(item)
+            != {
+                "main_common_directory",
+                "main_root",
+                "origin_url",
+                "project_path",
+                "task_root",
+            }
             for item in project_list
         )
         or {str(item["main_root"]) for item in project_list} != expected_main_root_set
@@ -88,7 +97,6 @@ def deletion_journal_validate(journal: dict[str, object], *, state: TaskState) -
             not isinstance(item, dict)
             or set(item)
             != {
-                "git_commit_final",
                 "main_common_directory",
                 "main_root",
                 "origin_url",
