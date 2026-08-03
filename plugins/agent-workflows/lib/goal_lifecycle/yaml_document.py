@@ -25,7 +25,7 @@ _STANDARD_TAG_SET = {
 }
 
 
-class _UniqueKeySafeLoader(yaml.SafeLoader):
+class UniqueKeySafeLoader(yaml.SafeLoader):
     """Isolated YAML 1.2 Core loader that rejects duplicate and merge keys."""
 
     # PyYAML still ships YAML 1.1 implicit resolvers.  Copy the registry before
@@ -34,22 +34,22 @@ class _UniqueKeySafeLoader(yaml.SafeLoader):
     yaml_implicit_resolvers: dict[object, list[tuple[str, re.Pattern[str]]]] = {}
 
 
-_UniqueKeySafeLoader.add_implicit_resolver(
+UniqueKeySafeLoader.add_implicit_resolver(
     "tag:yaml.org,2002:null",
     re.compile(r"^(?:~|null|Null|NULL|)$"),
     ["~", "n", "N", ""],
 )
-_UniqueKeySafeLoader.add_implicit_resolver(
+UniqueKeySafeLoader.add_implicit_resolver(
     "tag:yaml.org,2002:bool",
     re.compile(r"^(?:true|True|TRUE|false|False|FALSE)$"),
     list("tTfF"),
 )
-_UniqueKeySafeLoader.add_implicit_resolver(
+UniqueKeySafeLoader.add_implicit_resolver(
     "tag:yaml.org,2002:int",
     re.compile(r"^[-+]?(?:0o[0-7]+|0x[0-9a-fA-F]+|[0-9]+)$"),
     list("-+0123456789"),
 )
-_UniqueKeySafeLoader.add_implicit_resolver(
+UniqueKeySafeLoader.add_implicit_resolver(
     "tag:yaml.org,2002:float",
     re.compile(
         r"^[-+]?(?:"
@@ -63,7 +63,7 @@ _UniqueKeySafeLoader.add_implicit_resolver(
 )
 
 
-def _integer_construct(loader: _UniqueKeySafeLoader, node: ScalarNode) -> int:
+def _integer_construct(loader: UniqueKeySafeLoader, node: ScalarNode) -> int:
     """Construct a YAML 1.2 integer without PyYAML's YAML 1.1 octal rules."""
 
     value = loader.construct_scalar(node)
@@ -76,7 +76,7 @@ def _integer_construct(loader: _UniqueKeySafeLoader, node: ScalarNode) -> int:
     return sign * int(unsigned_value, 10)
 
 
-def _mapping_construct(loader: _UniqueKeySafeLoader, node: MappingNode, deep: bool = False) -> dict[object, object]:
+def _mapping_construct(loader: UniqueKeySafeLoader, node: MappingNode, deep: bool = False) -> dict[object, object]:
     result: dict[object, object] = {}
     for key_node, value_node in node.value:
         key = loader.construct_object(key_node, deep=deep)
@@ -92,11 +92,11 @@ def _mapping_construct(loader: _UniqueKeySafeLoader, node: MappingNode, deep: bo
     return result
 
 
-_UniqueKeySafeLoader.add_constructor(
+UniqueKeySafeLoader.add_constructor(
     yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
     _mapping_construct,
 )
-_UniqueKeySafeLoader.add_constructor("tag:yaml.org,2002:int", _integer_construct)
+UniqueKeySafeLoader.add_constructor("tag:yaml.org,2002:int", _integer_construct)
 
 
 def _node_validate(node: Node, *, seen_identity_set: set[int]) -> None:
@@ -135,11 +135,11 @@ def yaml_document_load(path: Path) -> object:
         token_list = list(yaml.scan(payload_text))
         if any(isinstance(token, (AliasToken, AnchorToken, DirectiveToken, TagToken)) for token in token_list):
             raise GoalLifecycleError(f"YAML aliases, anchors, directives, and tags are forbidden: {path}")
-        node_list = list(yaml.compose_all(payload_text, Loader=_UniqueKeySafeLoader))
+        node_list = list(yaml.compose_all(payload_text, Loader=UniqueKeySafeLoader))
         if len(node_list) != 1 or node_list[0] is None:
             raise GoalLifecycleError(f"YAML owner must contain exactly one non-empty document: {path}")
         _node_validate(node_list[0], seen_identity_set=set())
-        payload_list = list(yaml.load_all(payload_text, Loader=_UniqueKeySafeLoader))
+        payload_list = list(yaml.load_all(payload_text, Loader=UniqueKeySafeLoader))
     except (ConstructorError, yaml.YAMLError) as error:
         raise GoalLifecycleError(f"YAML document is malformed: {path}: {error}") from error
     if len(payload_list) != 1:
