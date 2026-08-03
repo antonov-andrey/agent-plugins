@@ -229,7 +229,7 @@ Successful commands emit one closed machine-readable JSON object with common pre
 
 Activation may proceed only after `seal`, known persistent-goal availability, and fresh sealed validation. The persistent objective names `project-goals/<common-prefix>/goal.md` and binds work to the returned task roots.
 
-Later implementation-source commits and pushes belong to `agent-workflows:git-commit`. A user-approved closing snapshot belongs to `goal-checkpoint`; one-checkpoint merge and primary acceptance belong to `goal-merge`; resource/worktree/ref/task-directory deletion belongs to `goal-delete`. None is implied by sealing, activation, completion, or abandonment.
+Later implementation-source commits and pushes belong to `agent-workflows:git-commit`. An active-goal closing snapshot and an in-scope non-destructive merge fix-forward belong to `goal-checkpoint`; one-checkpoint merge and primary acceptance belong to `goal-merge`; resource/worktree/ref/task-directory deletion belongs to `goal-delete`. Activation authorizes closing checkpoint publication but does not start merge or deletion.
 
 ## Verification Contract
 

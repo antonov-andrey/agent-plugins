@@ -317,7 +317,7 @@
       "id": "direct-goal-merge",
       "working_directory": "..",
       "working_directory_mode": "same-branch",
-      "prompt": "Use $agent-workflows:goal-merge to merge checkpoint-0002 of task 2026-07-30-multi-repository-architecture coordinated by /workspace/project-goals, then describe the separate primary acceptance update. This evaluation is read-only.",
+      "prompt": "Use $agent-workflows:goal-merge to merge checkpoint-0002 of task 2026-07-30-multi-repository-architecture coordinated by /workspace/project-goals, then describe the separate primary acceptance update. Explain what happens if acceptance finds one in-scope non-destructive issue and when another user decision is required. This evaluation is read-only.",
       "expected_skill_list": [
         "agent-workflows:goal-merge"
       ],
@@ -333,6 +333,10 @@
         {
           "id": "acceptance-boundary",
           "text": "The response runs primary acceptance only after all main refs exactly match the checkpoint and updates accepted_checkpoint_id separately through project-goals main only after success."
+        },
+        {
+          "id": "non-destructive-fix-forward",
+          "text": "If primary acceptance fails, the response keeps the journal and accepted pointer unchanged, fixes in-scope non-destructive fallout only in recorded task worktrees, publishes one complete descendant checkpoint, and resumes the same exclusive workflow without requesting separate approval. It stops only for new authority or unavoidable data loss when no lossless migration exists."
         }
       ]
     },

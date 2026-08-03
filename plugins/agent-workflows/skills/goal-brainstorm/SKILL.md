@@ -28,7 +28,7 @@ Turn an implementation idea into approved stable contracts, one tracked `project
     - If no unfinished goal exists and a goal-creation tool is available, require successful persistent-goal creation before recording `active`, then freshly validate the complete newly active state across the whole participant set.
     - If state cannot be inspected or automatic creation is unavailable, report the exact limitation and provide the semantic `/goal` command below.
 
-Checkpoint publication belongs to `agent-workflows:goal-checkpoint`, merge and primary acceptance to `agent-workflows:goal-merge`, and deletion to `agent-workflows:goal-delete`. Goal completion alone authorizes none of them.
+Checkpoint publication belongs to `agent-workflows:goal-checkpoint`, merge and primary acceptance to `agent-workflows:goal-merge`, and deletion to `agent-workflows:goal-delete`. Activation authorizes non-destructive closing checkpoints. Merge still requires an explicit workflow start, and deletion still requires an explicit request.
 
 ## Mandatory Identity Handoff
 

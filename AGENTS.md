@@ -78,7 +78,7 @@ agent-plugins/
 
 - `agent-workflows:git-commit` applies when repository changes are committed or pushed.
 - `agent-workflows:goal-brainstorm` applies when stable design or a persistent implementation goal is prepared.
-- `agent-workflows:goal-checkpoint` applies when an explicitly approved cross-repository closing-commit snapshot is published.
+- `agent-workflows:goal-checkpoint` applies when an active goal or its non-destructive merge fix-forward publishes a cross-repository closing-commit snapshot.
 - `agent-workflows:goal-delete` applies when the user explicitly requests synchronized deletion of one exact task.
 - `agent-workflows:goal-merge` applies in one exclusive thread when one published checkpoint is merged and accepted on the primary environment.
 - `agent-workflows:instruction-migration` applies only to explicitly approved multi-owner instruction migrations.
