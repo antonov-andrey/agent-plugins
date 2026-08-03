@@ -26,6 +26,13 @@ class TaskRepositoryManager:
     """Wire cohesive owners for each top-level participant and delegated submodule."""
 
     def __init__(self, *, git: Git, repair_report: TaskRepairReport | None = None) -> None:
+        """Initialize the task repository manager dependencies.
+
+        Args:
+            git: Git command boundary.
+            repair_report: Repair report.
+        """
+
         self._git = git
         self._repair_report = repair_report or TaskRepairReport()
         self._boundary_manager = RepositoryBoundaryManager(git=git, repair_report=self._repair_report)
@@ -44,7 +51,17 @@ class TaskRepositoryManager:
         requested_submodule_path_set: set[str],
         previous_state: RepositoryState | None = None,
     ) -> RepositoryState:
-        """Create or resume one exact top-level worktree and all recursive boundaries."""
+        """Create or resume one exact top-level worktree and all recursive boundaries.
+
+        Args:
+            main_root: Main root.
+            common_prefix: Exact task common prefix.
+            requested_submodule_path_set: Unique requested submodule path values.
+            previous_state: Previous state.
+
+        Returns:
+            The prepared top-level worktree and every recursive task boundary.
+        """
 
         main_root = self._git.root_get(main_root)
         self._git.clean_require(main_root)
@@ -103,7 +120,14 @@ class TaskRepositoryManager:
         )
 
     def refresh(self, state: RepositoryState) -> RepositoryState:
-        """Refresh one participant after approved owner authoring without changing ownership."""
+        """Refresh one participant after approved owner authoring without changing ownership.
+
+        Args:
+            state: Exact runtime state.
+
+        Returns:
+            Resulting repository state.
+        """
 
         return self.prepare(
             Path(state.main_root),
@@ -119,7 +143,16 @@ class TaskRepositoryManager:
         task_state: TaskState,
         main_integrity_required: bool = True,
     ) -> Path:
-        """Require the top-level worktree and every nested boundary to remain exact."""
+        """Require the top-level worktree and every nested boundary to remain exact.
+
+        Args:
+            repository: Exact Git repository root.
+            task_state: Task state.
+            main_integrity_required: Main integrity required.
+
+        Returns:
+            Resolved filesystem path.
+        """
 
         task_root = self._worktree_manager.validate(repository, common_prefix=task_state.common_prefix)
         self._boundary_manager.validate(
@@ -135,7 +168,11 @@ class TaskRepositoryManager:
         return task_root
 
     def pending_retire(self, state: TaskState) -> None:
-        """Retire creation markers only after the complete state reached every replica."""
+        """Retire creation markers only after the complete state reached every replica.
+
+        Args:
+            state: Exact runtime state.
+        """
 
         for repository in state.repository_list:
             self._submodule_manager.pending_retire(repository, common_prefix=state.common_prefix)
@@ -148,7 +185,13 @@ class TaskRepositoryManager:
         main_repository: Path,
         path_list: Sequence[str],
     ) -> None:
-        """Recover one exact top-level or task-owned boundary after explicit attestation."""
+        """Recover one exact top-level or task-owned boundary after explicit attestation.
+
+        Args:
+            state: Exact runtime state.
+            main_repository: Main repository.
+            path_list: Ordered path values.
+        """
 
         _, boundary = self._boundary_locate(state, main_repository=main_repository)
         self._boundary_manager.main_integrity.leak_recover(boundary, path_list=path_list)
@@ -161,7 +204,17 @@ class TaskRepositoryManager:
         commit: str,
         path_list: Sequence[str],
     ) -> tuple[RepositoryState, ...]:
-        """Return the participant list with one exact boundary attestation replaced."""
+        """Return the participant list with one exact boundary attestation replaced.
+
+        Args:
+            state: Exact runtime state.
+            main_repository: Main repository.
+            commit: Commit.
+            path_list: Ordered path values.
+
+        Returns:
+            The participant list with one exact boundary attestation replaced.
+        """
 
         top_index, boundary = self._boundary_locate(state, main_repository=main_repository)
         accepted = self._boundary_manager.main_integrity.commit_drift_accept(
@@ -187,7 +240,11 @@ class TaskRepositoryManager:
         return tuple(replacement if index == top_index else item for index, item in enumerate(state.repository_list))
 
     def cleanup_binding_receipt_ensure(self, state: TaskState) -> None:
-        """Create every active-state cleanup receipt idempotently."""
+        """Create every active-state cleanup receipt idempotently.
+
+        Args:
+            state: Exact runtime state.
+        """
 
         if state.lifecycle_state != "active" or state.cleanup_binding_generation < 1:
             raise GoalLifecycleError("Cleanup binding receipts require durable active state")
@@ -195,12 +252,26 @@ class TaskRepositoryManager:
             self._boundary_manager.cleanup_binding_receipt_ensure(boundary, task_state=state)
 
     def cleanup_binding_receipt_retire(self, state: TaskState) -> None:
-        """Remove every inactive-candidate cleanup receipt idempotently."""
+        """Remove every inactive-candidate cleanup receipt idempotently.
+
+        Args:
+            state: Exact runtime state.
+        """
 
         for boundary in repository_boundary_list_get(state):
             self._boundary_manager.cleanup_binding_receipt_retire(boundary, common_prefix=state.common_prefix)
 
     def _boundary_locate(self, state: TaskState, *, main_repository: Path) -> tuple[int, RepositoryBoundaryState]:
+        """Locate the repository boundary that owns one exact task path.
+
+        Args:
+            state: Exact runtime state.
+            main_repository: Main repository.
+
+        Returns:
+            Values in deterministic immutable order.
+        """
+
         main_root = self._git.root_get(main_repository)
         for index, repository in enumerate(state.repository_list):
             if Path(repository.main_root).resolve(strict=True) == main_root:
@@ -211,6 +282,12 @@ class TaskRepositoryManager:
         raise GoalLifecycleError(f"Repository boundary is not a participant in this task: {main_root}")
 
     def _main_worktree_exclude_ensure(self, main_root: Path) -> None:
+        """Keep the managed worktree container out of the main checkout status.
+
+        Args:
+            main_root: Main root.
+        """
+
         exclude_path = self._git.common_directory_get(main_root) / "info" / "exclude"
         text = exclude_path.read_text(encoding="utf-8") if exclude_path.is_file() else ""
         line_list = text.splitlines()

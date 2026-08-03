@@ -17,11 +17,26 @@ class TaskOwnedSubmoduleMainPublisher:
     """Resolve, preflight, publish, and prove submodule mains before parent mains."""
 
     def __init__(self, coordination: CoordinationRepository, *, git: Git) -> None:
+        """Initialize the task owned submodule main publisher dependencies.
+
+        Args:
+            coordination: Coordination.
+            git: Git command boundary.
+        """
+
         self._coordination = coordination
         self._git = git
 
     def snapshot_get(self, state: TaskState, *, checkpoint: Checkpoint) -> list[dict[str, object]]:
-        """Return the exact submodule targets selected transitively by one checkpoint."""
+        """Return the exact submodule targets selected transitively by one checkpoint.
+
+        Args:
+            state: Exact runtime state.
+            checkpoint: Checkpoint.
+
+        Returns:
+            The exact submodule targets selected transitively by one checkpoint.
+        """
 
         workspace_root = self._coordination.root.parent.resolve(strict=True)
         checkpoint_by_path_map = {item.project_path: item.git_commit_final for item in checkpoint.project_list}
@@ -57,7 +72,12 @@ class TaskOwnedSubmoduleMainPublisher:
         )
 
     def preflight(self, snapshot_list: list[dict[str, object]], *, common_prefix: str) -> None:
-        """Prove every remote fast-forward and exact task branch before any main mutation."""
+        """Prove every remote fast-forward and exact task branch before any main mutation.
+
+        Args:
+            snapshot_list: Ordered snapshot values.
+            common_prefix: Exact task common prefix.
+        """
 
         for item in snapshot_list:
             root = Path(str(item["main_root"])).resolve(strict=True)
@@ -100,7 +120,13 @@ class TaskOwnedSubmoduleMainPublisher:
         journal: dict[str, object],
         journal_path: Path,
     ) -> None:
-        """Compare-and-swap each task-owned submodule main, deepest first."""
+        """Compare-and-swap each task-owned submodule main, deepest first.
+
+        Args:
+            common_prefix: Exact task common prefix.
+            journal: Journal.
+            journal_path: Exact filesystem path for journal.
+        """
 
         for item in journal["submodule_list"]:
             if item["merged"] is True:
@@ -130,7 +156,11 @@ class TaskOwnedSubmoduleMainPublisher:
             atomic_json_write(journal_path, journal)
 
     def local_checkouts_sync(self, snapshot_list: list[dict[str, object]]) -> None:
-        """Attach canonical submodule checkouts only after parent gitlinks reached target."""
+        """Attach canonical submodule checkouts only after parent gitlinks reached target.
+
+        Args:
+            snapshot_list: Ordered snapshot values.
+        """
 
         for item in snapshot_list:
             self._remote_item_require(item)
@@ -153,7 +183,11 @@ class TaskOwnedSubmoduleMainPublisher:
             self._merged_item_require(item)
 
     def merged_exact_require(self, snapshot_list: list[dict[str, object]]) -> None:
-        """Require every selected submodule target on local and remote main."""
+        """Require every selected submodule target on local and remote main.
+
+        Args:
+            snapshot_list: Ordered snapshot values.
+        """
 
         for item in snapshot_list:
             self._merged_item_require(item)
@@ -164,7 +198,12 @@ class TaskOwnedSubmoduleMainPublisher:
         *,
         previous_snapshot_list: list[dict[str, object]],
     ) -> None:
-        """Require each replacement submodule target to include interrupted task work."""
+        """Require each replacement submodule target to include interrupted task work.
+
+        Args:
+            snapshot_list: Ordered snapshot values.
+            previous_snapshot_list: Ordered previous snapshot values.
+        """
 
         previous_by_identity_map = {
             (str(item["parent_project_path"]), str(item["path"])): str(item["git_commit_final"])
@@ -185,6 +224,12 @@ class TaskOwnedSubmoduleMainPublisher:
             )
 
     def _merged_item_require(self, item: dict[str, object]) -> None:
+        """Require one task-owned submodule commit to be present in its merged parent tree.
+
+        Args:
+            item: Item.
+        """
+
         self._remote_item_require(item)
         root = Path(str(item["main_root"])).resolve(strict=True)
         self._git.clean_require(root)
@@ -197,7 +242,11 @@ class TaskOwnedSubmoduleMainPublisher:
             raise GoalLifecycleError(f"Task-owned submodule main is not the selected target: {root}")
 
     def _remote_item_require(self, item: dict[str, object]) -> None:
-        """Require only the publication that may precede its parent gitlink."""
+        """Require only the publication that may precede its parent gitlink.
+
+        Args:
+            item: Item.
+        """
 
         root = Path(str(item["main_root"])).resolve(strict=True)
         if self._git.origin_url_get(root) != item["origin_url"]:

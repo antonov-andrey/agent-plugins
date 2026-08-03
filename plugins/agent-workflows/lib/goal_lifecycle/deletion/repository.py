@@ -16,6 +16,13 @@ class GoalTaskRepositoryRetirer:
     """Remove exact task worktrees, refs, and temporary provider excludes."""
 
     def __init__(self, coordination: CoordinationRepository, *, git: Git) -> None:
+        """Initialize the goal task repository retirer dependencies.
+
+        Args:
+            coordination: Coordination.
+            git: Git command boundary.
+        """
+
         self._coordination = coordination
         self._git = git
 
@@ -26,7 +33,13 @@ class GoalTaskRepositoryRetirer:
         journal: dict[str, object],
         state: TaskState,
     ) -> None:
-        """Reprove every recorded ref, then remove exact clean task worktrees."""
+        """Reprove every recorded ref, then remove exact clean task worktrees.
+
+        Args:
+            bootstrap_exception: Bootstrap exception.
+            journal: Journal.
+            state: Exact runtime state.
+        """
 
         expected_by_main_root_map = _expected_commit_by_main_root_map_get(journal)
         self._task_owned_submodule_worktrees_require(journal=journal, state=state)
@@ -88,7 +101,13 @@ class GoalTaskRepositoryRetirer:
         expected_commit: str,
         main_root: Path,
     ) -> None:
-        """Require both local and fetched remote task refs at one recorded commit."""
+        """Require both local and fetched remote task refs at one recorded commit.
+
+        Args:
+            common_prefix: Exact task common prefix.
+            expected_commit: Expected commit.
+            main_root: Main root.
+        """
 
         for ref, label in (
             (f"refs/heads/{common_prefix}", "Local"),
@@ -107,7 +126,14 @@ class GoalTaskRepositoryRetirer:
         journal_path: Path,
         state: TaskState,
     ) -> None:
-        """Remove every exact remote task ref with durable per-repository progress."""
+        """Remove every exact remote task ref with durable per-repository progress.
+
+        Args:
+            bootstrap_exception: Bootstrap exception.
+            journal: Journal.
+            journal_path: Exact filesystem path for journal.
+            state: Exact runtime state.
+        """
 
         owner_list = _ref_owner_list_get(journal, state=state)
         start_index = int(journal["repository_index"])
@@ -169,7 +195,14 @@ class GoalTaskRepositoryRetirer:
         journal_path: Path,
         state: TaskState,
     ) -> None:
-        """Remove every exact local task ref with durable per-repository progress."""
+        """Remove every exact local task ref with durable per-repository progress.
+
+        Args:
+            bootstrap_exception: Bootstrap exception.
+            journal: Journal.
+            journal_path: Exact filesystem path for journal.
+            state: Exact runtime state.
+        """
 
         owner_list = _ref_owner_list_get(journal, state=state)
         start_index = int(journal["repository_index"])
@@ -224,7 +257,11 @@ class GoalTaskRepositoryRetirer:
                 )
 
     def provider_excludes_retire(self, state: TaskState) -> None:
-        """Remove each implementation repository's temporary worktree exclude."""
+        """Remove each implementation repository's temporary worktree exclude.
+
+        Args:
+            state: Exact runtime state.
+        """
 
         for repository in state.repository_list:
             main_root = Path(repository.main_root)
@@ -233,7 +270,12 @@ class GoalTaskRepositoryRetirer:
                 self.worktree_exclude_retire(main_root)
 
     def _task_owned_submodule_worktrees_require(self, *, journal: dict[str, object], state: TaskState) -> None:
-        """Reprove every nested worktree and task ref before its parent tree is removed."""
+        """Reprove every nested worktree and task ref before its parent tree is removed.
+
+        Args:
+            journal: Journal.
+            state: Exact runtime state.
+        """
 
         for item in journal["submodule_list"]:
             main_root = Path(item["main_root"])
@@ -260,7 +302,11 @@ class GoalTaskRepositoryRetirer:
                     raise GoalLifecycleError(f"Task-owned submodule commit changed before deletion: {task_root}")
 
     def worktree_exclude_retire(self, main_root: Path) -> None:
-        """Remove one exact provider-owned common-directory exclude line."""
+        """Remove one exact provider-owned common-directory exclude line.
+
+        Args:
+            main_root: Main root.
+        """
 
         exclude_path = self._git.common_directory_get(main_root) / "info" / "exclude"
         if not exclude_path.is_file():
@@ -274,13 +320,28 @@ class GoalTaskRepositoryRetirer:
 
 
 def _expected_commit_by_main_root_map_get(journal: dict[str, object]) -> dict[str, str]:
-    """Return the prevalidated exact commit map retained in one deletion journal."""
+    """Return the prevalidated exact commit map retained in one deletion journal.
+
+    Args:
+        journal: Journal.
+
+    Returns:
+        The prevalidated exact commit map retained in one deletion journal.
+    """
 
     return {str(item["main_root"]): str(item["git_commit_final"]) for item in journal["project_list"]}
 
 
 def _ref_owner_list_get(journal: dict[str, object], *, state: TaskState) -> list[dict[str, str]]:
-    """Return top-level and task-owned ref owners in one deterministic journal order."""
+    """Return top-level and task-owned ref owners in one deterministic journal order.
+
+    Args:
+        journal: Journal.
+        state: Exact runtime state.
+
+    Returns:
+        Top-level and task-owned ref owners in deterministic journal order.
+    """
 
     result = [
         {

@@ -17,6 +17,15 @@ from goal_lifecycle import GoalCheckpointPublisher, GoalLifecycleError
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Run the command-line entrypoint.
+
+    Args:
+        argv: Argv.
+
+    Returns:
+        Zero on success or 2 when the lifecycle contract rejects the request.
+    """
+
     parser = argparse.ArgumentParser(description="Publish one full cross-repository checkpoint.")
     parser.add_argument("--goals-repository", required=True, type=Path)
     parser.add_argument("--common-prefix", required=True)

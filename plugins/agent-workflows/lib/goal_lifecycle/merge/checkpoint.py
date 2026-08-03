@@ -12,10 +12,24 @@ class GoalMergeCheckpointReader:
     """Load one exact checkpoint from a closed central task directory."""
 
     def __init__(self, coordination: CoordinationRepository) -> None:
+        """Initialize the goal merge checkpoint reader dependencies.
+
+        Args:
+            coordination: Coordination.
+        """
+
         self._coordination = coordination
 
     def get(self, *, common_prefix: str, checkpoint_id: str) -> tuple[CheckpointDocument, Checkpoint]:
-        """Return one exact checkpoint and its complete validated document."""
+        """Return one exact checkpoint and its complete validated document.
+
+        Args:
+            common_prefix: Exact task common prefix.
+            checkpoint_id: Exact checkpoint identity.
+
+        Returns:
+            One exact checkpoint and its complete validated document.
+        """
 
         self._coordination.task_directory_shape_require(common_prefix, complete=True)
         document = CheckpointDocument.from_payload(

@@ -36,6 +36,13 @@ class RepositoryBoundaryManager:
     """Prepare and prove one top-level or task-owned repository boundary."""
 
     def __init__(self, *, git: Git, repair_report: TaskRepairReport | None = None) -> None:
+        """Initialize the repository boundary manager dependencies.
+
+        Args:
+            git: Git command boundary.
+            repair_report: Repair report.
+        """
+
         self._git = git
         self._repair_report = repair_report or TaskRepairReport()
         self._main_integrity = MainWorktreeIntegrity(git=git)
@@ -50,7 +57,18 @@ class RepositoryBoundaryManager:
         common_prefix: str,
         previous_state: RepositoryBoundaryState | None,
     ) -> RepositoryBoundaryState:
-        """Materialize the exact current manifest and return its bound state."""
+        """Materialize the exact current manifest and return its bound state.
+
+        Args:
+            main_root: Main root.
+            task_root: Task root.
+            baseline_commit: Baseline commit.
+            common_prefix: Exact task common prefix.
+            previous_state: Previous state.
+
+        Returns:
+            Resulting repository boundary state.
+        """
 
         if self._git.root_get(main_root) != main_root.resolve(strict=True):
             raise GoalLifecycleError(f"Main repository boundary is not an exact Git root: {main_root}")
@@ -97,7 +115,16 @@ class RepositoryBoundaryManager:
         task_state: TaskState,
         main_integrity_required: bool = True,
     ) -> Path:
-        """Require exact Git identity, main isolation, manifest, and resources."""
+        """Require exact Git identity, main isolation, manifest, and resources.
+
+        Args:
+            boundary: Boundary.
+            task_state: Task state.
+            main_integrity_required: Main integrity required.
+
+        Returns:
+            Resolved filesystem path.
+        """
 
         main_root = Path(boundary.main_root).resolve(strict=True)
         task_root = Path(boundary.task_root).resolve(strict=True)
@@ -137,6 +164,13 @@ class RepositoryBoundaryManager:
         return task_root
 
     def cleanup_binding_receipt_ensure(self, boundary: RepositoryBoundaryState, *, task_state: TaskState) -> None:
+        """Mirror the content-free cleanup binding into task and main Git storage.
+
+        Args:
+            boundary: Boundary.
+            task_state: Task state.
+        """
+
         for storage_root in {Path(boundary.task_root), Path(boundary.main_root)}:
             cleanup_binding_receipt_write(
                 Path(boundary.task_root),
@@ -148,6 +182,13 @@ class RepositoryBoundaryManager:
             )
 
     def cleanup_binding_receipt_retire(self, boundary: RepositoryBoundaryState, *, common_prefix: str) -> None:
+        """Retire the task's content-free cleanup receipt after external absence proof.
+
+        Args:
+            boundary: Boundary.
+            common_prefix: Exact task common prefix.
+        """
+
         for storage_root in {Path(boundary.task_root), Path(boundary.main_root)}:
             path = cleanup_binding_receipt_path_get(storage_root, common_prefix=common_prefix, git=self._git)
             try:
@@ -157,13 +198,22 @@ class RepositoryBoundaryManager:
 
     @property
     def main_integrity(self) -> MainWorktreeIntegrity:
-        """Expose the single repository-integrity owner for explicit user-authorized operations."""
+        """Expose the single repository-integrity owner for explicit user-authorized operations.
+
+        Returns:
+            Resulting main worktree integrity.
+        """
 
         return self._main_integrity
 
 
 def _tracked_ignore_ensure(task_root: Path, *, manifest: BootstrapManifest) -> None:
-    """Author the durable ignore contract for provider-owned task-local paths."""
+    """Author the durable ignore contract for provider-owned task-local paths.
+
+    Args:
+        task_root: Task root.
+        manifest: Manifest.
+    """
 
     gitignore_path = task_root / ".gitignore"
     if gitignore_path.is_symlink() or (gitignore_path.exists() and not gitignore_path.is_file()):

@@ -25,7 +25,16 @@ def task_owned_submodule_target_list_get(
     top_level_commit: str,
     git: Git,
 ) -> tuple[TaskOwnedSubmoduleTarget, ...]:
-    """Resolve every owned descendant through exact committed parent gitlinks."""
+    """Resolve every owned descendant through exact committed parent gitlinks.
+
+    Args:
+        repository: Exact Git repository root.
+        top_level_commit: Top level commit.
+        git: Git command boundary.
+
+    Returns:
+        Every owned descendant resolved through exact committed parent gitlinks.
+    """
 
     owned_by_path_map = {item.path: item for item in repository.task_owned_submodule_list}
     resolved_commit_by_path_map: dict[str, str] = {}
@@ -61,7 +70,17 @@ def task_owned_submodule_target_list_get(
 
 
 def gitlink_commit_get(git: Git, repository_root: Path, *, commit: str, path: str) -> str:
-    """Return one exact stage-zero gitlink from a committed tree."""
+    """Return one exact stage-zero gitlink from a committed tree.
+
+    Args:
+        git: Git command boundary.
+        repository_root: Repository root.
+        commit: Commit.
+        path: Exact filesystem path.
+
+    Returns:
+        One exact stage-zero gitlink from a committed tree.
+    """
 
     payload = git.run(repository_root, ["ls-tree", "-z", commit, "--", path]).stdout
     entry_list = [item for item in payload.split(b"\0") if item]

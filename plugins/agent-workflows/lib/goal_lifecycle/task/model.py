@@ -30,7 +30,14 @@ class BootstrapResourceState:
 
     @classmethod
     def from_payload(cls, payload: object) -> "BootstrapResourceState":
-        """Build one bootstrap-resource state from its exact payload."""
+        """Build one bootstrap-resource state from its exact payload.
+
+        Args:
+            payload: Structured operation payload.
+
+        Returns:
+            One bootstrap-resource state from its exact payload.
+        """
 
         expected = {
             "path",
@@ -79,7 +86,14 @@ class MainCommitDriftAttestation:
 
     @classmethod
     def from_payload(cls, payload: object) -> "MainCommitDriftAttestation":
-        """Build one main-drift attestation from its exact payload."""
+        """Build one main-drift attestation from its exact payload.
+
+        Args:
+            payload: Structured operation payload.
+
+        Returns:
+            One main-drift attestation from its exact payload.
+        """
 
         if not isinstance(payload, dict) or set(payload) != {"commit", "path_list"}:
             raise GoalLifecycleError("Main-commit drift attestation has another shape")
@@ -113,7 +127,14 @@ class RepositoryBoundaryState:
     cleanup_declaration_sha256: str = ""
 
     def main_commit_drift_attestation_get(self, commit: str) -> MainCommitDriftAttestation | None:
-        """Return the newest exact attestation for one main commit."""
+        """Return the newest exact attestation for one main commit.
+
+        Args:
+            commit: Commit.
+
+        Returns:
+            The newest exact attestation for one main commit.
+        """
 
         for item in reversed(self.accepted_main_commit_drift_list):
             if item.commit == commit:
@@ -122,7 +143,14 @@ class RepositoryBoundaryState:
 
     @classmethod
     def from_payload(cls, payload: object) -> "RepositoryBoundaryState":
-        """Build one repository-boundary state from its exact payload."""
+        """Build one repository-boundary state from its exact payload.
+
+        Args:
+            payload: Structured operation payload.
+
+        Returns:
+            One repository-boundary state from its exact payload.
+        """
 
         expected = {
             "accepted_main_commit_drift_list",
@@ -189,7 +217,14 @@ class TaskOwnedSubmoduleState:
 
     @classmethod
     def from_payload(cls, payload: object) -> "TaskOwnedSubmoduleState":
-        """Build one task-owned submodule state from its exact payload."""
+        """Build one task-owned submodule state from its exact payload.
+
+        Args:
+            payload: Structured operation payload.
+
+        Returns:
+            One task-owned submodule state from its exact payload.
+        """
 
         if not isinstance(payload, dict) or set(payload) != {"path", "repository"}:
             raise GoalLifecycleError("Task-owned submodule state has another shape")
@@ -208,7 +243,14 @@ class SubmoduleGitlinkState:
 
     @classmethod
     def from_payload(cls, payload: object) -> "SubmoduleGitlinkState":
-        """Build one recursive gitlink state from its exact payload."""
+        """Build one recursive gitlink state from its exact payload.
+
+        Args:
+            payload: Structured operation payload.
+
+        Returns:
+            One recursive gitlink state from its exact payload.
+        """
 
         if not isinstance(payload, dict) or set(payload) != {"baseline_commit", "path"}:
             raise GoalLifecycleError("Recursive submodule gitlink state has another shape")
@@ -227,7 +269,14 @@ class RepositoryState(RepositoryBoundaryState):
 
     @classmethod
     def from_payload(cls, payload: object) -> "RepositoryState":
-        """Build one top-level repository state from its exact current shape."""
+        """Build one top-level repository state from its exact current shape.
+
+        Args:
+            payload: Structured operation payload.
+
+        Returns:
+            One top-level repository state from its exact current shape.
+        """
 
         if not isinstance(payload, dict):
             raise GoalLifecycleError("Private repository state has another shape")
@@ -317,12 +366,23 @@ class TaskState:
     schema_version: int = 3
 
     def is_sealed(self) -> bool:
-        """Return whether specification and goal bytes are immutable."""
+        """Return whether specification and goal bytes are immutable.
+
+        Returns:
+            Whether specification and goal bytes are immutable.
+        """
 
         return self.lifecycle_state in _SEALED_TASK_LIFECYCLE_STATE_SET
 
     def result_payload_get(self, *, performed_repair_list: list[str] | None = None) -> dict[str, object]:
-        """Return the stable user-facing task lifecycle result."""
+        """Return the stable user-facing task lifecycle result.
+
+        Args:
+            performed_repair_list: Ordered performed repair values.
+
+        Returns:
+            The stable user-facing task lifecycle result.
+        """
 
         return {
             "schema_version": 1,
@@ -347,7 +407,11 @@ class TaskState:
         }
 
     def payload_get(self) -> dict[str, Any]:
-        """Return the canonical JSON-ready replicated-state payload."""
+        """Return the canonical JSON-ready replicated-state payload.
+
+        Returns:
+            The canonical JSON-ready replicated-state payload.
+        """
 
         return {
             "schema_version": 3,
@@ -364,7 +428,14 @@ class TaskState:
 
     @classmethod
     def from_payload(cls, payload: object) -> "TaskState":
-        """Build one task state from its exact payload."""
+        """Build one task state from its exact payload.
+
+        Args:
+            payload: Structured operation payload.
+
+        Returns:
+            One task state from its exact payload.
+        """
 
         expected = {
             "schema_version",
@@ -450,7 +521,14 @@ class TaskState:
 def repository_boundary_list_get(
     state: TaskState,
 ) -> tuple[RepositoryBoundaryState, ...]:
-    """Return every top-level and task-owned repository boundary in deterministic order."""
+    """Return every top-level and task-owned repository boundary in deterministic order.
+
+    Args:
+        state: Exact runtime state.
+
+    Returns:
+        Every top-level and task-owned repository boundary in deterministic order.
+    """
 
     result: list[RepositoryBoundaryState] = []
     for repository in state.repository_list:
@@ -460,7 +538,15 @@ def repository_boundary_list_get(
 
 
 def _list_require(value: object, *, label: str) -> list[object]:
-    """Return one required list payload."""
+    """Return one required list payload.
+
+    Args:
+        value: Candidate value.
+        label: Diagnostic owner label.
+
+    Returns:
+        One required list payload.
+    """
 
     if not isinstance(value, list):
         raise GoalLifecycleError(f"{label} must be a list")
@@ -468,7 +554,15 @@ def _list_require(value: object, *, label: str) -> list[object]:
 
 
 def _nonempty_text_validate(value: object, *, label: str) -> str:
-    """Return one non-empty single-line state identity."""
+    """Return one non-empty single-line state identity.
+
+    Args:
+        value: Candidate value.
+        label: Diagnostic owner label.
+
+    Returns:
+        One non-empty single-line state identity.
+    """
 
     if not isinstance(value, str) or not value or "\x00" in value or "\n" in value or "\r" in value:
         raise GoalLifecycleError(f"{label} must be non-empty single-line text")
@@ -476,7 +570,16 @@ def _nonempty_text_validate(value: object, *, label: str) -> str:
 
 
 def _sha256_validate(value: object, *, label: str, empty_allowed: bool = False) -> str:
-    """Return one lowercase SHA-256 identity or one explicitly allowed empty value."""
+    """Return one lowercase SHA-256 identity or one explicitly allowed empty value.
+
+    Args:
+        value: Candidate value.
+        label: Diagnostic owner label.
+        empty_allowed: Empty allowed.
+
+    Returns:
+        One lowercase SHA-256 identity or one explicitly allowed empty value.
+    """
 
     if empty_allowed and value == "":
         return ""
@@ -486,7 +589,15 @@ def _sha256_validate(value: object, *, label: str, empty_allowed: bool = False) 
 
 
 def _absolute_path_validate(value: object, *, label: str) -> str:
-    """Return one normalized absolute filesystem identity without resolving it."""
+    """Return one normalized absolute filesystem identity without resolving it.
+
+    Args:
+        value: Candidate value.
+        label: Diagnostic owner label.
+
+    Returns:
+        One normalized absolute filesystem identity without resolving it.
+    """
 
     text = _nonempty_text_validate(value, label=label)
     path = Path(text)
@@ -496,7 +607,14 @@ def _absolute_path_validate(value: object, *, label: str) -> str:
 
 
 def _json_value_get(value: Any) -> Any:
-    """Convert dataclass tuple trees into their canonical JSON collection types."""
+    """Convert dataclass tuple trees into their canonical JSON collection types.
+
+    Args:
+        value: Candidate value.
+
+    Returns:
+        Resulting any.
+    """
 
     if isinstance(value, dict):
         return {key: _json_value_get(item) for key, item in value.items()}

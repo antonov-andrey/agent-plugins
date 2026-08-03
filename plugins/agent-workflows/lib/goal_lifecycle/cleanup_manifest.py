@@ -24,6 +24,15 @@ _RESERVED_FIRST_COMPONENT_SET = {".git", ".worktree", BOOTSTRAP_MANIFEST_NAME}
 
 
 def _path_validate(value: object) -> str:
+    """Reject any cleanup placeholder that is not one normalized relative path.
+
+    Args:
+        value: Candidate value.
+
+    Returns:
+        Resulting text value.
+    """
+
     if not isinstance(value, str) or not value or "\\" in value or "\x00" in value:
         raise GoalLifecycleError("Bootstrap resource path is invalid")
     path = PurePosixPath(value)
@@ -42,6 +51,15 @@ class CleanupDeclaration:
 
     @classmethod
     def from_payload(cls, payload: object) -> "CleanupDeclaration":
+        """Build one cleanup declaration from an untrusted payload.
+
+        Args:
+            payload: Structured operation payload.
+
+        Returns:
+            One cleanup declaration from an untrusted payload.
+        """
+
         if not isinstance(payload, dict) or set(payload) != {"command_argument_list"}:
             raise GoalLifecycleError("Bootstrap cleanup declaration has another shape")
         argument_list = payload["command_argument_list"]
@@ -58,10 +76,25 @@ class CleanupDeclaration:
         return cls(command_argument_list=tuple(argument_list))
 
     def normalized_sha256_get(self) -> str:
+        """Hash the canonical schema-v2 cleanup declaration payload.
+
+        Returns:
+            The normalized SHA-256.
+        """
+
         payload = b"\x00".join(item.encode("utf-8") for item in self.command_argument_list)
         return hashlib.sha256(payload).hexdigest()
 
     def command_get(self, *, common_prefix: str) -> list[str]:
+        """Materialize the exact cleanup-hook command for one task prefix.
+
+        Args:
+            common_prefix: Exact task common prefix.
+
+        Returns:
+            The command.
+        """
+
         common_prefix_validate(common_prefix)
         return [common_prefix if item == "{common_prefix}" else item for item in self.command_argument_list]
 
@@ -76,6 +109,15 @@ class BootstrapManifest:
 
 
 def bootstrap_manifest_load(path: Path) -> BootstrapManifest:
+    """Parse one strict schema-v2 YAML bootstrap manifest from an ordinary file.
+
+    Args:
+        path: Exact filesystem path.
+
+    Returns:
+        The bootstrap manifest.
+    """
+
     payload = yaml_document_load(path)
     if not isinstance(payload, dict) or set(payload) not in (
         {"schema_version", "resource"},
@@ -113,6 +155,17 @@ def bootstrap_manifest_load(path: Path) -> BootstrapManifest:
 
 
 def cleanup_binding_receipt_path_get(repository_root: Path, *, common_prefix: str, git: Git | None = None) -> Path:
+    """Locate one task cleanup receipt in the repository's shared Git directory.
+
+    Args:
+        repository_root: Repository root.
+        common_prefix: Exact task common prefix.
+        git: Git command boundary.
+
+    Returns:
+        Absolute path of the task cleanup receipt.
+    """
+
     command = git or Git()
     common_directory = command.common_directory_get(repository_root)
     return common_directory / "agent-workflows" / "cleanup-binding" / f"{common_prefix}.json"
@@ -127,7 +180,19 @@ def cleanup_binding_receipt_write(
     git: Git | None = None,
     storage_repository_root: Path | None = None,
 ) -> Path:
-    """Bind one sealed manifest declaration before external task-resource mutation."""
+    """Bind one sealed manifest declaration before external task-resource mutation.
+
+    Args:
+        repository_root: Repository root.
+        common_prefix: Exact task common prefix.
+        provider_state_generation: Provider state generation.
+        sealed_specification_sha256: Sealed specification sha-256.
+        git: Git command boundary.
+        storage_repository_root: Storage repository root.
+
+    Returns:
+        Resolved filesystem path.
+    """
 
     if provider_state_generation < 1:
         raise GoalLifecycleError("Cleanup binding provider-state generation must be positive")
@@ -167,7 +232,19 @@ def cleanup_binding_receipt_validate(
     git: Git | None = None,
     storage_repository_root: Path | None = None,
 ) -> dict[str, Any]:
-    """Require an exact current receipt before task-scoped external mutation."""
+    """Require an exact current receipt before task-scoped external mutation.
+
+    Args:
+        repository_root: Repository root.
+        common_prefix: Exact task common prefix.
+        provider_state_generation: Provider state generation.
+        sealed_specification_sha256: Sealed specification sha-256.
+        git: Git command boundary.
+        storage_repository_root: Storage repository root.
+
+    Returns:
+        Validated cleanup-binding receipt payload.
+    """
 
     manifest = bootstrap_manifest_load(repository_root / BOOTSTRAP_MANIFEST_NAME)
     path = cleanup_binding_receipt_path_get(

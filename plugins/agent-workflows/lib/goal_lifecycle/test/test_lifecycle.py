@@ -44,6 +44,17 @@ PREFIX = "2026-08-01-test-goal"
 
 
 def _git(repository: Path, *argument_list: str, input_text: str | None = None) -> str:
+    """Run one checked Git command inside an isolated test repository.
+
+    Args:
+        repository: Exact Git repository root.
+        *argument_list: Exact command arguments.
+        input_text: Optional standard input text.
+
+    Returns:
+        Resulting text value.
+    """
+
     result = subprocess.run(
         ["git", "-C", str(repository), *argument_list],
         check=True,
@@ -55,6 +66,16 @@ def _git(repository: Path, *argument_list: str, input_text: str | None = None) -
 
 
 def _git_returncode(repository: Path, *argument_list: str) -> int:
+    """Run one Git command and return its exit status without raising.
+
+    Args:
+        repository: Exact Git repository root.
+        *argument_list: Exact command arguments.
+
+    Returns:
+        Git subprocess exit status.
+    """
+
     return subprocess.run(
         ["git", "-C", str(repository), *argument_list],
         check=False,
@@ -63,6 +84,16 @@ def _git_returncode(repository: Path, *argument_list: str) -> int:
 
 
 def _repository_create(workspace: Path, name: str) -> tuple[Path, Path]:
+    """Create one isolated Git repository with a published main branch.
+
+    Args:
+        workspace: Workspace.
+        name: Canonical name.
+
+    Returns:
+        The repository.
+    """
+
     remote = workspace / f"{name}.git"
     root = workspace / name
     subprocess.run(
@@ -81,7 +112,13 @@ def _repository_create(workspace: Path, name: str) -> tuple[Path, Path]:
 
 
 def _submodule_attach(parent: Path, *, remote: Path, path: str) -> None:
-    """Attach and publish one local test submodule at an exact recursive path."""
+    """Attach and publish one local test submodule at an exact recursive path.
+
+    Args:
+        parent: Parent.
+        remote: Remote.
+        path: Exact filesystem path.
+    """
 
     _git(
         parent,
@@ -101,7 +138,15 @@ def _active_task_create(
     *,
     project_name_list: tuple[str, ...] = ("product-one",),
 ) -> tuple[Path, list[Path], GoalWorktreeWorkflow]:
-    """Create one active task with clean implementation worktrees."""
+    """Create one active task with clean implementation worktrees.
+
+    Args:
+        workspace: Workspace.
+        project_name_list: Ordered project name values.
+
+    Returns:
+        One active task with clean implementation worktrees.
+    """
 
     goals, _ = _repository_create(workspace, "project-goals")
     project_list = [_repository_create(workspace, name)[0] for name in project_name_list]
@@ -122,7 +167,15 @@ def _active_task_create(
 
 
 def _task_commit_push(task_root: Path, *, message: str = "Close task") -> str:
-    """Commit every current task change and push the exact task branch."""
+    """Commit every current task change and push the exact task branch.
+
+    Args:
+        task_root: Task root.
+        message: Message.
+
+    Returns:
+        Resulting text value.
+    """
 
     _git(task_root, "add", "-A")
     _git(task_root, "commit", "-m", message)
@@ -133,6 +186,12 @@ def _task_commit_push(task_root: Path, *, message: str = "Close task") -> str:
 def test_strict_yaml_rejects_duplicate_anchor_tag_and_wrong_extension(
     tmp_path: Path,
 ) -> None:
+    """Verify that strict YAML rejects duplicate anchor tag and wrong extension.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
+
     for index, text in enumerate(
         (
             "schema_version: 2\nschema_version: 2\n",
@@ -153,7 +212,11 @@ def test_strict_yaml_rejects_duplicate_anchor_tag_and_wrong_extension(
 def test_strict_yaml_uses_yaml_1_2_core_scalars_without_global_loader_mutation(
     tmp_path: Path,
 ) -> None:
-    """Lifecycle YAML must not inherit YAML 1.1 scalars or alter other loaders."""
+    """Lifecycle YAML must not inherit YAML 1.1 scalars or alter other loaders.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
 
     path = tmp_path / "scalars.yaml"
     path.write_text(
@@ -185,6 +248,12 @@ scientific: 1e3
 
 
 def test_bootstrap_manifest_rejects_unknown_cleanup_placeholder(tmp_path: Path) -> None:
+    """Verify that bootstrap manifest rejects unknown cleanup placeholder.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
+
     path = tmp_path / "worktree-bootstrap.yaml"
     path.write_text(
         """schema_version: 2
@@ -205,6 +274,12 @@ cleanup:
 def test_coordination_publication_returns_clean_synchronized_main(
     tmp_path: Path,
 ) -> None:
+    """Verify that coordination publication returns clean synchronized main.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
+
     goals, _ = _repository_create(tmp_path, "project-goals")
     coordination = CoordinationRepository(goals)
     commit = coordination.publish(
@@ -219,7 +294,11 @@ def test_coordination_publication_returns_clean_synchronized_main(
 
 
 def test_coordination_publication_rejects_unknown_task_artifact(tmp_path: Path) -> None:
-    """The direct-main transaction must not widen the closed task-directory schema."""
+    """The direct-main transaction must not widen the closed task-directory schema.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
 
     goals, _ = _repository_create(tmp_path, "project-goals")
 
@@ -234,7 +313,11 @@ def test_coordination_publication_rejects_unknown_task_artifact(tmp_path: Path) 
 def test_prepare_rejects_duplicate_repository_before_publication(
     tmp_path: Path,
 ) -> None:
-    """One participant may appear only once in task identity."""
+    """One participant may appear only once in task identity.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
 
     goals, _ = _repository_create(tmp_path, "project-goals")
     project, _ = _repository_create(tmp_path, "product-one")
@@ -254,6 +337,12 @@ def test_prepare_rejects_duplicate_repository_before_publication(
 def test_prepare_expands_but_never_implicitly_removes_the_top_level_set(
     tmp_path: Path,
 ) -> None:
+    """Verify that prepare expands but never implicitly removes the top level set.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
+
     goals, _ = _repository_create(tmp_path, "project-goals")
     first, _ = _repository_create(tmp_path, "product-one")
     second, _ = _repository_create(tmp_path, "product-two")
@@ -276,6 +365,12 @@ def test_prepare_expands_but_never_implicitly_removes_the_top_level_set(
 def test_task_owned_submodule_has_its_own_branch_manifest_state_replica_and_no_silent_removal(
     tmp_path: Path,
 ) -> None:
+    """Verify that task owned submodule has its own branch manifest state replica and no silent removal.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
+
     goals, _ = _repository_create(tmp_path, "project-goals")
     project, _ = _repository_create(tmp_path, "product-one")
     provider, provider_remote = _repository_create(tmp_path, "provider")
@@ -333,6 +428,12 @@ resource:
 def test_checkpoint_merge_and_delete_publish_task_owned_submodule_before_its_parent(
     tmp_path: Path,
 ) -> None:
+    """Verify that checkpoint merge and delete publish task owned submodule before its parent.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
+
     goals, _ = _repository_create(tmp_path, "project-goals")
     project, _ = _repository_create(tmp_path, "product-one")
     provider, provider_remote = _repository_create(tmp_path, "provider")
@@ -380,6 +481,12 @@ def test_checkpoint_merge_and_delete_publish_task_owned_submodule_before_its_par
 def test_nested_task_owned_submodule_requires_every_submodule_ancestor(
     tmp_path: Path,
 ) -> None:
+    """Verify that nested task owned submodule requires every submodule ancestor.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
+
     goals, _ = _repository_create(tmp_path, "project-goals")
     project, _ = _repository_create(tmp_path, "product-one")
     parent, parent_remote = _repository_create(tmp_path, "provider-parent")
@@ -401,6 +508,12 @@ def test_nested_task_owned_submodule_requires_every_submodule_ancestor(
 def test_dirty_read_only_submodule_is_preserved_and_clean_commit_drift_is_repaired(
     tmp_path: Path,
 ) -> None:
+    """Verify that dirty read only submodule is preserved and clean commit drift is repaired.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
+
     goals, _ = _repository_create(tmp_path, "project-goals")
     project, _ = _repository_create(tmp_path, "product-one")
     _provider, provider_remote = _repository_create(tmp_path, "provider")
@@ -433,7 +546,11 @@ def test_dirty_read_only_submodule_is_preserved_and_clean_commit_drift_is_repair
 def test_seal_rejects_prepopulated_checkpoint_before_goal_publication(
     tmp_path: Path,
 ) -> None:
-    """No checkpoint may predate successful persistent-goal activation."""
+    """No checkpoint may predate successful persistent-goal activation.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
 
     goals, _ = _repository_create(tmp_path, "project-goals")
     project, _ = _repository_create(tmp_path, "product-one")
@@ -482,10 +599,27 @@ class _CrashAtCoordinationGitBoundary(Git):
     """Lose the process once at one exact direct-main publication boundary."""
 
     def __init__(self, *, boundary: str) -> None:
+        """Initialize the crash at coordination Git boundary dependencies.
+
+        Args:
+            boundary: Boundary.
+        """
+
         self._boundary = boundary
         self.did_crash = False
 
     def run(self, repository: Path, argument_list: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        """Run the crash at coordination Git boundary operation.
+
+        Args:
+            repository: Exact Git repository root.
+            argument_list: Exact command arguments.
+            **kwargs: Provider keyword arguments.
+
+        Returns:
+            Completed binary-mode subprocess result.
+        """
+
         if (
             not self.did_crash
             and self._boundary == "before-push"
@@ -504,6 +638,13 @@ class _CrashAtCoordinationGitBoundary(Git):
 
 @pytest.mark.parametrize("boundary", ["before-push", "after-local-merge"])
 def test_coordination_publication_resumes_without_duplicate_commit(tmp_path: Path, boundary: str) -> None:
+    """Verify that coordination publication resumes without duplicate commit.
+
+    Args:
+        tmp_path: Temporary directory path.
+        boundary: Boundary.
+    """
+
     goals, _ = _repository_create(tmp_path, "project-goals")
     baseline = _git(goals, "rev-parse", "HEAD")
     payload = {f"{PREFIX}/spec.md": b"stable bytes\n"}
@@ -534,7 +675,11 @@ def test_coordination_publication_resumes_without_duplicate_commit(tmp_path: Pat
 def test_coordination_recovery_fast_forwards_after_a_later_disjoint_publication(
     tmp_path: Path,
 ) -> None:
-    """A pushed operation remains resumable when another task advances main after the local merge."""
+    """A pushed operation remains resumable when another task advances main after the local merge.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
 
     goals, remote = _repository_create(tmp_path, "project-goals")
     payload = {f"{PREFIX}/spec.md": b"stable bytes\n"}
@@ -574,7 +719,11 @@ def test_coordination_recovery_fast_forwards_after_a_later_disjoint_publication(
 def test_coordination_recovery_rejects_a_later_same_task_publication(
     tmp_path: Path,
 ) -> None:
-    """A pushed-but-interrupted delta cannot hide a later same-path replacement."""
+    """A pushed-but-interrupted delta cannot hide a later same-path replacement.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
 
     goals, remote = _repository_create(tmp_path, "project-goals")
     task_path = f"{PREFIX}/spec.md"
@@ -610,6 +759,12 @@ def test_coordination_recovery_rejects_a_later_same_task_publication(
 def test_complete_prepare_checkpoint_merge_accept_and_delete_lifecycle(
     tmp_path: Path,
 ) -> None:
+    """Verify that complete prepare checkpoint merge accept and delete lifecycle.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
+
     goals, _ = _repository_create(tmp_path, "project-goals")
     project, _ = _repository_create(tmp_path, "product-one")
     spec_input = tmp_path / "spec-input.md"
@@ -717,7 +872,11 @@ def test_complete_prepare_checkpoint_merge_accept_and_delete_lifecycle(
 def test_goal_delete_rejects_a_cleanup_manifest_changed_in_main_after_acceptance(
     tmp_path: Path,
 ) -> None:
-    """Deletion stops when clean synchronized main no longer carries the sealed hook."""
+    """Deletion stops when clean synchronized main no longer carries the sealed hook.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
 
     goals, _ = _repository_create(tmp_path, "project-goals")
     project, _ = _repository_create(tmp_path, "product-one")
@@ -791,6 +950,15 @@ cleanup:
 
 
 def _accepted_task_create(tmp_path: Path) -> tuple[Path, list[Path]]:
+    """Create one fully checkpointed and accepted multi-repository task fixture.
+
+    Args:
+        tmp_path: Temporary directory path.
+
+    Returns:
+        The accepted task.
+    """
+
     goals, task_root_list, _workflow = _active_task_create(tmp_path)
     for task_root in task_root_list:
         _task_commit_push(task_root)
@@ -807,7 +975,11 @@ def _accepted_task_create(tmp_path: Path) -> tuple[Path, list[Path]]:
 def test_goal_merge_keeps_selected_commit_when_task_ref_advances(
     tmp_path: Path,
 ) -> None:
-    """A later descendant task commit cannot replace an already selected checkpoint."""
+    """A later descendant task commit cannot replace an already selected checkpoint.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
 
     goals, task_root_list, _workflow = _active_task_create(tmp_path)
     task_root = task_root_list[0]
@@ -833,7 +1005,11 @@ def test_goal_merge_keeps_selected_commit_when_task_ref_advances(
 def test_goal_merge_and_accept_require_synchronized_coordination_main(
     tmp_path: Path,
 ) -> None:
-    """Never select or accept a checkpoint from a stale local coordination tree."""
+    """Never select or accept a checkpoint from a stale local coordination tree.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
 
     goals, task_root_list, _workflow = _active_task_create(tmp_path)
     _task_commit_push(task_root_list[0])
@@ -857,7 +1033,11 @@ def test_goal_merge_and_accept_require_synchronized_coordination_main(
 
 
 def test_goal_checkpoint_rejects_a_changed_repository_origin(tmp_path: Path) -> None:
-    """Checkpoint publication remains bound to the sealed full origin identity."""
+    """Checkpoint publication remains bound to the sealed full origin identity.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
 
     goals, task_root_list, _workflow = _active_task_create(tmp_path)
     task_root = task_root_list[0]
@@ -886,7 +1066,11 @@ def test_goal_checkpoint_rejects_a_changed_repository_origin(tmp_path: Path) -> 
 def test_goal_checkpoint_rejects_drifted_ignored_bootstrap_resource(
     tmp_path: Path,
 ) -> None:
-    """A clean pushed Git ref cannot hide drift in its active task resources."""
+    """A clean pushed Git ref cannot hide drift in its active task resources.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
 
     goals, _ = _repository_create(tmp_path, "project-goals")
     project, _ = _repository_create(tmp_path, "product-one")
@@ -933,7 +1117,11 @@ resource:
 
 
 def test_goal_merge_rejects_a_changed_repository_origin(tmp_path: Path) -> None:
-    """Merge compare-and-swap must never publish into a replacement remote."""
+    """Merge compare-and-swap must never publish into a replacement remote.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
 
     goals, task_root_list, _workflow = _active_task_create(tmp_path)
     task_root = task_root_list[0]
@@ -967,6 +1155,13 @@ def test_state_replication_recovers_when_replica_write_precedes_commit_marker(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Verify that state replication recovers when replica write precedes commit marker.
+
+    Args:
+        tmp_path: Temporary directory path.
+        monkeypatch: Pytest mutation fixture.
+    """
+
     goals, _ = _repository_create(tmp_path, "project-goals")
     project, _ = _repository_create(tmp_path, "product-one")
     spec_input = tmp_path / "spec-input.md"
@@ -983,6 +1178,13 @@ def test_state_replication_recovers_when_replica_write_precedes_commit_marker(
     crashed = False
 
     def crash_after_replica(path: Path, payload: dict[str, object]) -> None:
+        """Inject a crash after the first non-coordination replica write.
+
+        Args:
+            path: Exact filesystem path.
+            payload: Structured operation payload.
+        """
+
         nonlocal crashed
         real_atomic_json_write(path, payload)
         if not crashed and path.name == "state.json" and path != coordination_state_path:
@@ -1010,7 +1212,12 @@ def test_state_replication_recovers_one_partial_multi_repository_generation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """One durable journal closes a crash between distinct repository replicas."""
+    """One durable journal closes a crash between distinct repository replicas.
+
+    Args:
+        tmp_path: Temporary directory path.
+        monkeypatch: Pytest mutation fixture.
+    """
 
     goals, _ = _repository_create(tmp_path, "project-goals")
     first, _ = _repository_create(tmp_path, "product-one")
@@ -1045,6 +1252,13 @@ def test_state_replication_recovers_one_partial_multi_repository_generation(
     crashed = False
 
     def crash_between_repositories(path: Path, payload: dict[str, object]) -> None:
+        """Inject a crash between two repository replica writes.
+
+        Args:
+            path: Exact filesystem path.
+            payload: Structured operation payload.
+        """
+
         nonlocal crashed
         real_atomic_json_write(path, payload)
         if not crashed and path == replica_path_list[0]:
@@ -1066,7 +1280,11 @@ def test_state_replication_recovers_one_partial_multi_repository_generation(
 def test_state_replication_restores_a_missing_authoritative_state_from_exact_index(
     tmp_path: Path,
 ) -> None:
-    """The private replica index permits recovery without a workspace scan."""
+    """The private replica index permits recovery without a workspace scan.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
 
     goals, _ = _repository_create(tmp_path, "project-goals")
     project, _ = _repository_create(tmp_path, "product-one")
@@ -1090,7 +1308,11 @@ def test_state_replication_restores_a_missing_authoritative_state_from_exact_ind
 def test_private_task_state_rejects_empty_or_unsorted_repository_set(
     tmp_path: Path,
 ) -> None:
-    """Closed private state never accepts an ambiguous participant identity."""
+    """Closed private state never accepts an ambiguous participant identity.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
 
     goals, _task_root_list, _workflow = _active_task_create(
         tmp_path,
@@ -1119,6 +1341,13 @@ def test_merge_acceptance_resumes_after_durable_accepted_phase(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Verify that merge acceptance resumes after durable accepted phase.
+
+    Args:
+        tmp_path: Temporary directory path.
+        monkeypatch: Pytest mutation fixture.
+    """
+
     goals, task_root_list, _workflow = _active_task_create(tmp_path)
     _task_commit_push(task_root_list[0])
     checkpoint_id, _ = GoalCheckpointPublisher(goals).publish(
@@ -1131,6 +1360,13 @@ def test_merge_acceptance_resumes_after_durable_accepted_phase(
     crashed = False
 
     def crash_after_accepted(path: Path, payload: dict[str, object]) -> None:
+        """Inject a crash after the merge journal durably reaches accepted.
+
+        Args:
+            path: Exact filesystem path.
+            payload: Structured operation payload.
+        """
+
         nonlocal crashed
         real_atomic_json_write(path, payload)
         if not crashed and path.name == "merge-journal.json" and payload.get("phase") == "accepted":
@@ -1165,11 +1401,26 @@ def test_goal_delete_resumes_after_every_durable_phase(
     monkeypatch: pytest.MonkeyPatch,
     phase: str,
 ) -> None:
+    """Verify that goal delete resumes after every durable phase.
+
+    Args:
+        tmp_path: Temporary directory path.
+        monkeypatch: Pytest mutation fixture.
+        phase: Phase.
+    """
+
     goals, task_root_list = _accepted_task_create(tmp_path)
     real_atomic_json_write = delete_module.atomic_json_write
     crashed = False
 
     def crash_after_phase(path: Path, payload: dict[str, object]) -> None:
+        """Inject a crash after the selected deletion phase is durable.
+
+        Args:
+            path: Exact filesystem path.
+            payload: Structured operation payload.
+        """
+
         nonlocal crashed
         real_atomic_json_write(path, payload)
         if not crashed and path.name == "delete-journal.json" and payload.get("phase") == phase:
@@ -1190,6 +1441,13 @@ def test_goal_delete_retires_project_external_cleanup_journal_only_in_final_stat
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Verify that goal delete retires project external cleanup journal only in final state phase.
+
+    Args:
+        tmp_path: Temporary directory path.
+        monkeypatch: Pytest mutation fixture.
+    """
+
     goals, _task_root_list = _accepted_task_create(tmp_path)
     main_root = tmp_path / "product-one"
     external_journal = (
@@ -1204,6 +1462,13 @@ def test_goal_delete_retires_project_external_cleanup_journal_only_in_final_stat
     crashed = False
 
     def crash_before_worktrees(path: Path, payload: dict[str, object]) -> None:
+        """Inject a crash immediately before Git worktree retirement.
+
+        Args:
+            path: Exact filesystem path.
+            payload: Structured operation payload.
+        """
+
         nonlocal crashed
         real_atomic_json_write(path, payload)
         if not crashed and path.name == "delete-journal.json" and payload.get("phase") == "worktrees":
@@ -1221,6 +1486,12 @@ def test_goal_delete_retires_project_external_cleanup_journal_only_in_final_stat
 
 
 def test_goal_delete_rejects_absence_before_durable_journal(tmp_path: Path) -> None:
+    """Verify that goal delete rejects absence before durable journal.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
+
     goals, task_root_list = _accepted_task_create(tmp_path)
     _git(tmp_path / "product-one", "worktree", "remove", str(task_root_list[0]))
     with pytest.raises(GoalLifecycleError, match="absent before deletion was journaled"):
@@ -1231,7 +1502,12 @@ def test_goal_delete_resume_rechecks_clean_synchronized_main(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A durable journal never bypasses the main checkout execution boundary."""
+    """A durable journal never bypasses the main checkout execution boundary.
+
+    Args:
+        tmp_path: Temporary directory path.
+        monkeypatch: Pytest mutation fixture.
+    """
 
     goals, _task_root_list = _accepted_task_create(tmp_path)
     main_root = tmp_path / "product-one"
@@ -1239,6 +1515,13 @@ def test_goal_delete_resume_rechecks_clean_synchronized_main(
     crashed = False
 
     def crash_after_journal(path: Path, payload: dict[str, object]) -> None:
+        """Inject a crash immediately after the durable deletion journal.
+
+        Args:
+            path: Exact filesystem path.
+            payload: Structured operation payload.
+        """
+
         nonlocal crashed
         real_atomic_json_write(path, payload)
         if not crashed and path.name == "delete-journal.json":
@@ -1259,7 +1542,12 @@ def test_goal_delete_resume_rechecks_task_commit_before_worktree_removal(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A post-journal task commit must stop deletion before its worktree is removed."""
+    """A post-journal task commit must stop deletion before its worktree is removed.
+
+    Args:
+        tmp_path: Temporary directory path.
+        monkeypatch: Pytest mutation fixture.
+    """
 
     goals, task_root_list = _accepted_task_create(tmp_path)
     task_root = task_root_list[0]
@@ -1267,6 +1555,13 @@ def test_goal_delete_resume_rechecks_task_commit_before_worktree_removal(
     crashed = False
 
     def crash_at_worktree_phase(path: Path, payload: dict[str, object]) -> None:
+        """Inject a crash while the deletion journal owns the worktree phase.
+
+        Args:
+            path: Exact filesystem path.
+            payload: Structured operation payload.
+        """
+
         nonlocal crashed
         real_atomic_json_write(path, payload)
         if not crashed and path.name == "delete-journal.json" and payload.get("phase") == "worktrees":
@@ -1291,7 +1586,12 @@ def test_goal_delete_remote_ref_removal_is_compare_and_swap(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A concurrent remote task update must survive the destructive push boundary."""
+    """A concurrent remote task update must survive the destructive push boundary.
+
+    Args:
+        tmp_path: Temporary directory path.
+        monkeypatch: Pytest mutation fixture.
+    """
 
     goals, _task_root_list = _accepted_task_create(tmp_path)
     main_root = tmp_path / "product-one"
@@ -1323,6 +1623,17 @@ def test_goal_delete_remote_ref_removal_is_compare_and_swap(
         argument_list: list[str],
         **keyword_by_name_map: object,
     ) -> subprocess.CompletedProcess[bytes]:
+        """Advance the simulated remote immediately before deletion authorization.
+
+        Args:
+            repository: Exact Git repository root.
+            argument_list: Exact command arguments.
+            **keyword_by_name_map: Additional keyword arguments.
+
+        Returns:
+            Completed binary-mode subprocess result.
+        """
+
         nonlocal remote_advanced
         if (
             not remote_advanced
@@ -1345,6 +1656,12 @@ def test_goal_delete_remote_ref_removal_is_compare_and_swap(
 
 
 def test_coordination_rejects_unrelated_dirty_state(tmp_path: Path) -> None:
+    """Verify that coordination rejects unrelated dirty state.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
+
     goals, _ = _repository_create(tmp_path, "project-goals")
     (goals / "dirty.txt").write_text("user state\n", encoding="utf-8")
     with pytest.raises(GoalLifecycleError, match="clean"):
@@ -1356,6 +1673,12 @@ def test_coordination_rejects_unrelated_dirty_state(tmp_path: Path) -> None:
 
 
 def test_recover_main_leak_restores_only_complete_task_overlap(tmp_path: Path) -> None:
+    """Verify that recover main leak restores only complete task overlap.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
+
     goals, _ = _repository_create(tmp_path, "project-goals")
     project, _ = _repository_create(tmp_path, "product-one")
     spec_input = tmp_path / "spec-input.md"
@@ -1394,7 +1717,13 @@ def test_recover_main_leak_uses_only_changed_main_paths_for_tree_overlap(
     task_path: str,
     main_path: str,
 ) -> None:
-    """Ancestor overlap must never manufacture task-only paths for main recovery."""
+    """Ancestor overlap must never manufacture task-only paths for main recovery.
+
+    Args:
+        tmp_path: Temporary directory path.
+        task_path: Exact filesystem path for task.
+        main_path: Exact filesystem path for main.
+    """
 
     goals, _ = _repository_create(tmp_path, "project-goals")
     project, _ = _repository_create(tmp_path, "product-one")
@@ -1430,6 +1759,12 @@ def test_recover_main_leak_uses_only_changed_main_paths_for_tree_overlap(
 def test_accept_main_commit_drift_is_exact_and_does_not_cover_later_commit(
     tmp_path: Path,
 ) -> None:
+    """Verify that accept main commit drift is exact and does not cover later commit.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
+
     goals, _ = _repository_create(tmp_path, "project-goals")
     project, _ = _repository_create(tmp_path, "product-one")
     spec_input = tmp_path / "spec-input.md"
@@ -1467,6 +1802,12 @@ def test_accept_main_commit_drift_is_exact_and_does_not_cover_later_commit(
 def test_sealed_candidate_rejects_prepare_before_coordination_mutation(
     tmp_path: Path,
 ) -> None:
+    """Verify that sealed candidate rejects prepare before coordination mutation.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
+
     goals, _ = _repository_create(tmp_path, "project-goals")
     project, _ = _repository_create(tmp_path, "product-one")
     spec_input = tmp_path / "spec-input.md"
@@ -1497,6 +1838,12 @@ def test_sealed_candidate_rejects_prepare_before_coordination_mutation(
 
 
 def test_copy_resource_rejects_hardlinked_source_graph(tmp_path: Path) -> None:
+    """Verify that copy resource rejects hardlinked source graph.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
+
     goals, _ = _repository_create(tmp_path, "project-goals")
     project, _ = _repository_create(tmp_path, "product-one")
     (project / ".gitignore").write_text("/secret/\n", encoding="utf-8")
@@ -1534,6 +1881,13 @@ def test_copy_resource_recovers_an_interrupted_private_staging_copy(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Verify that copy resource recovers an interrupted private staging copy.
+
+    Args:
+        tmp_path: Temporary directory path.
+        monkeypatch: Pytest mutation fixture.
+    """
+
     goals, _ = _repository_create(tmp_path, "project-goals")
     project, _ = _repository_create(tmp_path, "product-one")
     (project / ".gitignore").write_text("/private/\n", encoding="utf-8")
@@ -1561,6 +1915,13 @@ resource:
     crashed = False
 
     def interrupted_copy(_source: Path, destination: Path) -> None:
+        """Leave one partial private staging tree and inject copy failure.
+
+        Args:
+            _source: Source filesystem path.
+            destination: Destination.
+        """
+
         nonlocal crashed
         if not crashed:
             crashed = True
@@ -1603,6 +1964,12 @@ resource:
 def test_bootstrap_copy_preserves_internal_links_and_rejects_escape(
     tmp_path: Path,
 ) -> None:
+    """Verify that bootstrap copy preserves internal links and rejects escape.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
+
     goals, _ = _repository_create(tmp_path, "project-goals")
     project, _ = _repository_create(tmp_path, "product-one")
     (project / ".gitignore").write_text("/private/\n", encoding="utf-8")
@@ -1644,6 +2011,12 @@ resource:
 def test_active_receipt_generation_is_stable_and_stale_receipt_is_rejected(
     tmp_path: Path,
 ) -> None:
+    """Verify that active receipt generation is stable and stale receipt is rejected.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
+
     goals, task_root_list, workflow = _active_task_create(tmp_path)
     task_root = task_root_list[0]
     state_path = (
@@ -1683,6 +2056,12 @@ def test_active_receipt_generation_is_stable_and_stale_receipt_is_rejected(
 def test_checkpoint_document_rejects_noncanonical_or_self_referential_project_path(
     project_path: str,
 ) -> None:
+    """Verify that checkpoint document rejects noncanonical or self referential project path.
+
+    Args:
+        project_path: Exact filesystem path for project.
+    """
+
     with pytest.raises(GoalLifecycleError):
         CheckpointDocument.from_payload(
             {
@@ -1734,10 +2113,27 @@ class _CrashAfterImplementationMainPushGit(Git):
     """Simulate process loss after remote CAS succeeds but before local fast-forward."""
 
     def __init__(self, *, implementation_root: Path) -> None:
+        """Initialize the crash after implementation main push Git dependencies.
+
+        Args:
+            implementation_root: Implementation root.
+        """
+
         self._implementation_root = implementation_root.resolve(strict=True)
         self.did_crash = False
 
     def run(self, repository: Path, argument_list: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        """Run the crash after implementation main push Git operation.
+
+        Args:
+            repository: Exact Git repository root.
+            argument_list: Exact command arguments.
+            **kwargs: Provider keyword arguments.
+
+        Returns:
+            Completed binary-mode subprocess result.
+        """
+
         result = super().run(repository, argument_list, **kwargs)
         if (
             not self.did_crash
@@ -1754,6 +2150,12 @@ class _CrashAfterImplementationMainPushGit(Git):
 def test_merge_resumes_after_remote_push_before_local_fast_forward(
     tmp_path: Path,
 ) -> None:
+    """Verify that merge resumes after remote push before local fast forward.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
+
     goals, task_root_list, _workflow = _active_task_create(tmp_path)
     task_root = task_root_list[0]
     _task_commit_push(task_root)
@@ -1779,6 +2181,12 @@ def test_merge_resumes_after_remote_push_before_local_fast_forward(
 def test_failed_acceptance_is_superseded_only_by_full_descendant_checkpoint(
     tmp_path: Path,
 ) -> None:
+    """Verify that failed acceptance is superseded only by full descendant checkpoint.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
+
     goals, task_root_list, _workflow = _active_task_create(
         tmp_path,
         project_name_list=("product-one", "product-two"),
@@ -1811,7 +2219,11 @@ def test_failed_acceptance_is_superseded_only_by_full_descendant_checkpoint(
 def test_fix_forward_rejects_a_corrupted_previous_checkpoint_journal(
     tmp_path: Path,
 ) -> None:
-    """Only the exact tracked interrupted checkpoint may authorize fix-forward."""
+    """Only the exact tracked interrupted checkpoint may authorize fix-forward.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
 
     goals, task_root_list, _workflow = _active_task_create(tmp_path)
     task_root = task_root_list[0]
@@ -1845,7 +2257,11 @@ def test_fix_forward_rejects_a_corrupted_previous_checkpoint_journal(
 def test_fix_forward_rejects_a_checkpoint_older_than_the_interrupted_checkpoint(
     tmp_path: Path,
 ) -> None:
-    """A resumable partial merge can move only to a newer full checkpoint."""
+    """A resumable partial merge can move only to a newer full checkpoint.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
 
     goals, task_root_list, _workflow = _active_task_create(tmp_path)
     task_root = task_root_list[0]
@@ -1880,7 +2296,12 @@ def test_fix_forward_merge_recovers_after_owner_advance_before_journal_write(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A retry accepts an already-advanced exact owner with the previous journal."""
+    """A retry accepts an already-advanced exact owner with the previous journal.
+
+    Args:
+        tmp_path: Temporary directory path.
+        monkeypatch: Pytest mutation fixture.
+    """
 
     goals, task_root_list, _workflow = _active_task_create(tmp_path)
     task_root = task_root_list[0]
@@ -1900,6 +2321,13 @@ def test_fix_forward_merge_recovers_after_owner_advance_before_journal_write(
     crashed = False
 
     def crash_after_owner_advance(path: Path, payload: dict[str, object]) -> None:
+        """Inject a crash after the accepted-checkpoint owner advances.
+
+        Args:
+            path: Exact filesystem path.
+            payload: Structured operation payload.
+        """
+
         nonlocal crashed
         real_atomic_json_write(path, payload)
         if not crashed and path.name == "merge-owner.json" and payload.get("checkpoint_id") == second_checkpoint_id:
@@ -1920,11 +2348,29 @@ class _ConcurrentCoordinationPushGit(Git):
     """Inject one real remote main commit immediately before the tested CAS push."""
 
     def __init__(self, *, concurrent_root: Path, path: str) -> None:
+        """Initialize the concurrent coordination push Git dependencies.
+
+        Args:
+            concurrent_root: Concurrent root.
+            path: Exact filesystem path.
+        """
+
         self._concurrent_root = concurrent_root
         self._path = path
         self._did_publish = False
 
     def run(self, repository: Path, argument_list: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        """Run the concurrent coordination push Git operation.
+
+        Args:
+            repository: Exact Git repository root.
+            argument_list: Exact command arguments.
+            **kwargs: Provider keyword arguments.
+
+        Returns:
+            Completed binary-mode subprocess result.
+        """
+
         if (
             not self._did_publish
             and len(argument_list) == 3
@@ -1944,6 +2390,12 @@ class _ConcurrentCoordinationPushGit(Git):
 def test_coordination_replays_disjoint_remote_update_and_rejects_same_path_conflict(
     tmp_path: Path,
 ) -> None:
+    """Verify that coordination replays disjoint remote update and rejects same path conflict.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
+
     goals, remote = _repository_create(tmp_path, "project-goals")
     concurrent = tmp_path / "project-goals-concurrent"
     subprocess.run(["git", "clone", str(remote), str(concurrent)], check=True, capture_output=True)
@@ -1977,6 +2429,12 @@ def test_coordination_replays_disjoint_remote_update_and_rejects_same_path_confl
 def test_self_hosting_bootstrap_exception_is_removed_with_carriers_only_by_goal_delete(
     tmp_path: Path,
 ) -> None:
+    """Verify that self hosting bootstrap exception is removed with carriers only by goal delete.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
+
     goals, _ = _repository_create(tmp_path, "project-goals")
     product, _ = _repository_create(tmp_path, "product-one")
     worktree_container = goals / ".worktree"

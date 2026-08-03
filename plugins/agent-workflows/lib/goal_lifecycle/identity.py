@@ -12,7 +12,14 @@ _COMMON_PREFIX_PATTERN = re.compile(r"20[0-9]{2}-[0-9]{2}-[0-9]{2}-[a-z0-9][a-z0
 
 
 def common_prefix_validate(value: str) -> str:
-    """Validate the one filesystem and branch-safe task identity."""
+    """Validate the one filesystem and branch-safe task identity.
+
+    Args:
+        value: Candidate value.
+
+    Returns:
+        Resulting text value.
+    """
 
     if _COMMON_PREFIX_PATTERN.fullmatch(value) is None or len(value) > 120:
         raise GoalLifecycleError("Task common prefix is not a canonical dated semantic basename")
@@ -20,7 +27,15 @@ def common_prefix_validate(value: str) -> str:
 
 
 def commit_validate(value: object, *, label: str) -> str:
-    """Return one exact lowercase full Git commit identity."""
+    """Return one exact lowercase full Git commit identity.
+
+    Args:
+        value: Candidate value.
+        label: Diagnostic owner label.
+
+    Returns:
+        One exact lowercase full Git commit identity.
+    """
 
     if not isinstance(value, str) or _COMMIT_PATTERN.fullmatch(value) is None:
         raise GoalLifecycleError(f"{label} must be one full lowercase Git commit")
@@ -28,7 +43,14 @@ def commit_validate(value: object, *, label: str) -> str:
 
 
 def checkpoint_project_path_validate(value: object) -> str:
-    """Validate one workspace-relative checkpoint repository path."""
+    """Validate one workspace-relative checkpoint repository path.
+
+    Args:
+        value: Candidate value.
+
+    Returns:
+        Resulting text value.
+    """
 
     if not isinstance(value, str) or not value or "\\" in value or "\x00" in value:
         raise GoalLifecycleError("Checkpoint project_path is invalid")
@@ -41,7 +63,15 @@ def checkpoint_project_path_validate(value: object) -> str:
 
 
 def repository_relative_path_validate(value: object, *, label: str) -> str:
-    """Validate one literal normalized path owned by a repository."""
+    """Validate one literal normalized path owned by a repository.
+
+    Args:
+        value: Candidate value.
+        label: Diagnostic owner label.
+
+    Returns:
+        Resulting text value.
+    """
 
     if not isinstance(value, str) or not value or "\\" in value or "\x00" in value:
         raise GoalLifecycleError(f"{label} is invalid")
@@ -54,7 +84,15 @@ def repository_relative_path_validate(value: object, *, label: str) -> str:
 
 
 def workspace_repository_resolve(workspace_root: Path, project_path: str) -> Path:
-    """Resolve one checkpoint project without symlink or parent escape."""
+    """Resolve one checkpoint project without symlink or parent escape.
+
+    Args:
+        workspace_root: Workspace root.
+        project_path: Exact filesystem path for project.
+
+    Returns:
+        One checkpoint project without symlink or parent escape.
+    """
 
     checkpoint_project_path_validate(project_path)
     workspace = workspace_root.resolve(strict=True)

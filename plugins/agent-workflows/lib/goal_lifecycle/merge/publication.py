@@ -16,6 +16,13 @@ class CheckpointMainPublisher:
     """Preflight, publish, resume, and prove exact checkpoint commits on main."""
 
     def __init__(self, coordination: CoordinationRepository, *, git: Git) -> None:
+        """Initialize the checkpoint main publisher dependencies.
+
+        Args:
+            coordination: Coordination.
+            git: Git command boundary.
+        """
+
         self._coordination = coordination
         self._git = git
 
@@ -26,7 +33,13 @@ class CheckpointMainPublisher:
         common_prefix: str,
         expected_origin_by_project_path_map: dict[str, str],
     ) -> None:
-        """Prove every main and exact task ref before the first mutation."""
+        """Prove every main and exact task ref before the first mutation.
+
+        Args:
+            checkpoint: Checkpoint.
+            common_prefix: Exact task common prefix.
+            expected_origin_by_project_path_map: Expected origin by project path map.
+        """
 
         workspace_root = self._coordination.root.parent
         for project in checkpoint.project_list:
@@ -68,7 +81,13 @@ class CheckpointMainPublisher:
         journal: dict[str, object],
         journal_path: Path,
     ) -> None:
-        """Resume compare-and-swap main publication from one durable journal."""
+        """Resume compare-and-swap main publication from one durable journal.
+
+        Args:
+            expected_origin_by_project_path_map: Expected origin by project path map.
+            journal: Journal.
+            journal_path: Exact filesystem path for journal.
+        """
 
         workspace_root = self._coordination.root.parent
         project_payload_list = journal["project_list"]
@@ -117,7 +136,12 @@ class CheckpointMainPublisher:
         *,
         expected_origin_by_project_path_map: dict[str, str],
     ) -> None:
-        """Require local and remote main to equal every exact selected commit."""
+        """Require local and remote main to equal every exact selected commit.
+
+        Args:
+            checkpoint: Checkpoint.
+            expected_origin_by_project_path_map: Expected origin by project path map.
+        """
 
         workspace_root = self._coordination.root.parent
         for project in checkpoint.project_list:
@@ -143,7 +167,12 @@ class CheckpointMainPublisher:
         *,
         previous_by_path_map: dict[str, str],
     ) -> None:
-        """Require every replacement commit to descend from the partial merge snapshot."""
+        """Require every replacement commit to descend from the partial merge snapshot.
+
+        Args:
+            checkpoint: Checkpoint.
+            previous_by_path_map: Previous by path mapping.
+        """
 
         workspace_root = self._coordination.root.parent
         for project in checkpoint.project_list:
@@ -162,12 +191,24 @@ class CheckpointMainPublisher:
         project_path: str,
         expected_origin_by_project_path_map: dict[str, str],
     ) -> None:
+        """Require the implementation repository origin to match its checkpoint identity.
+
+        Args:
+            root: Exact owner root path.
+            project_path: Exact filesystem path for project.
+            expected_origin_by_project_path_map: Expected origin by project path map.
+        """
+
         expected_origin = expected_origin_by_project_path_map.get(project_path)
         if expected_origin is None or self._git.origin_url_get(root) != expected_origin:
             raise GoalLifecycleError(f"Merge repository origin changed: {project_path}")
 
     def _submodule_checkout_sync(self, root: Path) -> None:
-        """Move clean main-checkout submodules to exact merged gitlinks."""
+        """Move clean main-checkout submodules to exact merged gitlinks.
+
+        Args:
+            root: Exact owner root path.
+        """
 
         if not (root / ".gitmodules").is_file():
             return

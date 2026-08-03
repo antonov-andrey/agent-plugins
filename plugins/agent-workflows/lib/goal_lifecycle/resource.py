@@ -20,6 +20,13 @@ class BootstrapResourceManager:
     """Materialize exact copy/link resources through durable per-path transactions."""
 
     def __init__(self, *, git: Git | None = None, repair_report: TaskRepairReport | None = None) -> None:
+        """Initialize the bootstrap resource manager dependencies.
+
+        Args:
+            git: Git command boundary.
+            repair_report: Repair report.
+        """
+
         self._git = git or Git()
         self._repair_report = repair_report or TaskRepairReport()
 
@@ -31,7 +38,17 @@ class BootstrapResourceManager:
         manifest: BootstrapManifest,
         previous_state_list: tuple[BootstrapResourceState, ...] = (),
     ) -> tuple[BootstrapResourceState, ...]:
-        """Apply one complete manifest without losing an interrupted destination mutation."""
+        """Apply one complete manifest without losing an interrupted destination mutation.
+
+        Args:
+            main_root: Main root.
+            task_root: Task root.
+            manifest: Manifest.
+            previous_state_list: Ordered previous state values.
+
+        Returns:
+            Values in deterministic immutable order.
+        """
 
         submodule_path_set = self._submodule_path_set_get(task_root)
         previous_by_path_map = {item.path: item for item in previous_state_list}
@@ -171,7 +188,13 @@ class BootstrapResourceManager:
         task_root: Path,
         state_list: tuple[BootstrapResourceState, ...],
     ) -> None:
-        """Prove every sealed source and destination without silently repairing drift."""
+        """Prove every sealed source and destination without silently repairing drift.
+
+        Args:
+            main_root: Main root.
+            task_root: Task root.
+            state_list: Ordered state values.
+        """
 
         self._unknown_transaction_reject(task_root, known_path_set={item.path for item in state_list})
         for item in state_list:
@@ -204,7 +227,18 @@ class BootstrapResourceManager:
         previous_fingerprint: str,
         previous_strategy: str,
     ) -> None:
-        """Resume one durable transaction until the exact desired destination is exposed."""
+        """Resume one durable transaction until the exact desired destination is exposed.
+
+        Args:
+            task_root: Task root.
+            path_text: Path text.
+            strategy: Strategy.
+            source: Source.
+            source_fingerprint: Source fingerprint.
+            desired_fingerprint: Desired fingerprint.
+            previous_fingerprint: Previous fingerprint.
+            previous_strategy: Previous strategy.
+        """
 
         transaction_root = self._transaction_path_get(task_root, path_text=path_text)
         transaction_preexisting = transaction_root.exists()
@@ -298,6 +332,12 @@ class BootstrapResourceManager:
             self._repair_report.record(f"bootstrap-resource-transaction-recovered:{task_root}:{path_text}")
 
     def _transaction_retire(self, transaction_root: Path) -> None:
+        """Retire one completed staging transaction after destination exposure proof.
+
+        Args:
+            transaction_root: Transaction root.
+        """
+
         for name in ("replacement", "previous", "metadata.json"):
             path = transaction_root / name
             if path.exists() or path.is_symlink():
@@ -310,6 +350,13 @@ class BootstrapResourceManager:
         directory_sync(parent)
 
     def _unknown_transaction_reject(self, task_root: Path, *, known_path_set: set[str]) -> None:
+        """Reject a destination staging transaction not owned by the current declaration.
+
+        Args:
+            task_root: Task root.
+            known_path_set: Unique known path values.
+        """
+
         root = self._transaction_root_get(task_root)
         if not root.exists():
             return
@@ -321,13 +368,41 @@ class BootstrapResourceManager:
                 raise GoalLifecycleError(f"Unknown bootstrap resource transaction blocks recovery: {candidate}")
 
     def _transaction_root_get(self, task_root: Path) -> Path:
+        """Return the private staging root for one resource transaction.
+
+        Args:
+            task_root: Task root.
+
+        Returns:
+            The transaction root.
+        """
+
         common_prefix = self._git.branch_get(task_root)
         return self._git.common_directory_get(task_root) / "agent-workflows" / "task" / common_prefix / "resource"
 
     def _transaction_path_get(self, task_root: Path, *, path_text: str) -> Path:
+        """Return the private staged object path for one resource transaction.
+
+        Args:
+            task_root: Task root.
+            path_text: Path text.
+
+        Returns:
+            The transaction path.
+        """
+
         return self._transaction_root_get(task_root) / hashlib.sha256(path_text.encode()).hexdigest()
 
     def _submodule_path_set_get(self, task_root: Path) -> set[str]:
+        """Return every committed submodule path below the resource source root.
+
+        Args:
+            task_root: Task root.
+
+        Returns:
+            The submodule path set.
+        """
+
         payload = self._git.run(task_root, ["ls-files", "--stage", "-z"]).stdout
         result: set[str] = set()
         for entry in payload.split(b"\0"):
@@ -343,6 +418,13 @@ class BootstrapResourceManager:
 
 
 def _copy(source: Path, destination: Path) -> None:
+    """Copy one validated resource graph through private atomic staging.
+
+    Args:
+        source: Source.
+        destination: Destination.
+    """
+
     if source.is_symlink():
         raise GoalLifecycleError(f"A top-level bootstrap copy may not be a symbolic link: {source}")
     if source.is_dir():
@@ -354,6 +436,12 @@ def _copy(source: Path, destination: Path) -> None:
 
 
 def _path_remove(path: Path) -> None:
+    """Remove one task-owned path without following a replacement symlink.
+
+    Args:
+        path: Exact filesystem path.
+    """
+
     if path.is_symlink() or path.is_file():
         path.unlink()
     elif path.is_dir():
@@ -363,7 +451,11 @@ def _path_remove(path: Path) -> None:
 
 
 def _tree_sync(path: Path) -> None:
-    """Fsync every copied ordinary file and directory before atomic exposure."""
+    """Fsync every copied ordinary file and directory before atomic exposure.
+
+    Args:
+        path: Exact filesystem path.
+    """
 
     if path.is_file() and not path.is_symlink():
         with path.open("rb") as stream:
@@ -377,6 +469,13 @@ def _tree_sync(path: Path) -> None:
 
 
 def _submodule_crossing_reject(path_text: str, submodule_path_set: set[str]) -> None:
+    """Reject a resource graph that crosses any committed submodule boundary.
+
+    Args:
+        path_text: Path text.
+        submodule_path_set: Unique submodule path values.
+    """
+
     resource_path = PurePosixPath(path_text)
     for submodule_text in submodule_path_set:
         submodule_path = PurePosixPath(submodule_text)
@@ -389,12 +488,32 @@ def _submodule_crossing_reject(path_text: str, submodule_path_set: set[str]) -> 
 
 
 def _resource_destination_fingerprint(path: Path, *, resource_class: str) -> str:
+    """Fingerprint the exact destination graph created by one resource transaction.
+
+    Args:
+        path: Exact filesystem path.
+        resource_class: Resource class.
+
+    Returns:
+        Resulting text value.
+    """
+
     return (
         _link_fingerprint(path) if resource_class.startswith("link_") else _object_fingerprint(path, declared_root=path)
     )
 
 
 def _destination_optional_fingerprint(path: Path, *, strategy: str) -> str:
+    """Fingerprint an optional destination without treating absence as an error.
+
+    Args:
+        path: Exact filesystem path.
+        strategy: Strategy.
+
+    Returns:
+        Resulting text value.
+    """
+
     if not (path.exists() or path.is_symlink()):
         return ""
     if strategy == "link":
@@ -405,6 +524,16 @@ def _destination_optional_fingerprint(path: Path, *, strategy: str) -> str:
 
 
 def _expected_link_fingerprint(*, source: Path, destination: Path) -> str:
+    """Fingerprint one expected symlink without following its target.
+
+    Args:
+        source: Source.
+        destination: Destination.
+
+    Returns:
+        Resulting text value.
+    """
+
     raw_target = os.fsencode(os.path.relpath(source, start=destination.parent))
     digest = hashlib.sha256()
     digest.update(b"L")
@@ -414,6 +543,16 @@ def _expected_link_fingerprint(*, source: Path, destination: Path) -> str:
 
 
 def _object_fingerprint(path: Path, *, declared_root: Path) -> str:
+    """Fingerprint one ordinary file, directory, or symlink with ownership metadata.
+
+    Args:
+        path: Exact filesystem path.
+        declared_root: Declared root.
+
+    Returns:
+        Resulting text value.
+    """
+
     if path.is_symlink() and path == declared_root:
         raise GoalLifecycleError(f"A declared bootstrap object may not be a symbolic link: {path}")
     if not path.exists():
@@ -423,6 +562,13 @@ def _object_fingerprint(path: Path, *, declared_root: Path) -> str:
     inode_set: set[tuple[int, int]] = set()
 
     def visit(current: Path, relative: bytes) -> None:
+        """Traverse one object graph node exactly once while rejecting cycles.
+
+        Args:
+            current: Current.
+            relative: Relative.
+        """
+
         metadata = current.lstat()
         mode = metadata.st_mode
         digest.update(len(relative).to_bytes(8, "big"))
@@ -468,6 +614,15 @@ def _object_fingerprint(path: Path, *, declared_root: Path) -> str:
 
 
 def _link_fingerprint(path: Path) -> str:
+    """Fingerprint the literal target and metadata of one symlink.
+
+    Args:
+        path: Exact filesystem path.
+
+    Returns:
+        Resulting text value.
+    """
+
     if not path.is_symlink():
         raise GoalLifecycleError(f"Bootstrap link is unavailable: {path}")
     raw_target = os.fsencode(os.readlink(path))

@@ -17,6 +17,12 @@ from goal_lifecycle import GoalLifecycleError, GoalWorktreeWorkflow
 
 
 def _parser_get() -> argparse.ArgumentParser:
+    """Build the closed command-line parser for task-worktree preparation.
+
+    Returns:
+        The parser.
+    """
+
     parser = argparse.ArgumentParser(description="Prepare and validate one tracked cross-repository goal.")
     subparsers = parser.add_subparsers(dest="command", required=True)
     for command in (
@@ -73,6 +79,15 @@ def _parser_get() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Run the command-line entrypoint.
+
+    Args:
+        argv: Argv.
+
+    Returns:
+        Zero on success or 2 when the lifecycle contract rejects the request.
+    """
+
     args = _parser_get().parse_args(argv)
     workflow = GoalWorktreeWorkflow(args.goals_repository)
     try:

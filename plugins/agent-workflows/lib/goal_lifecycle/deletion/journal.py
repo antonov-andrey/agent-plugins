@@ -24,7 +24,12 @@ DELETION_PHASE_SET = frozenset(
 
 
 def deletion_journal_validate(journal: dict[str, object], *, state: TaskState) -> None:
-    """Require one deletion journal to match its exact durable task snapshot."""
+    """Require one deletion journal to match its exact durable task snapshot.
+
+    Args:
+        journal: Journal.
+        state: Exact runtime state.
+    """
 
     if (
         set(journal)
@@ -107,7 +112,14 @@ def deletion_journal_validate(journal: dict[str, object], *, state: TaskState) -
 def deletion_bootstrap_exception_get(
     journal: dict[str, object],
 ) -> CoordinationBootstrapException | None:
-    """Return the optional bootstrap exception bound into one deletion journal."""
+    """Return the optional bootstrap exception bound into one deletion journal.
+
+    Args:
+        journal: Journal.
+
+    Returns:
+        The optional bootstrap exception bound into one deletion journal.
+    """
 
     payload = journal.get("coordination_bootstrap_exception")
     return None if payload is None else CoordinationBootstrapException.from_payload(payload)

@@ -28,6 +28,13 @@ class GoalCheckpointPublisher:
     """Validate pushed task refs and append one full checkpoint atomically."""
 
     def __init__(self, goals_repository: Path, *, git: Git | None = None) -> None:
+        """Initialize the goal checkpoint publisher dependencies.
+
+        Args:
+            goals_repository: Goals repository.
+            git: Git command boundary.
+        """
+
         self._git = git or Git()
         self._coordination = CoordinationRepository(goals_repository, git=self._git)
         repair_report = TaskRepairReport()
@@ -46,7 +53,15 @@ class GoalCheckpointPublisher:
         common_prefix: str,
         project_root_list: Sequence[Path],
     ) -> tuple[str, str]:
-        """Append one complete sorted snapshot of clean fully pushed participants."""
+        """Append one complete sorted snapshot of clean fully pushed participants.
+
+        Args:
+            common_prefix: Exact task common prefix.
+            project_root_list: Ordered project root values.
+
+        Returns:
+            Values in deterministic immutable order.
+        """
 
         common_prefix_validate(common_prefix)
         with self._coordination.task_lock(common_prefix):
@@ -155,7 +170,14 @@ class GoalCheckpointPublisher:
         top_level_commit: str,
         previous_top_level_commit: str | None,
     ) -> None:
-        """Require every selected parent gitlink to equal one clean fully pushed submodule branch."""
+        """Require every selected parent gitlink to equal one clean fully pushed submodule branch.
+
+        Args:
+            repository_state: Repository state.
+            common_prefix: Exact task common prefix.
+            top_level_commit: Top level commit.
+            previous_top_level_commit: Previous top level commit.
+        """
 
         previous_by_path_map = (
             {

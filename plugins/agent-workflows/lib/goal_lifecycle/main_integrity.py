@@ -20,10 +20,23 @@ class MainWorktreeIntegrity:
     """Classify main drift and perform only explicitly attested repairs."""
 
     def __init__(self, *, git: Git | None = None) -> None:
+        """Initialize the main worktree integrity dependencies.
+
+        Args:
+            git: Git command boundary.
+        """
+
         self._git = git or Git()
 
     def refresh_if_independent(self, repository: RepositoryBoundaryState) -> RepositoryBoundaryState:
-        """Advance recorded main identity only when all drift is task-disjoint."""
+        """Advance recorded main identity only when all drift is task-disjoint.
+
+        Args:
+            repository: Exact Git repository root.
+
+        Returns:
+            Resulting repository boundary state.
+        """
 
         main_root = Path(repository.main_root)
         current_commit = self._git.commit_get(main_root)
@@ -57,7 +70,15 @@ class MainWorktreeIntegrity:
         return replace(repository, main_commit=current_commit)
 
     def leak_recover(self, repository: RepositoryBoundaryState, *, path_list: Iterable[str]) -> RepositoryBoundaryState:
-        """Restore explicit caller-attested leaked paths from current main HEAD."""
+        """Restore explicit caller-attested leaked paths from current main HEAD.
+
+        Args:
+            repository: Exact Git repository root.
+            path_list: Ordered path values.
+
+        Returns:
+            Resulting repository boundary state.
+        """
 
         main_root = Path(repository.main_root)
         if self._git.commit_get(main_root) != repository.main_commit:
@@ -107,7 +128,16 @@ class MainWorktreeIntegrity:
         commit: str,
         path_list: Iterable[str],
     ) -> RepositoryBoundaryState:
-        """Record one exact user-approved committed overlap and no broader authority."""
+        """Record one exact user-approved committed overlap and no broader authority.
+
+        Args:
+            repository: Exact Git repository root.
+            commit: Commit.
+            path_list: Ordered path values.
+
+        Returns:
+            Resulting repository boundary state.
+        """
 
         main_root = Path(repository.main_root)
         requested_commit = commit_validate(commit, label="accepted main commit")
@@ -138,7 +168,11 @@ class MainWorktreeIntegrity:
         )
 
     def validate(self, repository: RepositoryBoundaryState) -> None:
-        """Prove current main has no unclassified overlap with task work."""
+        """Prove current main has no unclassified overlap with task work.
+
+        Args:
+            repository: Exact Git repository root.
+        """
 
         refreshed = self.refresh_if_independent(repository)
         if refreshed.main_commit != repository.main_commit:
@@ -147,21 +181,69 @@ class MainWorktreeIntegrity:
             )
 
     def _task_path_set_get(self, repository: RepositoryBoundaryState) -> set[str]:
+        """Return every path allowed to differ for the current task transaction.
+
+        Args:
+            repository: Exact Git repository root.
+
+        Returns:
+            The task path set.
+        """
+
         task_root = Path(repository.task_root)
         return self._diff_path_set_get(task_root, repository.baseline_commit) | self._untracked_path_set_get(task_root)
 
     def _dirty_path_set_get(self, root: Path) -> set[str]:
+        """Return tracked paths changed in the selected worktree or index.
+
+        Args:
+            root: Exact owner root path.
+
+        Returns:
+            The dirty path set.
+        """
+
         return self._diff_path_set_get(root, "HEAD") | self._untracked_path_set_get(root)
 
     def _diff_path_set_get(self, root: Path, base: str) -> set[str]:
+        """Return NUL-safe paths changed between two exact Git trees.
+
+        Args:
+            root: Exact owner root path.
+            base: Base.
+
+        Returns:
+            The diff path set.
+        """
+
         payload = self._git.run(root, ["diff", "--name-only", "-z", "--ignore-submodules=none", base, "--"]).stdout
         return _nul_path_set_decode(payload)
 
     def _untracked_path_set_get(self, root: Path) -> set[str]:
+        """Return every untracked path visible from the selected worktree.
+
+        Args:
+            root: Exact owner root path.
+
+        Returns:
+            The untracked path set.
+        """
+
         payload = self._git.run(root, ["ls-files", "--others", "--exclude-standard", "-z"]).stdout
         return _nul_path_set_decode(payload)
 
     def _commit_path_set_get(self, root: Path, older: str, newer: str) -> set[str]:
+        """Return paths changed by one exact commit relative to its parent.
+
+        Args:
+            root: Exact owner root path.
+            older: Older.
+            newer: Newer.
+
+        Returns:
+            The commit path set.
+        """
+
         payload = self._git.run(
             root,
             [
@@ -178,6 +260,15 @@ class MainWorktreeIntegrity:
 
 
 def _nul_path_set_decode(payload: bytes) -> set[str]:
+    """Decode one NUL-delimited Git path payload without losing filesystem bytes.
+
+    Args:
+        payload: Structured operation payload.
+
+    Returns:
+        Unique values.
+    """
+
     try:
         return {
             repository_relative_path_validate(item.decode("utf-8"), label="Git path")
@@ -189,7 +280,15 @@ def _nul_path_set_decode(payload: bytes) -> set[str]:
 
 
 def _overlap_set_get(left_set: set[str], right_set: set[str]) -> set[str]:
-    """Return only left-owner paths that overlap the comparison path graph."""
+    """Return only left-owner paths that overlap the comparison path graph.
+
+    Args:
+        left_set: Unique left values.
+        right_set: Unique right values.
+
+    Returns:
+        The only left-owner paths that overlap the comparison path graph.
+    """
 
     overlap_set: set[str] = set()
     for left in left_set:
@@ -202,6 +301,12 @@ def _overlap_set_get(left_set: set[str], right_set: set[str]) -> set[str]:
 
 
 def _untracked_remove(path: Path) -> None:
+    """Remove only the explicitly authorized untracked task paths.
+
+    Args:
+        path: Exact filesystem path.
+    """
+
     if path.is_symlink() or path.is_file():
         path.unlink()
     elif path.is_dir():

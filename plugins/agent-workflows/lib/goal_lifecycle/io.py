@@ -12,6 +12,12 @@ from goal_lifecycle.error import GoalLifecycleError
 
 
 def directory_sync(path: Path) -> None:
+    """Fsync one directory after an atomic namespace mutation.
+
+    Args:
+        path: Exact filesystem path.
+    """
+
     descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
     try:
         os.fsync(descriptor)
@@ -20,7 +26,13 @@ def directory_sync(path: Path) -> None:
 
 
 def atomic_bytes_write(path: Path, payload: bytes, *, mode: int = 0o600) -> None:
-    """Atomically replace one file and fsync both bytes and parent."""
+    """Atomically replace one file and fsync both bytes and parent.
+
+    Args:
+        path: Exact filesystem path.
+        payload: Structured operation payload.
+        mode: Mode.
+    """
 
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     temporary_path = path.parent / f".{path.name}.{secrets.token_hex(12)}.tmp"
@@ -42,6 +54,13 @@ def atomic_bytes_write(path: Path, payload: bytes, *, mode: int = 0o600) -> None
 
 
 def atomic_json_write(path: Path, payload: dict[str, Any]) -> None:
+    """Atomically replace one canonical JSON file and fsync its parent.
+
+    Args:
+        path: Exact filesystem path.
+        payload: Structured operation payload.
+    """
+
     atomic_bytes_write(
         path,
         (json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True) + "\n").encode(),
@@ -49,6 +68,16 @@ def atomic_json_write(path: Path, payload: dict[str, Any]) -> None:
 
 
 def json_object_load(path: Path, *, label: str) -> dict[str, Any]:
+    """Read one ordinary JSON file and require an object root.
+
+    Args:
+        path: Exact filesystem path.
+        label: Diagnostic owner label.
+
+    Returns:
+        Decoded JSON object.
+    """
+
     if path.is_symlink() or not path.is_file() or path.stat().st_nlink != 1:
         raise GoalLifecycleError(f"{label} is unavailable: {path}")
     try:

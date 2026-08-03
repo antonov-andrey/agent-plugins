@@ -31,6 +31,13 @@ class GoalWorktreeWorkflow:
     """Sequence approved task contracts, participant preparation, sealing, and activation."""
 
     def __init__(self, goals_repository: Path, *, git: Git | None = None) -> None:
+        """Initialize the goal worktree workflow dependencies.
+
+        Args:
+            goals_repository: Goals repository.
+            git: Git command boundary.
+        """
+
         self._git = git or Git()
         self._coordination = CoordinationRepository(goals_repository, git=self._git)
         self._repair_report = TaskRepairReport()
@@ -55,7 +62,17 @@ class GoalWorktreeWorkflow:
         participating_submodule_list: Sequence[tuple[Path, Path]] = (),
         specification_input: Path | None = None,
     ) -> dict[str, object]:
-        """Publish an approved specification and prepare the complete participant set."""
+        """Publish an approved specification and prepare the complete participant set.
+
+        Args:
+            common_prefix: Exact task common prefix.
+            repository_root_list: Ordered repository root values.
+            participating_submodule_list: Ordered participating submodule values.
+            specification_input: Specification input.
+
+        Returns:
+            Canonical preparation result payload.
+        """
 
         self._repair_report.reset()
         common_prefix_validate(common_prefix)
@@ -158,7 +175,14 @@ class GoalWorktreeWorkflow:
             return self._result_payload_get(next_state)
 
     def revise(self, *, common_prefix: str) -> dict[str, object]:
-        """Return one sealed inactive candidate to its existing preparation identity."""
+        """Return one sealed inactive candidate to its existing preparation identity.
+
+        Args:
+            common_prefix: Exact task common prefix.
+
+        Returns:
+            One sealed inactive candidate to its existing preparation identity.
+        """
 
         self._repair_report.reset()
         common_prefix_validate(common_prefix)
@@ -190,7 +214,15 @@ class GoalWorktreeWorkflow:
         common_prefix: str,
         goals_owner_input_by_path_map: Mapping[str, Path] | None = None,
     ) -> dict[str, object]:
-        """Bind completed approved stable-owner authoring before semantic review."""
+        """Bind completed approved stable-owner authoring before semantic review.
+
+        Args:
+            common_prefix: Exact task common prefix.
+            goals_owner_input_by_path_map: Goals owner input by path mapping.
+
+        Returns:
+            Updated manifest payload after stable-owner authoring.
+        """
 
         self._repair_report.reset()
         common_prefix_validate(common_prefix)
@@ -238,7 +270,15 @@ class GoalWorktreeWorkflow:
             return self._result_payload_get(next_state)
 
     def seal(self, *, common_prefix: str, goal_input: Path | None = None) -> dict[str, object]:
-        """Publish and bind one semantically reviewed inactive goal candidate."""
+        """Publish and bind one semantically reviewed inactive goal candidate.
+
+        Args:
+            common_prefix: Exact task common prefix.
+            goal_input: Goal input.
+
+        Returns:
+            Updated manifest payload for the sealed goal candidate.
+        """
 
         self._repair_report.reset()
         common_prefix_validate(common_prefix)
@@ -301,7 +341,14 @@ class GoalWorktreeWorkflow:
             return self._result_payload_get(next_state)
 
     def activate(self, *, common_prefix: str) -> dict[str, object]:
-        """Freeze one successfully created persistent goal and bind cleanup receipts."""
+        """Freeze one successfully created persistent goal and bind cleanup receipts.
+
+        Args:
+            common_prefix: Exact task common prefix.
+
+        Returns:
+            Activated goal and cleanup-binding payload.
+        """
 
         self._repair_report.reset()
         common_prefix_validate(common_prefix)
@@ -333,7 +380,16 @@ class GoalWorktreeWorkflow:
         main_repository: Path,
         path_list: Sequence[str],
     ) -> dict[str, object]:
-        """Recover the complete caller-attested uncommitted task leak in one main owner."""
+        """Recover the complete caller-attested uncommitted task leak in one main owner.
+
+        Args:
+            common_prefix: Exact task common prefix.
+            main_repository: Main repository.
+            path_list: Ordered path values.
+
+        Returns:
+            Recovery result payload for the selected main owner.
+        """
 
         self._repair_report.reset()
         common_prefix_validate(common_prefix)
@@ -356,7 +412,17 @@ class GoalWorktreeWorkflow:
         commit: str,
         path_list: Sequence[str],
     ) -> dict[str, object]:
-        """Persist one exact explicit attestation for committed overlapping main work."""
+        """Persist one exact explicit attestation for committed overlapping main work.
+
+        Args:
+            common_prefix: Exact task common prefix.
+            main_repository: Main repository.
+            commit: Commit.
+            path_list: Ordered path values.
+
+        Returns:
+            Persisted main-drift attestation payload.
+        """
 
         self._repair_report.reset()
         common_prefix_validate(common_prefix)
@@ -378,7 +444,15 @@ class GoalWorktreeWorkflow:
             return self._result_payload_get(next_state)
 
     def validate(self, *, common_prefix: str, required_state: str) -> dict[str, object]:
-        """Run complete validation against one required lifecycle floor."""
+        """Run complete validation against one required lifecycle floor.
+
+        Args:
+            common_prefix: Exact task common prefix.
+            required_state: Required state.
+
+        Returns:
+            Validated task-state payload at the requested lifecycle floor.
+        """
 
         self._repair_report.reset()
         common_prefix_validate(common_prefix)
@@ -388,6 +462,13 @@ class GoalWorktreeWorkflow:
             return self._result_payload_get(state)
 
     def _result_payload_get(self, state: TaskState) -> dict[str, object]:
-        """Return one command result with every operation-local repair exactly once."""
+        """Return one command result with every operation-local repair exactly once.
+
+        Args:
+            state: Exact runtime state.
+
+        Returns:
+            One command result with every operation-local repair exactly once.
+        """
 
         return state.result_payload_get(performed_repair_list=self._repair_report.payload_get())

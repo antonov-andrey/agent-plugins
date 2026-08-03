@@ -11,10 +11,21 @@ class WorkspaceMergeOwner:
     """Bind one goal and checkpoint across separate merge and acceptance calls."""
 
     def __init__(self, coordination: CoordinationRepository) -> None:
+        """Initialize the workspace merge owner dependencies.
+
+        Args:
+            coordination: Coordination.
+        """
+
         self._coordination = coordination
 
     def acquire(self, *, common_prefix: str, checkpoint_id: str) -> None:
-        """Create or validate the exact exclusive durable owner marker."""
+        """Create or validate the exact exclusive durable owner marker.
+
+        Args:
+            common_prefix: Exact task common prefix.
+            checkpoint_id: Exact checkpoint identity.
+        """
 
         owner_path = self._coordination.merge_owner_path_get()
         expected = {
@@ -37,7 +48,13 @@ class WorkspaceMergeOwner:
         previous_checkpoint_id: str,
         checkpoint_id: str,
     ) -> None:
-        """Idempotently move the exact same goal owner to one fix-forward checkpoint."""
+        """Idempotently move the exact same goal owner to one fix-forward checkpoint.
+
+        Args:
+            common_prefix: Exact task common prefix.
+            previous_checkpoint_id: Exact previous checkpoint identity.
+            checkpoint_id: Exact checkpoint identity.
+        """
 
         owner_path = self._coordination.merge_owner_path_get()
         previous = {
@@ -61,7 +78,12 @@ class WorkspaceMergeOwner:
         )
 
     def release(self, *, common_prefix: str, checkpoint_id: str) -> None:
-        """Remove the exact owner only after accepted-pointer publication."""
+        """Remove the exact owner only after accepted-pointer publication.
+
+        Args:
+            common_prefix: Exact task common prefix.
+            checkpoint_id: Exact checkpoint identity.
+        """
 
         owner_path = self._coordination.merge_owner_path_get()
         if not owner_path.exists():

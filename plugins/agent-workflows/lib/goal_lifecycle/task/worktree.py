@@ -15,6 +15,13 @@ class TaskWorktreeManager:
     """Create or resume one exact linked worktree from durable pending ownership."""
 
     def __init__(self, *, git: Git, repair_report: TaskRepairReport | None = None) -> None:
+        """Initialize the task worktree manager dependencies.
+
+        Args:
+            git: Git command boundary.
+            repair_report: Repair report.
+        """
+
         self._git = git
         self._repair_report = repair_report or TaskRepairReport()
 
@@ -26,7 +33,17 @@ class TaskWorktreeManager:
         common_prefix: str,
         previous_state: RepositoryState | None,
     ) -> Path:
-        """Create, adopt, or repair only the provider-owned exact task worktree."""
+        """Create, adopt, or repair only the provider-owned exact task worktree.
+
+        Args:
+            main_root: Main root.
+            baseline_commit: Baseline commit.
+            common_prefix: Exact task common prefix.
+            previous_state: Previous state.
+
+        Returns:
+            Resolved filesystem path.
+        """
 
         task_root = main_root / ".worktree" / common_prefix
         marker_path = self._marker_path_get(main_root, common_prefix=common_prefix)
@@ -98,7 +115,12 @@ class TaskWorktreeManager:
         return task_root
 
     def pending_retire(self, main_root: Path, *, common_prefix: str) -> None:
-        """Retire one pending marker only after complete replicated task state exists."""
+        """Retire one pending marker only after complete replicated task state exists.
+
+        Args:
+            main_root: Main root.
+            common_prefix: Exact task common prefix.
+        """
 
         try:
             self._marker_path_get(main_root, common_prefix=common_prefix).unlink()
@@ -106,7 +128,15 @@ class TaskWorktreeManager:
             pass
 
     def validate(self, state: RepositoryState, *, common_prefix: str) -> Path:
-        """Require one recorded worktree registration and branch identity."""
+        """Require one recorded worktree registration and branch identity.
+
+        Args:
+            state: Exact runtime state.
+            common_prefix: Exact task common prefix.
+
+        Returns:
+            Resolved filesystem path.
+        """
 
         main_root = Path(state.main_root).resolve(strict=True)
         task_root = Path(state.task_root).resolve(strict=True)
@@ -128,6 +158,16 @@ class TaskWorktreeManager:
         common_prefix: str,
         exact_baseline: bool,
     ) -> None:
+        """Require one registered worktree to match its task branch and marker identity.
+
+        Args:
+            main_root: Main root.
+            task_root: Task root.
+            baseline_commit: Baseline commit.
+            common_prefix: Exact task common prefix.
+            exact_baseline: Exact baseline.
+        """
+
         worktree = self._worktree_by_path_map_get(main_root).get(str(task_root.resolve(strict=True)))
         if worktree is None or worktree["branch"] != common_prefix:
             raise GoalLifecycleError(f"Task path is not the exact registered branch worktree: {task_root}")
@@ -148,6 +188,14 @@ class TaskWorktreeManager:
         )
 
     def _unowned_collision_reject(self, main_root: Path, *, task_root: Path, branch_name: str) -> None:
+        """Reject an existing task path not owned by the requested worktree identity.
+
+        Args:
+            main_root: Main root.
+            task_root: Task root.
+            branch_name: Branch name.
+        """
+
         if task_root.exists() or task_root.is_symlink():
             raise GoalLifecycleError(f"Task path exists without durable provider ownership: {task_root}")
         if str(task_root.resolve()) in self._worktree_by_path_map_get(main_root):
@@ -165,6 +213,16 @@ class TaskWorktreeManager:
             raise GoalLifecycleError(f"Task branch exists without durable provider ownership: {main_root}")
 
     def _marker_path_get(self, main_root: Path, *, common_prefix: str) -> Path:
+        """Return the Git-common ownership marker for one task worktree.
+
+        Args:
+            main_root: Main root.
+            common_prefix: Exact task common prefix.
+
+        Returns:
+            The marker path.
+        """
+
         return (
             self._git.common_directory_get(main_root)
             / "agent-workflows"
@@ -174,7 +232,14 @@ class TaskWorktreeManager:
         )
 
     def _worktree_by_path_map_get(self, main_root: Path) -> dict[str, dict[str, str]]:
-        """Return complete registered worktree identity keyed by canonical path."""
+        """Return complete registered worktree identity keyed by canonical path.
+
+        Args:
+            main_root: Main root.
+
+        Returns:
+            The complete registered worktree identity keyed by canonical path.
+        """
 
         payload = self._git.run(main_root, ["worktree", "list", "--porcelain", "-z"]).stdout
         record: dict[str, str] = {}

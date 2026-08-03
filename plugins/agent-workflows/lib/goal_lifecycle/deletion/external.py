@@ -22,10 +22,22 @@ class GoalExternalResourceCleanup:
     """Run each sealed repository cleanup hook until it proves exact absence."""
 
     def __init__(self, *, git: Git) -> None:
+        """Initialize the goal external resource cleanup dependencies.
+
+        Args:
+            git: Git command boundary.
+        """
+
         self._git = git
 
     def resume(self, *, state: TaskState, journal: dict[str, object], journal_path: Path) -> None:
-        """Resume external cleanup at the durable repository index."""
+        """Resume external cleanup at the durable repository index.
+
+        Args:
+            state: Exact runtime state.
+            journal: Journal.
+            journal_path: Exact filesystem path for journal.
+        """
 
         start_index = int(journal["repository_index"])
         boundary_list = repository_boundary_list_get(state)
@@ -66,7 +78,14 @@ def _cleanup_hook_run(
     repository_root: Path,
     operation_identity: str,
 ) -> None:
-    """Run one sealed cleanup command from clean synchronized main and require exact absence."""
+    """Run one sealed cleanup command from clean synchronized main and require exact absence.
+
+    Args:
+        command: Command.
+        common_prefix: Exact task common prefix.
+        repository_root: Repository root.
+        operation_identity: Exact operation identity.
+    """
 
     request = {
         "schema_version": 1,

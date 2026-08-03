@@ -33,6 +33,15 @@ class TaskLifecycleValidator:
         repository_manager: TaskRepositoryManager,
         state_store: TaskStateStore,
     ) -> None:
+        """Initialize the task lifecycle validator dependencies.
+
+        Args:
+            coordination: Coordination.
+            git: Git command boundary.
+            repository_manager: Repository manager.
+            state_store: State store.
+        """
+
         self._coordination = coordination
         self._git = git
         self._repository_manager = repository_manager
@@ -45,7 +54,13 @@ class TaskLifecycleValidator:
         required_state: str,
         main_integrity_required: bool = True,
     ) -> None:
-        """Require the complete current task to satisfy one lifecycle floor."""
+        """Require the complete current task to satisfy one lifecycle floor.
+
+        Args:
+            state: Exact runtime state.
+            required_state: Required state.
+            main_integrity_required: Main integrity required.
+        """
 
         if required_state not in _LIFECYCLE_INDEX_BY_NAME_MAP:
             raise GoalLifecycleError("Unknown required lifecycle state")

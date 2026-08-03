@@ -64,7 +64,15 @@ UniqueKeySafeLoader.add_implicit_resolver(
 
 
 def _integer_construct(loader: UniqueKeySafeLoader, node: ScalarNode) -> int:
-    """Construct a YAML 1.2 integer without PyYAML's YAML 1.1 octal rules."""
+    """Construct a YAML 1.2 integer without PyYAML's YAML 1.1 octal rules.
+
+    Args:
+        loader: Loader.
+        node: Node.
+
+    Returns:
+        Integer represented by the YAML 1.2 scalar.
+    """
 
     value = loader.construct_scalar(node)
     sign = -1 if value.startswith("-") else 1
@@ -77,6 +85,17 @@ def _integer_construct(loader: UniqueKeySafeLoader, node: ScalarNode) -> int:
 
 
 def _mapping_construct(loader: UniqueKeySafeLoader, node: MappingNode, deep: bool = False) -> dict[object, object]:
+    """Construct one YAML mapping while rejecting duplicate semantic keys.
+
+    Args:
+        loader: Loader.
+        node: Node.
+        deep: Deep.
+
+    Returns:
+        Mapping keyed by fully constructed YAML keys.
+    """
+
     result: dict[object, object] = {}
     for key_node, value_node in node.value:
         key = loader.construct_object(key_node, deep=deep)
@@ -100,6 +119,13 @@ UniqueKeySafeLoader.add_constructor("tag:yaml.org,2002:int", _integer_construct)
 
 
 def _node_validate(node: Node, *, seen_identity_set: set[int]) -> None:
+    """Reject YAML aliases, tags, directives, and unsupported scalar shapes recursively.
+
+    Args:
+        node: Node.
+        seen_identity_set: Unique seen identity values.
+    """
+
     if node.tag not in _STANDARD_TAG_SET:
         raise GoalLifecycleError(f"YAML custom tag is forbidden: {node.tag}")
     identity = id(node)
@@ -118,7 +144,14 @@ def _node_validate(node: Node, *, seen_identity_set: set[int]) -> None:
 
 
 def yaml_document_load(path: Path) -> object:
-    """Read one strict UTF-8 YAML document from a physical ordinary file."""
+    """Read one strict UTF-8 YAML document from a physical ordinary file.
+
+    Args:
+        path: Exact filesystem path.
+
+    Returns:
+        One strict UTF-8 YAML document from a physical ordinary file.
+    """
 
     if path.suffix != ".yaml":
         raise GoalLifecycleError(f"Machine-readable lifecycle file must use .yaml: {path}")
@@ -148,7 +181,14 @@ def yaml_document_load(path: Path) -> object:
 
 
 def yaml_document_bytes_get(payload: Mapping[str, Any]) -> bytes:
-    """Serialize one canonical mapping as UTF-8 YAML with stable key order."""
+    """Serialize one canonical mapping as UTF-8 YAML with stable key order.
+
+    Args:
+        payload: Structured operation payload.
+
+    Returns:
+        Resulting byte payload.
+    """
 
     return yaml.safe_dump(
         dict(payload),

@@ -15,7 +15,14 @@ def merge_journal_validate(
     checkpoint: Checkpoint,
     submodule_snapshot_list: list[dict[str, object]] | None,
 ) -> None:
-    """Require one durable journal to match the exact selected checkpoint."""
+    """Require one durable journal to match the exact selected checkpoint.
+
+    Args:
+        journal: Journal.
+        common_prefix: Exact task common prefix.
+        checkpoint: Checkpoint.
+        submodule_snapshot_list: Ordered submodule snapshot values.
+    """
 
     if (
         set(journal)
@@ -79,7 +86,18 @@ def merge_journal_supersede_get(
     previous_checkpoint: Checkpoint,
     submodule_snapshot_list: list[dict[str, object]],
 ) -> tuple[dict[str, object], dict[str, str], list[dict[str, object]]]:
-    """Return one fix-forward journal and the exact prior commit map it supersedes."""
+    """Return one fix-forward journal and the exact prior commit map it supersedes.
+
+    Args:
+        journal: Journal.
+        common_prefix: Exact task common prefix.
+        checkpoint: Checkpoint.
+        previous_checkpoint: Previous checkpoint.
+        submodule_snapshot_list: Ordered submodule snapshot values.
+
+    Returns:
+        One fix-forward journal and the exact prior commit map it supersedes.
+    """
 
     merge_journal_validate(
         journal,

@@ -26,12 +26,24 @@ class CoordinationBootstrapRetirer:
         git: Git,
         repository_retirer: GoalTaskRepositoryRetirer,
     ) -> None:
+        """Initialize the coordination bootstrap retirer dependencies.
+
+        Args:
+            coordination: Coordination.
+            git: Git command boundary.
+            repository_retirer: Repository retirer.
+        """
+
         self._coordination = coordination
         self._git = git
         self._repository_retirer = repository_retirer
 
     def carriers_retire(self, exception: CoordinationBootstrapException | None) -> None:
-        """Delete only exact content-bound legacy carrier files."""
+        """Delete only exact content-bound legacy carrier files.
+
+        Args:
+            exception: Exception.
+        """
 
         if exception is None:
             return
@@ -52,7 +64,11 @@ class CoordinationBootstrapRetirer:
             directory_sync(path.parent)
 
     def exception_retire(self, exception: CoordinationBootstrapException | None) -> None:
-        """Remove the exact exception marker, empty container, and temporary exclude."""
+        """Remove the exact exception marker, empty container, and temporary exclude.
+
+        Args:
+            exception: Exception.
+        """
 
         if exception is None:
             return

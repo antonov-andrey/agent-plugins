@@ -26,6 +26,13 @@ class GoalDeletionWorkflow:
     """Sequence one exact accepted task through its durable deletion phases."""
 
     def __init__(self, goals_repository: Path, *, git: Git | None = None) -> None:
+        """Initialize the goal deletion workflow dependencies.
+
+        Args:
+            goals_repository: Goals repository.
+            git: Git command boundary.
+        """
+
         self._git = git or Git()
         self._coordination = CoordinationRepository(goals_repository, git=self._git)
         self._preflight = GoalDeletionPreflight(self._coordination, git=self._git)
@@ -39,7 +46,15 @@ class GoalDeletionWorkflow:
         self._private_state_retirer = GoalDeletionPrivateStateRetirer(self._coordination, git=self._git)
 
     def delete(self, *, common_prefix: str, unfinished_goal_absent: bool) -> dict[str, object]:
-        """Delete one accepted task only after explicit current-harness completion proof."""
+        """Delete one accepted task only after explicit current-harness completion proof.
+
+        Args:
+            common_prefix: Exact task common prefix.
+            unfinished_goal_absent: Unfinished goal absent.
+
+        Returns:
+            Final deletion result payload.
+        """
 
         common_prefix_validate(common_prefix)
         if not unfinished_goal_absent:
@@ -74,7 +89,13 @@ class GoalDeletionWorkflow:
             return journal
 
     def _resume(self, *, state: TaskState, journal: dict[str, object], journal_path: Path) -> None:
-        """Resume every ordered phase from the exact durable journal marker."""
+        """Resume every ordered phase from the exact durable journal marker.
+
+        Args:
+            state: Exact runtime state.
+            journal: Journal.
+            journal_path: Exact filesystem path for journal.
+        """
 
         phase = journal["phase"]
         bootstrap_exception = deletion_bootstrap_exception_get(journal)
@@ -145,7 +166,17 @@ def _journal_phase_update(
     phase: str,
     repository_index: int = 0,
 ) -> str:
-    """Persist one next deletion phase and reset its repository cursor."""
+    """Persist one next deletion phase and reset its repository cursor.
+
+    Args:
+        journal: Journal.
+        journal_path: Exact filesystem path for journal.
+        phase: Phase.
+        repository_index: Repository index.
+
+    Returns:
+        Resulting text value.
+    """
 
     journal.update({"phase": phase, "repository_index": repository_index})
     atomic_json_write(journal_path, journal)

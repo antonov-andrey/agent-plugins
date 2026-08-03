@@ -14,10 +14,22 @@ class ExclusiveFileLock(AbstractContextManager["ExclusiveFileLock"]):
     """Hold one kernel-released non-blocking exclusive lock."""
 
     def __init__(self, path: Path) -> None:
+        """Initialize the exclusive file lock dependencies.
+
+        Args:
+            path: Exact filesystem path.
+        """
+
         self._path = path
         self._descriptor: int | None = None
 
     def __enter__(self) -> "ExclusiveFileLock":
+        """Enter the managed context.
+
+        Returns:
+            Resulting exclusive file lock.
+        """
+
         self._path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         descriptor = os.open(self._path, os.O_RDWR | os.O_CREAT, 0o600)
         try:
@@ -29,6 +41,14 @@ class ExclusiveFileLock(AbstractContextManager["ExclusiveFileLock"]):
         return self
 
     def __exit__(self, exc_type: object, exc_value: object, traceback: object) -> None:
+        """Exit the managed context.
+
+        Args:
+            exc_type: Exc type.
+            exc_value: Exc value.
+            traceback: Traceback.
+        """
+
         del exc_type, exc_value, traceback
         if self._descriptor is not None:
             fcntl.flock(self._descriptor, fcntl.LOCK_UN)

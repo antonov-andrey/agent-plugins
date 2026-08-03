@@ -7,11 +7,17 @@ class TaskRepairReport:
     """Collect each stable repair diagnostic at most once per command."""
 
     def __init__(self) -> None:
+        """Initialize the task repair report dependencies."""
+
         self._item_list: list[str] = []
         self._item_set: set[str] = set()
 
     def record(self, value: str) -> None:
-        """Record one non-empty single-line repair diagnostic once."""
+        """Record one non-empty single-line repair diagnostic once.
+
+        Args:
+            value: Candidate value.
+        """
 
         if not value or "\n" in value or "\r" in value:
             raise ValueError("repair diagnostic must be non-empty single-line text")
@@ -20,7 +26,11 @@ class TaskRepairReport:
             self._item_list.append(value)
 
     def payload_get(self) -> list[str]:
-        """Return repairs in deterministic execution order."""
+        """Return repairs in deterministic execution order.
+
+        Returns:
+            The repairs in deterministic execution order.
+        """
 
         return list(self._item_list)
 

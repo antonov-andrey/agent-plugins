@@ -21,7 +21,14 @@ class ProjectSnapshot:
 
     @classmethod
     def from_payload(cls, payload: object) -> "ProjectSnapshot":
-        """Build one snapshot from its exact closed payload."""
+        """Build one snapshot from its exact closed payload.
+
+        Args:
+            payload: Structured operation payload.
+
+        Returns:
+            One snapshot from its exact closed payload.
+        """
 
         if not isinstance(payload, dict) or set(payload) != {
             "project_path",
@@ -43,7 +50,14 @@ class Checkpoint:
 
     @classmethod
     def from_payload(cls, payload: object) -> "Checkpoint":
-        """Build one checkpoint from its exact closed payload."""
+        """Build one checkpoint from its exact closed payload.
+
+        Args:
+            payload: Structured operation payload.
+
+        Returns:
+            One checkpoint from its exact closed payload.
+        """
 
         if not isinstance(payload, dict) or set(payload) != {
             "checkpoint_id",
@@ -73,13 +87,24 @@ class CheckpointDocument:
 
     @classmethod
     def empty(cls) -> "CheckpointDocument":
-        """Build the only valid initial checkpoint document."""
+        """Build the only valid initial checkpoint document.
+
+        Returns:
+            The only valid initial checkpoint document.
+        """
 
         return cls(accepted_checkpoint_id="", checkpoint_list=())
 
     @classmethod
     def from_payload(cls, payload: object) -> "CheckpointDocument":
-        """Build one document from its exact closed payload."""
+        """Build one document from its exact closed payload.
+
+        Args:
+            payload: Structured operation payload.
+
+        Returns:
+            One document from its exact closed payload.
+        """
 
         if not isinstance(payload, dict) or set(payload) != {
             "schema_version",
@@ -111,7 +136,11 @@ class CheckpointDocument:
         return cls(accepted_checkpoint_id=accepted, checkpoint_list=checkpoint_list)
 
     def payload_get(self) -> dict[str, Any]:
-        """Return the canonical YAML-ready document payload."""
+        """Return the canonical YAML-ready document payload.
+
+        Returns:
+            The canonical YAML-ready document payload.
+        """
 
         return {
             "schema_version": 1,
@@ -126,7 +155,11 @@ class CheckpointDocument:
         }
 
     def selection_validate(self, checkpoint: Checkpoint) -> None:
-        """Require one selected checkpoint to follow the accepted pointer."""
+        """Require one selected checkpoint to follow the accepted pointer.
+
+        Args:
+            checkpoint: Checkpoint.
+        """
 
         if self.accepted_checkpoint_id == checkpoint.checkpoint_id:
             raise GoalLifecycleError("Checkpoint is already accepted")

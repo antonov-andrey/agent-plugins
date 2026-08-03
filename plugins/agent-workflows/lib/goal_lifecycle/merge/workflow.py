@@ -27,6 +27,13 @@ class GoalMergeWorkflow:
     """Sequence one exact checkpoint merge and separately publish primary acceptance."""
 
     def __init__(self, goals_repository: Path, *, git: Git | None = None) -> None:
+        """Initialize the goal merge workflow dependencies.
+
+        Args:
+            goals_repository: Goals repository.
+            git: Git command boundary.
+        """
+
         self._git = git or Git()
         self._coordination = CoordinationRepository(goals_repository, git=self._git)
         self._checkpoint_reader = GoalMergeCheckpointReader(self._coordination)
@@ -36,7 +43,15 @@ class GoalMergeWorkflow:
         self._owner = WorkspaceMergeOwner(self._coordination)
 
     def merge(self, *, common_prefix: str, checkpoint_id: str) -> dict[str, object]:
-        """Fast-forward every main to one exact checkpoint under the exclusive lock."""
+        """Fast-forward every main to one exact checkpoint under the exclusive lock.
+
+        Args:
+            common_prefix: Exact task common prefix.
+            checkpoint_id: Exact checkpoint identity.
+
+        Returns:
+            Final cross-repository merge result payload.
+        """
 
         common_prefix_validate(common_prefix)
         with self._coordination.task_lock(common_prefix), self._coordination.merge_lock():
@@ -139,7 +154,15 @@ class GoalMergeWorkflow:
             return journal
 
     def accept(self, *, common_prefix: str, checkpoint_id: str) -> str:
-        """Publish accepted_checkpoint_id after exact primary-environment acceptance."""
+        """Publish accepted_checkpoint_id after exact primary-environment acceptance.
+
+        Args:
+            common_prefix: Exact task common prefix.
+            checkpoint_id: Exact checkpoint identity.
+
+        Returns:
+            Resulting text value.
+        """
 
         common_prefix_validate(common_prefix)
         with self._coordination.task_lock(common_prefix), self._coordination.merge_lock():
@@ -190,7 +213,15 @@ class GoalMergeWorkflow:
         state: TaskState,
         checkpoint: Checkpoint,
     ) -> dict[str, str]:
-        """Bind merge publication to the exact sealed repository origins."""
+        """Bind merge publication to the exact sealed repository origins.
+
+        Args:
+            state: Exact runtime state.
+            checkpoint: Checkpoint.
+
+        Returns:
+            Expected repository origin URL keyed by project path.
+        """
 
         workspace_root = self._coordination.root.parent.resolve(strict=True)
         result: dict[str, str] = {}
@@ -205,6 +236,15 @@ class GoalMergeWorkflow:
         return result
 
     def _task_state_get(self, common_prefix: str) -> TaskState:
+        """Load the exact task state bound to the selected checkpoint snapshot.
+
+        Args:
+            common_prefix: Exact task common prefix.
+
+        Returns:
+            The task state.
+        """
+
         return TaskState.from_payload(
             json_object_load(
                 self._coordination.state_path_get(common_prefix),
@@ -219,7 +259,16 @@ def _merge_journal_new(
     checkpoint: Checkpoint,
     submodule_snapshot_list: list[dict[str, object]],
 ) -> dict[str, object]:
-    """Return one initial durable journal for the exact selected checkpoint."""
+    """Return one initial durable journal for the exact selected checkpoint.
+
+    Args:
+        common_prefix: Exact task common prefix.
+        checkpoint: Checkpoint.
+        submodule_snapshot_list: Ordered submodule snapshot values.
+
+    Returns:
+        One initial durable journal for the exact selected checkpoint.
+    """
 
     return {
         "schema_version": 2,

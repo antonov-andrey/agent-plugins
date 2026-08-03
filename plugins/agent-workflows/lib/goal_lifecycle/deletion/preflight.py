@@ -21,11 +21,25 @@ class GoalDeletionPreflight:
     """Freeze the exact accepted participant and optional bootstrap-exception identity."""
 
     def __init__(self, coordination: CoordinationRepository, *, git: Git) -> None:
+        """Initialize the goal deletion preflight dependencies.
+
+        Args:
+            coordination: Coordination.
+            git: Git command boundary.
+        """
+
         self._coordination = coordination
         self._git = git
 
     def project_list_get(self, state: TaskState) -> list[dict[str, str]]:
-        """Return the complete deletion snapshot after proving every Git precondition."""
+        """Return the complete deletion snapshot after proving every Git precondition.
+
+        Args:
+            state: Exact runtime state.
+
+        Returns:
+            The complete deletion snapshot after proving every Git precondition.
+        """
 
         self._coordination.synchronize_require()
         checkpoint_path = self._coordination.task_directory_get(state.common_prefix) / "checkpoint.yaml"
@@ -81,7 +95,14 @@ class GoalDeletionPreflight:
         return sorted(project_list, key=lambda item: item["project_path"])
 
     def bootstrap_exception_payload_get(self, state: TaskState) -> dict[str, object] | None:
-        """Return the exact current self-hosting exception when this task owns it."""
+        """Return the exact current self-hosting exception when this task owns it.
+
+        Args:
+            state: Exact runtime state.
+
+        Returns:
+            The exact current self-hosting exception when this task owns it.
+        """
 
         exception = coordination_bootstrap_exception_optional_get(self._coordination.root, git=self._git)
         if exception is None:
@@ -92,7 +113,14 @@ class GoalDeletionPreflight:
         return exception.payload_get()
 
     def submodule_list_get(self, state: TaskState) -> list[dict[str, str]]:
-        """Freeze every task-owned submodule ref and accepted parent-gitlink identity."""
+        """Freeze every task-owned submodule ref and accepted parent-gitlink identity.
+
+        Args:
+            state: Exact runtime state.
+
+        Returns:
+            Requested values in deterministic order.
+        """
 
         checkpoint_path = self._coordination.task_directory_get(state.common_prefix) / "checkpoint.yaml"
         document = CheckpointDocument.from_payload(yaml_document_load(checkpoint_path))
@@ -159,6 +187,16 @@ class GoalDeletionPreflight:
         project_path: str,
         task_root: Path,
     ) -> None:
+        """Require one task worktree to remain clean at its checkpoint commit.
+
+        Args:
+            common_prefix: Exact task common prefix.
+            expected_commit: Expected commit.
+            main_commit: Main commit.
+            project_path: Exact filesystem path for project.
+            task_root: Task root.
+        """
+
         if not task_root.exists():
             raise GoalLifecycleError(f"Task worktree is absent before deletion was journaled: {task_root}")
         self._git.clean_require(task_root)
@@ -173,6 +211,14 @@ class GoalDeletionPreflight:
         self._git.ancestor_require(task_root, task_commit, main_commit, label=f"{project_path} merged ancestry")
 
     def _task_ref_require(self, *, common_prefix: str, expected_commit: str, main_root: Path) -> None:
+        """Require one local and remote task ref to retain its authorized commit.
+
+        Args:
+            common_prefix: Exact task common prefix.
+            expected_commit: Expected commit.
+            main_root: Main root.
+        """
+
         for ref, label in (
             (f"refs/heads/{common_prefix}", "local"),
             (f"refs/remotes/origin/{common_prefix}", "remote"),

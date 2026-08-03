@@ -27,6 +27,14 @@ class TaskSubmoduleManager:
         boundary_manager: RepositoryBoundaryManager,
         repair_report: TaskRepairReport | None = None,
     ) -> None:
+        """Initialize the task submodule manager dependencies.
+
+        Args:
+            git: Git command boundary.
+            boundary_manager: Boundary manager.
+            repair_report: Repair report.
+        """
+
         self._git = git
         self._boundary_manager = boundary_manager
         self._repair_report = repair_report or TaskRepairReport()
@@ -40,7 +48,18 @@ class TaskSubmoduleManager:
         requested_path_set: set[str],
         previous_state: RepositoryState | None,
     ) -> tuple[tuple[SubmoduleGitlinkState, ...], tuple[TaskOwnedSubmoduleState, ...]]:
-        """Prepare recursive submodules and return the complete frozen graph and owned states."""
+        """Prepare recursive submodules and return the complete frozen graph and owned states.
+
+        Args:
+            main_root: Main root.
+            task_root: Task root.
+            common_prefix: Exact task common prefix.
+            requested_path_set: Unique requested path values.
+            previous_state: Previous state.
+
+        Returns:
+            Values in deterministic immutable order.
+        """
 
         previous_owned_by_path_map = (
             {item.path: item for item in previous_state.task_owned_submodule_list} if previous_state else {}
@@ -106,7 +125,13 @@ class TaskSubmoduleManager:
         )
 
     def preflight(self, main_root: Path, *, common_prefix: str, requested_path_set: set[str]) -> None:
-        """Discover and classify the complete recursive main graph before worktree creation."""
+        """Discover and classify the complete recursive main graph before worktree creation.
+
+        Args:
+            main_root: Main root.
+            common_prefix: Exact task common prefix.
+            requested_path_set: Unique requested path values.
+        """
 
         self._initialize_recursive(
             main_root,
@@ -125,7 +150,13 @@ class TaskSubmoduleManager:
         task_state: TaskState,
         main_integrity_required: bool = True,
     ) -> None:
-        """Prove the complete recursive set, read-only gitlinks, and task-owned descendants."""
+        """Prove the complete recursive set, read-only gitlinks, and task-owned descendants.
+
+        Args:
+            repository: Exact Git repository root.
+            task_state: Task state.
+            main_integrity_required: Main integrity required.
+        """
 
         task_root = Path(repository.task_root).resolve(strict=True)
         owned_by_path_map = {item.path: item for item in repository.task_owned_submodule_list}
@@ -171,7 +202,12 @@ class TaskSubmoduleManager:
             )
 
     def pending_retire(self, repository: RepositoryState, *, common_prefix: str) -> None:
-        """Retire exact submodule pending markers after replicated state commits."""
+        """Retire exact submodule pending markers after replicated state commits.
+
+        Args:
+            repository: Exact Git repository root.
+            common_prefix: Exact task common prefix.
+        """
 
         for item in repository.task_owned_submodule_list:
             marker = self._pending_marker_path_get(Path(item.repository.task_root), common_prefix=common_prefix)
@@ -190,6 +226,17 @@ class TaskSubmoduleManager:
         baseline_commit: str,
         previous: TaskOwnedSubmoduleState | None,
     ) -> None:
+        """Create or adopt the exact task branch for one task-owned submodule.
+
+        Args:
+            main_root: Main root.
+            task_root: Task root.
+            path_text: Path text.
+            common_prefix: Exact task common prefix.
+            baseline_commit: Baseline commit.
+            previous: Previous.
+        """
+
         marker_path = self._pending_marker_path_get(task_root, common_prefix=common_prefix)
         expected_marker = {
             "schema_version": 1,
@@ -255,6 +302,18 @@ class TaskSubmoduleManager:
         interrupted_state_exists: bool = False,
         parent_path: str = "",
     ) -> None:
+        """Initialize the exact declared task-owned submodule ancestry in dependency order.
+
+        Args:
+            repository_root: Repository root.
+            common_prefix: Exact task common prefix.
+            task_owned_path_set: Unique task owned path values.
+            detach_read_only: Detach read only.
+            repair_read_only: Repair read only.
+            interrupted_state_exists: Interrupted state exists.
+            parent_path: Exact filesystem path for parent.
+        """
+
         if not (repository_root / ".gitmodules").is_file():
             return
         self._git.run(repository_root, ["submodule", "sync", "--recursive"])
@@ -333,9 +392,25 @@ class TaskSubmoduleManager:
             )
 
     def _recursive_gitlink_by_path_map_get(self, repository_root: Path) -> dict[str, str]:
+        """Return recursive gitlink by path map.
+
+        Args:
+            repository_root: Repository root.
+
+        Returns:
+            The recursive gitlink by path map.
+        """
+
         result: dict[str, str] = {}
 
         def populate(root: Path, parent_path: str) -> None:
+            """Populate one exact submodule worktree without broad recursive mutation.
+
+            Args:
+                root: Exact owner root path.
+                parent_path: Exact filesystem path for parent.
+            """
+
             for direct_path, commit in self._direct_gitlink_by_path_map_get(root).items():
                 full_path = f"{parent_path}/{direct_path}" if parent_path else direct_path
                 submodule_root = root / direct_path
@@ -348,6 +423,15 @@ class TaskSubmoduleManager:
         return result
 
     def _direct_gitlink_by_path_map_get(self, repository_root: Path) -> dict[str, str]:
+        """Return direct gitlink by path map.
+
+        Args:
+            repository_root: Repository root.
+
+        Returns:
+            The direct gitlink by path map.
+        """
+
         payload = self._git.run(repository_root, ["ls-files", "--stage", "-z"]).stdout
         result: dict[str, str] = {}
         for entry in payload.split(b"\0"):
@@ -368,6 +452,13 @@ class TaskSubmoduleManager:
         return result
 
     def _owned_path_set_validate(self, path_set: set[str], *, complete_path_set: set[str]) -> None:
+        """Require declared task-owned paths to form one closed submodule ancestry graph.
+
+        Args:
+            path_set: Unique path values.
+            complete_path_set: Unique complete path values.
+        """
+
         unknown = path_set - complete_path_set
         if unknown:
             raise GoalLifecycleError("Task-owned submodule is not one recursive gitlink: " + ", ".join(sorted(unknown)))
@@ -385,6 +476,15 @@ class TaskSubmoduleManager:
                 )
 
     def _repository_is_exact_root(self, path: Path) -> bool:
+        """Prove one path is the canonical root of its own Git repository.
+
+        Args:
+            path: Exact filesystem path.
+
+        Returns:
+            Whether the path is an exact non-symlink repository root.
+        """
+
         if path.is_symlink() or not path.is_dir():
             return False
         result = self._git.run(path, ["rev-parse", "--show-toplevel"], check=False)
@@ -396,10 +496,23 @@ class TaskSubmoduleManager:
             return False
 
     def _uninitialized_collision_reject(self, path: Path) -> None:
+        """Reject an uninitialized submodule path occupied by unrelated filesystem state.
+
+        Args:
+            path: Exact filesystem path.
+        """
+
         if path.is_symlink() or (path.exists() and (not path.is_dir() or any(path.iterdir()))):
             raise GoalLifecycleError(f"Uninitialized submodule path contains independent content: {path}")
 
     def _ignored_checkout_collision_reject(self, root: Path, *, expected_commit: str) -> None:
+        """Reject an ignored submodule checkout not owned by the current task.
+
+        Args:
+            root: Exact owner root path.
+            expected_commit: Expected commit.
+        """
+
         ignored = {
             item.decode("utf-8")
             for item in self._git.run(
@@ -420,6 +533,16 @@ class TaskSubmoduleManager:
             )
 
     def _pending_marker_path_get(self, task_root: Path, *, common_prefix: str) -> Path:
+        """Return the Git-common marker for one interrupted submodule preparation.
+
+        Args:
+            task_root: Task root.
+            common_prefix: Exact task common prefix.
+
+        Returns:
+            The pending marker path.
+        """
+
         return (
             self._git.common_directory_get(task_root)
             / "agent-workflows"
@@ -430,6 +553,16 @@ class TaskSubmoduleManager:
 
 
 def _path_overlap_set_get(left: set[str], right: set[str]) -> set[str]:
+    """Return path identities whose repository trees overlap in either direction.
+
+    Args:
+        left: Left.
+        right: Right.
+
+    Returns:
+        The path overlap set.
+    """
+
     result: set[str] = set()
     for left_text in left:
         left_path = PurePosixPath(left_text)

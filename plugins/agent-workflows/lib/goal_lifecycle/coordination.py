@@ -27,6 +27,13 @@ class CoordinationRepository:
     """Own short exact-path direct-main transactions in project-goals."""
 
     def __init__(self, root: Path, *, git: Git | None = None) -> None:
+        """Initialize the coordination repository dependencies.
+
+        Args:
+            root: Exact owner root path.
+            git: Git command boundary.
+        """
+
         self._git = git or Git()
         self.root = self._git.root_get(root)
         if self.root.name != "project-goals":
@@ -35,33 +42,84 @@ class CoordinationRepository:
         self._private_root = self._common_directory / "agent-workflows"
 
     def task_directory_get(self, common_prefix: str) -> Path:
+        """Return the canonical tracked coordination directory for one task.
+
+        Args:
+            common_prefix: Exact task common prefix.
+
+        Returns:
+            The task directory.
+        """
+
         common_prefix_validate(common_prefix)
         return self.root / common_prefix
 
     def task_lock(self, common_prefix: str) -> ExclusiveFileLock:
+        """Return the exclusive coordination lock for one task directory.
+
+        Args:
+            common_prefix: Exact task common prefix.
+
+        Returns:
+            Resulting exclusive file lock.
+        """
+
         common_prefix_validate(common_prefix)
         return ExclusiveFileLock(self._private_root / "lock" / f"task-{common_prefix}.lock")
 
     def merge_lock(self) -> ExclusiveFileLock:
+        """Return the coordination-repository lock that serializes main acceptance.
+
+        Returns:
+            Resulting exclusive file lock.
+        """
+
         return ExclusiveFileLock(self._private_root / "lock" / "workspace-merge.lock")
 
     def merge_owner_path_get(self) -> Path:
-        """Return the durable owner marker that spans external primary acceptance."""
+        """Return the durable owner marker that spans external primary acceptance.
+
+        Returns:
+            The durable owner marker that spans external primary acceptance.
+        """
 
         return self._private_root / "merge-owner.json"
 
     def state_path_get(self, common_prefix: str) -> Path:
+        """Return the private replicated-state path for one coordinated task.
+
+        Args:
+            common_prefix: Exact task common prefix.
+
+        Returns:
+            The state path.
+        """
+
         common_prefix_validate(common_prefix)
         return self._private_root / "task" / common_prefix / "state.json"
 
     def journal_path_get(self, common_prefix: str, operation: str) -> Path:
+        """Return the durable operation-journal path for one coordinated task.
+
+        Args:
+            common_prefix: Exact task common prefix.
+            operation: Lifecycle operation name.
+
+        Returns:
+            The journal path.
+        """
+
         common_prefix_validate(common_prefix)
         if not operation or any(character not in "abcdefghijklmnopqrstuvwxyz-" for character in operation):
             raise GoalLifecycleError("Coordination journal operation name is invalid")
         return self._private_root / "task" / common_prefix / f"{operation}-journal.json"
 
     def synchronize_require(self) -> str:
-        """Require one clean canonical main checkout equal to fetched origin/main."""
+        """Require one clean canonical main checkout equal to fetched origin/main.
+
+        Returns:
+            Resulting text value.
+        """
 
         if self._git.branch_get(self.root) != "main":
             raise GoalLifecycleError("project-goals canonical checkout must have main checked out")
@@ -90,6 +148,16 @@ class CoordinationRepository:
         return local
 
     def file_bytes_get(self, common_prefix: str, name: str) -> bytes:
+        """Read exact task-artifact bytes from the clean coordination checkout.
+
+        Args:
+            common_prefix: Exact task common prefix.
+            name: Canonical name.
+
+        Returns:
+            The file bytes.
+        """
+
         if name not in TASK_ARTIFACT_NAME_SET:
             raise GoalLifecycleError("Unknown task artifact name")
         path = self.task_directory_get(common_prefix) / name
@@ -98,7 +166,15 @@ class CoordinationRepository:
         return path.read_bytes()
 
     def task_directory_shape_require(self, common_prefix: str, *, complete: bool) -> set[str]:
-        """Require one physical task directory with no unknown or non-file entries."""
+        """Require one physical task directory with no unknown or non-file entries.
+
+        Args:
+            common_prefix: Exact task common prefix.
+            complete: Complete.
+
+        Returns:
+            Unique values.
+        """
 
         task_directory = self.task_directory_get(common_prefix)
         if task_directory.is_symlink() or not task_directory.is_dir():
@@ -123,7 +199,17 @@ class CoordinationRepository:
         relative_payload_by_path_map: Mapping[str, bytes | None],
         task_lock_already_held: bool = False,
     ) -> str:
-        """Publish only an exact closed task/owner path set to main without force."""
+        """Publish only an exact closed task/owner path set to main without force.
+
+        Args:
+            common_prefix: Exact task common prefix.
+            message: Message.
+            relative_payload_by_path_map: Relative payload by path mapping.
+            task_lock_already_held: Task lock already held.
+
+        Returns:
+            Resulting text value.
+        """
 
         common_prefix_validate(common_prefix)
         if not relative_payload_by_path_map:
@@ -201,6 +287,17 @@ class CoordinationRepository:
         message: str,
         relative_payload_by_path_map: Mapping[str, bytes | None],
     ) -> str:
+        """Create one detached coordination commit from a closed relative payload map.
+
+        Args:
+            base_commit: Base commit.
+            message: Message.
+            relative_payload_by_path_map: Relative payload by path mapping.
+
+        Returns:
+            The commit.
+        """
+
         index_path = self._private_root / "staging" / f"index-{secrets.token_hex(16)}"
         index_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         environment = {"GIT_INDEX_FILE": str(index_path)}
@@ -246,6 +343,15 @@ class CoordinationRepository:
                 pass
 
     def _publication_recover(self, *, common_prefix: str) -> tuple[str, dict[str, str]] | None:
+        """Recover an interrupted direct-main publication without duplicating its commit.
+
+        Args:
+            common_prefix: Exact task common prefix.
+
+        Returns:
+            Values in deterministic immutable order.
+        """
+
         journal_path = self.journal_path_get(common_prefix, "coordination")
         if not journal_path.exists():
             return None
@@ -340,7 +446,15 @@ class CoordinationRepository:
         raise GoalLifecycleError("Interrupted coordination publication cannot be resumed without ambiguity")
 
     def _recorded_payload_matches(self, ref: str, path_sha256_by_name_map: Mapping[str, str]) -> bool:
-        """Return whether one tree still contains the operation's exact recorded delta."""
+        """Return whether one tree still contains the operation's exact recorded delta.
+
+        Args:
+            ref: Ref.
+            path_sha256_by_name_map: Path sha-256 by name mapping.
+
+        Returns:
+            Whether one tree still contains the operation's exact recorded delta.
+        """
 
         for path, expected_sha256 in path_sha256_by_name_map.items():
             blob = self._git.run(self.root, ["show", f"{ref}:{path}"], check=False)
@@ -352,6 +466,16 @@ class CoordinationRepository:
         return True
 
     def _is_ancestor(self, ancestor: str, descendant: str) -> bool:
+        """Report whether one exact commit is an ancestor of another.
+
+        Args:
+            ancestor: Ancestor.
+            descendant: Descendant.
+
+        Returns:
+            Whether ancestor.
+        """
+
         return (
             self._git.run(
                 self.root,
@@ -363,7 +487,12 @@ class CoordinationRepository:
 
 
 def _coordination_path_list_validate(path_list: list[str], *, common_prefix: str) -> None:
-    """Require every direct-main mutation path to belong to the closed owner set."""
+    """Require every direct-main mutation path to belong to the closed owner set.
+
+    Args:
+        path_list: Ordered path values.
+        common_prefix: Exact task common prefix.
+    """
 
     allowed_path_set = {
         *(f"{common_prefix}/{name}" for name in TASK_ARTIFACT_NAME_SET),

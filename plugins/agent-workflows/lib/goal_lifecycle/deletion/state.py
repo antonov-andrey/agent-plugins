@@ -15,11 +15,24 @@ class GoalDeletionPrivateStateRetirer:
     """Remove cleanup bindings, task replicas, authoritative state, and journal."""
 
     def __init__(self, coordination: CoordinationRepository, *, git: Git) -> None:
+        """Initialize the goal deletion private state retirer dependencies.
+
+        Args:
+            coordination: Coordination.
+            git: Git command boundary.
+        """
+
         self._coordination = coordination
         self._git = git
 
     def retire(self, state: TaskState, *, journal: dict[str, object], journal_path: Path) -> None:
-        """Retire every private artifact idempotently after public deletion completed."""
+        """Retire every private artifact idempotently after public deletion completed.
+
+        Args:
+            state: Exact runtime state.
+            journal: Journal.
+            journal_path: Exact filesystem path for journal.
+        """
 
         task_directory_set: set[Path] = set()
         for repository in repository_boundary_list_get(state):
@@ -64,7 +77,11 @@ class GoalDeletionPrivateStateRetirer:
 
     @staticmethod
     def _file_unlink(path: Path) -> None:
-        """Idempotently remove one exact private file and persist its parent entry."""
+        """Idempotently remove one exact private file and persist its parent entry.
+
+        Args:
+            path: Exact filesystem path.
+        """
 
         try:
             path.unlink()

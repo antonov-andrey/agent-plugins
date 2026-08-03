@@ -11,6 +11,12 @@ class AcceptedCheckpointPublisher:
     """Advance the tracked accepted pointer by one exact checkpoint."""
 
     def __init__(self, coordination: CoordinationRepository) -> None:
+        """Initialize the accepted checkpoint publisher dependencies.
+
+        Args:
+            coordination: Coordination.
+        """
+
         self._coordination = coordination
 
     def publish(
@@ -20,7 +26,16 @@ class AcceptedCheckpointPublisher:
         checkpoint: Checkpoint,
         document: CheckpointDocument,
     ) -> str:
-        """Idempotently publish one accepted checkpoint on coordination main."""
+        """Idempotently publish one accepted checkpoint on coordination main.
+
+        Args:
+            common_prefix: Exact task common prefix.
+            checkpoint: Checkpoint.
+            document: Document.
+
+        Returns:
+            Resulting text value.
+        """
 
         if document.accepted_checkpoint_id == checkpoint.checkpoint_id:
             return self._coordination.synchronize_require()

@@ -28,6 +28,15 @@ class CoordinationBootstrapException:
 
     @classmethod
     def from_payload(cls, payload: object) -> "CoordinationBootstrapException":
+        """Build one coordination bootstrap exception from an untrusted payload.
+
+        Args:
+            payload: Structured operation payload.
+
+        Returns:
+            One coordination bootstrap exception from an untrusted payload.
+        """
+
         expected = {
             "schema_version",
             "branch_name",
@@ -75,10 +84,26 @@ class CoordinationBootstrapException:
         )
 
     def payload_get(self) -> dict[str, object]:
+        """Return the canonical serialized payload.
+
+        Returns:
+            The canonical serialized payload.
+        """
+
         return asdict(self)
 
 
 def coordination_bootstrap_exception_path_get(goals_root: Path, *, git: Git | None = None) -> Path:
+    """Locate the shared bootstrap-exception record in the goals Git directory.
+
+    Args:
+        goals_root: Goals root.
+        git: Git command boundary.
+
+    Returns:
+        Absolute path of the shared exception record.
+    """
+
     command = git or Git()
     return command.common_directory_get(goals_root) / "agent-workflows" / "coordination-bootstrap-exception.json"
 
@@ -88,6 +113,16 @@ def coordination_bootstrap_exception_optional_get(
     *,
     git: Git | None = None,
 ) -> CoordinationBootstrapException | None:
+    """Return the optional coordination bootstrap exception.
+
+    Args:
+        goals_root: Goals root.
+        git: Git command boundary.
+
+    Returns:
+        The optional coordination bootstrap exception.
+    """
+
     command = git or Git()
     path = coordination_bootstrap_exception_path_get(goals_root, git=command)
     if not path.exists():
@@ -104,7 +139,19 @@ def coordination_bootstrap_exception_write(
     task_root: Path,
     git: Git | None = None,
 ) -> CoordinationBootstrapException:
-    """Bind an already published one-time bootstrap without reading legacy state."""
+    """Bind an already published one-time bootstrap without reading legacy state.
+
+    Args:
+        goals_root: Goals root.
+        common_prefix: Exact task common prefix.
+        goal_carrier_path: Exact filesystem path for goal carrier.
+        specification_carrier_path: Exact filesystem path for specification carrier.
+        task_root: Task root.
+        git: Git command boundary.
+
+    Returns:
+        Resulting coordination bootstrap exception.
+    """
 
     command = git or Git()
     common_prefix_validate(common_prefix)
@@ -162,7 +209,13 @@ def coordination_bootstrap_exception_validate(
     *,
     git: Git | None = None,
 ) -> None:
-    """Prove the exact clean bootstrap worktree, branch, publication, and carriers."""
+    """Prove the exact clean bootstrap worktree, branch, publication, and carriers.
+
+    Args:
+        goals_root: Goals root.
+        exception: Exception.
+        git: Git command boundary.
+    """
 
     command = git or Git()
     root = command.root_get(goals_root)
@@ -220,6 +273,16 @@ def coordination_bootstrap_exception_validate(
 
 
 def _carrier_get(path: Path, *, label: str) -> tuple[Path, str]:
+    """Return one ordinary bootstrap-carrier path with its expected link label.
+
+    Args:
+        path: Exact filesystem path.
+        label: Diagnostic owner label.
+
+    Returns:
+        The carrier.
+    """
+
     if path.is_symlink() or not path.is_file() or path.stat().st_nlink != 1:
         raise GoalLifecycleError(f"Coordination bootstrap {label} carrier must be one ordinary file")
     resolved = path.resolve(strict=True)
@@ -227,6 +290,16 @@ def _carrier_get(path: Path, *, label: str) -> tuple[Path, str]:
 
 
 def _worktree_root_set_get(root: Path, *, git: Git) -> set[Path]:
+    """Return every physical worktree registered by one repository.
+
+    Args:
+        root: Exact owner root path.
+        git: Git command boundary.
+
+    Returns:
+        The worktree root set.
+    """
+
     payload = git.run(root, ["worktree", "list", "--porcelain", "-z"]).stdout
     return {
         Path(item.removeprefix(b"worktree ").decode("utf-8")).resolve(strict=True)

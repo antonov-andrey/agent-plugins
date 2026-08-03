@@ -14,7 +14,16 @@ def ordinary_task_artifact_input_get(
     *,
     forbidden_root_list: Sequence[Path],
 ) -> bytes | None:
-    """Return optional UTF-8 task-artifact bytes from outside repository trees."""
+    """Return optional UTF-8 task-artifact bytes from outside repository trees.
+
+    Args:
+        path: Exact filesystem path.
+        label: Diagnostic owner label.
+        forbidden_root_list: Ordered forbidden root values.
+
+    Returns:
+        The optional UTF-8 task-artifact bytes from outside repository trees.
+    """
 
     return (
         None
@@ -33,7 +42,16 @@ def ordinary_task_artifact_input_require(
     *,
     forbidden_root_list: Sequence[Path],
 ) -> bytes:
-    """Return one ordinary single-link UTF-8 input outside every forbidden root."""
+    """Return one ordinary single-link UTF-8 input outside every forbidden root.
+
+    Args:
+        path: Exact filesystem path.
+        label: Diagnostic owner label.
+        forbidden_root_list: Ordered forbidden root values.
+
+    Returns:
+        One ordinary single-link UTF-8 input outside every forbidden root.
+    """
 
     if path.is_symlink() or not path.is_file() or path.stat().st_nlink != 1:
         raise GoalLifecycleError(f"{label} must be one ordinary single-link file outside repository trees")

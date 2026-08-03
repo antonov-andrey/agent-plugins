@@ -17,6 +17,15 @@ from goal_lifecycle import GoalLifecycleError, GoalMergeWorkflow
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Run the command-line entrypoint.
+
+    Args:
+        argv: Argv.
+
+    Returns:
+        Zero on success or 2 when the lifecycle contract rejects the request.
+    """
+
     parser = argparse.ArgumentParser(description="Merge or accept one published checkpoint.")
     parser.add_argument("operation", choices=("merge", "accept"))
     parser.add_argument("--goals-repository", required=True, type=Path)
