@@ -85,12 +85,14 @@ An owner with task-scoped external resources may add:
 ```yaml
 cleanup:
   command_argument_list:
-    - python
-    - development_environment_manage.py
-    - destroy
-    - --git-worktree
+    - project-owned-cleanup
+    - --common-prefix
     - "{common_prefix}"
 ```
+
+The concrete executable and arguments belong only to the consumer repository;
+the reusable provider owns the closed argv shape and placeholder semantics, not
+any project cleanup command.
 
 The schema is closed and follows the shared machine-readable format contract: UTF-8, one YAML 1.2 document, `.yaml`, exact scalar and collection types, and rejection of duplicate keys, custom tags, anchors, aliases, merge keys, and unknown fields. No TOML or `.yml` compatibility reader remains in the target implementation.
 
