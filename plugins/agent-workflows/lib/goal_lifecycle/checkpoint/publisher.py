@@ -74,7 +74,7 @@ class GoalCheckpointPublisher:
                 else {}
             )
             state = self._state_store.get(common_prefix)
-            self._validator.validate(
+            state = self._validator.validate(
                 state,
                 required_state="active",
                 main_integrity_required=False,

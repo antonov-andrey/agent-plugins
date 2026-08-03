@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+from dataclasses import replace
 from pathlib import Path
 import subprocess
 import sys
@@ -37,6 +38,7 @@ from goal_lifecycle.error import GoalLifecycleError
 from goal_lifecycle.git import Git
 from goal_lifecycle.merge.workflow import GoalMergeWorkflow
 from goal_lifecycle.task.model import TaskState
+from goal_lifecycle.task.state import TaskStateStore
 from goal_lifecycle.task.workflow import GoalWorktreeWorkflow
 from goal_lifecycle.yaml_document import yaml_document_bytes_get, yaml_document_load
 
@@ -181,6 +183,81 @@ def _task_commit_push(task_root: Path, *, message: str = "Close task") -> str:
     _git(task_root, "commit", "-m", message)
     _git(task_root, "push", "-u", "origin", PREFIX)
     return _git(task_root, "rev-parse", "HEAD")
+
+
+def _active_task_with_omitted_changed_submodule_create(
+    workspace: Path,
+    *,
+    push_submodule_branch: bool,
+) -> tuple[Path, Path, Path, GoalWorktreeWorkflow, TaskState]:
+    """Create an active legacy-shaped task whose committed submodule change lacks inventory.
+
+    Args:
+        workspace: Workspace.
+        push_submodule_branch: Whether to publish the exact delegated task branch.
+
+    Returns:
+        Goals root, task root, task submodule, workflow, and omitted state.
+    """
+
+    goals, _ = _repository_create(workspace, "project-goals")
+    project, _ = _repository_create(workspace, "product-one")
+    _provider, provider_remote = _repository_create(workspace, "provider")
+    _submodule_attach(project, remote=provider_remote, path="module/provider")
+    spec_input = workspace / "spec-input.md"
+    goal_input = workspace / "goal-input.md"
+    spec_input.write_text("# Spec\n", encoding="utf-8")
+    goal_input.write_text("# Goal\n", encoding="utf-8")
+    workflow = GoalWorktreeWorkflow(goals)
+    prepared = workflow.prepare(
+        common_prefix=PREFIX,
+        repository_root_list=[project],
+        specification_input=spec_input,
+    )
+    workflow.contracts_authored(common_prefix=PREFIX)
+    workflow.seal(common_prefix=PREFIX, goal_input=goal_input)
+    workflow.activate(common_prefix=PREFIX)
+
+    coordination = CoordinationRepository(goals)
+    state_store = TaskStateStore(coordination, git=Git())
+    state = state_store.get(PREFIX)
+    omitted_state = replace(
+        state,
+        provider_state_generation=state.provider_state_generation + 1,
+        repository_list=tuple(
+            replace(
+                repository,
+                submodule_gitlink_list=(),
+                task_owned_submodule_list=(),
+            )
+            for repository in state.repository_list
+        ),
+    )
+    state_store.write(omitted_state)
+
+    task_root = Path(prepared["task_root_list"][0])
+    task_submodule = task_root / "module" / "provider"
+    _git(task_submodule, "switch", "-c", PREFIX)
+    (task_submodule / ".gitignore").write_text("/.worktree/\n", encoding="utf-8")
+    (task_submodule / "worktree-bootstrap.yaml").write_text(
+        """schema_version: 2
+resource:
+  copy_optional_path_list: []
+  copy_required_path_list: []
+  link_optional_path_list: []
+  link_required_path_list: []
+""",
+        encoding="utf-8",
+    )
+    (task_submodule / "task-change.txt").write_text("delegated task\n", encoding="utf-8")
+    _git(task_submodule, "add", ".gitignore", "worktree-bootstrap.yaml", "task-change.txt")
+    _git(task_submodule, "commit", "-m", "Complete delegated task")
+    if push_submodule_branch:
+        _git(task_submodule, "push", "-u", "origin", PREFIX)
+    _git(task_root, "add", "-A")
+    _git(task_root, "commit", "-m", "Record delegated task and bootstrap contracts")
+    _git(task_root, "push", "-u", "origin", PREFIX)
+    return goals, task_root, task_submodule, workflow, omitted_state
 
 
 def test_strict_yaml_rejects_duplicate_anchor_tag_and_wrong_extension(
@@ -541,6 +618,174 @@ def test_dirty_read_only_submodule_is_preserved_and_clean_commit_drift_is_repair
     with pytest.raises(GoalLifecycleError, match="must be clean"):
         workflow.validate(common_prefix=PREFIX, required_state="repository_prepared")
     assert (task_submodule / "README.md").read_text(encoding="utf-8") == "preserve dirty state\n"
+
+
+def test_validation_recovers_provider_omitted_submodule_inventory_from_pushed_commits(
+    tmp_path: Path,
+) -> None:
+    """An exact pushed delegated branch repairs one wholly omitted recursive inventory.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
+
+    goals, task_root, task_submodule, workflow, omitted_state = _active_task_with_omitted_changed_submodule_create(
+        tmp_path,
+        push_submodule_branch=True,
+    )
+
+    result = workflow.validate(common_prefix=PREFIX, required_state="active")
+
+    state = TaskState.from_payload(
+        json.loads(CoordinationRepository(goals).state_path_get(PREFIX).read_text(encoding="utf-8"))
+    )
+    repository = state.repository_list[0]
+    assert state.provider_state_generation == omitted_state.provider_state_generation + 1
+    assert [item.path for item in repository.submodule_gitlink_list] == ["module/provider"]
+    assert [item.path for item in repository.task_owned_submodule_list] == ["module/provider"]
+    assert result["participating_submodule_root_list"] == [str(task_submodule)]
+    assert result["performed_repair_list"] == [
+        f"provider-omitted-submodule-inventory-recovered:{task_root}",
+        f"recovered-submodule-cleanup-binding-ensured:{task_submodule}",
+    ]
+    assert _git(task_submodule, "branch", "--show-current") == PREFIX
+    cleanup_binding_receipt_validate(
+        task_submodule,
+        common_prefix=PREFIX,
+        provider_state_generation=state.cleanup_binding_generation,
+        sealed_specification_sha256=state.sealed_spec_sha256,
+    )
+    replica_path = (
+        Path(_git(task_submodule, "rev-parse", "--path-format=absolute", "--git-common-dir"))
+        / "agent-workflows"
+        / "task"
+        / PREFIX
+        / "state.json"
+    )
+    assert TaskState.from_payload(json.loads(replica_path.read_text(encoding="utf-8"))) == state
+
+    repeated = workflow.validate(common_prefix=PREFIX, required_state="active")
+    assert repeated["performed_repair_list"] == []
+
+
+def test_validation_rejects_unpushed_submodule_inventory_recovery_without_state_change(
+    tmp_path: Path,
+) -> None:
+    """A local-only delegated commit never becomes durable task ownership.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
+
+    goals, _task_root, _task_submodule, workflow, omitted_state = _active_task_with_omitted_changed_submodule_create(
+        tmp_path,
+        push_submodule_branch=False,
+    )
+
+    with pytest.raises(GoalLifecycleError, match="not fully pushed"):
+        workflow.validate(common_prefix=PREFIX, required_state="active")
+
+    state = TaskState.from_payload(
+        json.loads(CoordinationRepository(goals).state_path_get(PREFIX).read_text(encoding="utf-8"))
+    )
+    assert state == omitted_state
+    assert state.repository_list[0].submodule_gitlink_list == ()
+    assert state.repository_list[0].task_owned_submodule_list == ()
+
+
+def test_validation_resumes_inventory_recovery_after_state_write_before_receipt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A surviving branch marker completes active receipt publication after process loss.
+
+    Args:
+        tmp_path: Temporary directory path.
+        monkeypatch: Pytest mutation fixture.
+    """
+
+    goals, _task_root, task_submodule, workflow, omitted_state = _active_task_with_omitted_changed_submodule_create(
+        tmp_path,
+        push_submodule_branch=True,
+    )
+
+    def fail_before_receipt(_state: TaskState) -> None:
+        """Simulate process loss after replicated state publication."""
+
+        raise RuntimeError("simulated crash before recovered cleanup receipt")
+
+    monkeypatch.setattr(
+        workflow._repository_manager,
+        "pending_submodule_recovery_receipt_ensure",
+        fail_before_receipt,
+    )
+    with pytest.raises(RuntimeError, match="simulated crash"):
+        workflow.validate(common_prefix=PREFIX, required_state="active")
+
+    interrupted_state = TaskState.from_payload(
+        json.loads(CoordinationRepository(goals).state_path_get(PREFIX).read_text(encoding="utf-8"))
+    )
+    assert interrupted_state.provider_state_generation == omitted_state.provider_state_generation + 1
+    assert interrupted_state.repository_list[0].task_owned_submodule_list
+    assert not cleanup_binding_receipt_path_get(task_submodule, common_prefix=PREFIX).exists()
+
+    result = GoalWorktreeWorkflow(goals).validate(common_prefix=PREFIX, required_state="active")
+    assert result["performed_repair_list"] == [
+        f"recovered-submodule-cleanup-binding-ensured:{task_submodule}",
+    ]
+    cleanup_binding_receipt_validate(
+        task_submodule,
+        common_prefix=PREFIX,
+        provider_state_generation=interrupted_state.cleanup_binding_generation,
+        sealed_specification_sha256=interrupted_state.sealed_spec_sha256,
+    )
+
+
+def test_validation_recovers_omitted_read_only_submodule_inventory(
+    tmp_path: Path,
+) -> None:
+    """An unchanged committed graph is reconstructed as read-only without delegation.
+
+    Args:
+        tmp_path: Temporary directory path.
+    """
+
+    goals, _ = _repository_create(tmp_path, "project-goals")
+    project, _ = _repository_create(tmp_path, "product-one")
+    _provider, provider_remote = _repository_create(tmp_path, "provider")
+    _submodule_attach(project, remote=provider_remote, path="module/provider")
+    spec_input = tmp_path / "spec-input.md"
+    goal_input = tmp_path / "goal-input.md"
+    spec_input.write_text("# Spec\n", encoding="utf-8")
+    goal_input.write_text("# Goal\n", encoding="utf-8")
+    workflow = GoalWorktreeWorkflow(goals)
+    prepared = workflow.prepare(
+        common_prefix=PREFIX,
+        repository_root_list=[project],
+        specification_input=spec_input,
+    )
+    workflow.contracts_authored(common_prefix=PREFIX)
+    workflow.seal(common_prefix=PREFIX, goal_input=goal_input)
+    workflow.activate(common_prefix=PREFIX)
+    task_root = Path(prepared["task_root_list"][0])
+    _task_commit_push(task_root, message="Commit generated bootstrap contract")
+
+    state_store = TaskStateStore(CoordinationRepository(goals), git=Git())
+    state = state_store.get(PREFIX)
+    omitted_state = replace(
+        state,
+        provider_state_generation=state.provider_state_generation + 1,
+        repository_list=tuple(
+            replace(repository, submodule_gitlink_list=(), task_owned_submodule_list=())
+            for repository in state.repository_list
+        ),
+    )
+    state_store.write(omitted_state)
+
+    workflow.validate(common_prefix=PREFIX, required_state="active")
+    recovered = state_store.get(PREFIX)
+    assert [item.path for item in recovered.repository_list[0].submodule_gitlink_list] == ["module/provider"]
+    assert recovered.repository_list[0].task_owned_submodule_list == ()
 
 
 def test_seal_rejects_prepopulated_checkpoint_before_goal_publication(

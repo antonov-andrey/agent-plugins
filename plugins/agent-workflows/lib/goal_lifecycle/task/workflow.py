@@ -171,7 +171,7 @@ class GoalWorktreeWorkflow:
             )
             self._state_store.write(next_state)
             self._repository_manager.pending_retire(next_state)
-            self._validator.validate(next_state, required_state="repository_prepared")
+            next_state = self._validator.validate(next_state, required_state="repository_prepared")
             return self._result_payload_get(next_state)
 
     def revise(self, *, common_prefix: str) -> dict[str, object]:
@@ -230,7 +230,7 @@ class GoalWorktreeWorkflow:
             state = self._state_store.get(common_prefix)
             if state.lifecycle_state == "contracts_authored":
                 self._state_store.write(state)
-                self._validator.validate(state, required_state="contracts_authored")
+                state = self._validator.validate(state, required_state="contracts_authored")
                 return self._result_payload_get(state)
             if state.lifecycle_state != "repository_prepared":
                 raise GoalLifecycleError("contracts-authored requires repository_prepared")
@@ -266,7 +266,7 @@ class GoalWorktreeWorkflow:
                 ).hexdigest(),
             )
             self._state_store.write(next_state)
-            self._validator.validate(next_state, required_state="contracts_authored")
+            next_state = self._validator.validate(next_state, required_state="contracts_authored")
             return self._result_payload_get(next_state)
 
     def seal(self, *, common_prefix: str, goal_input: Path | None = None) -> dict[str, object]:
@@ -288,7 +288,7 @@ class GoalWorktreeWorkflow:
                 if goal_input is not None:
                     raise GoalLifecycleError("Changing a sealed goal candidate requires revise")
                 self._state_store.write(state)
-                self._validator.validate(state, required_state="goal_ready")
+                state = self._validator.validate(state, required_state="goal_ready")
                 return self._result_payload_get(state)
             if state.lifecycle_state != "contracts_authored":
                 raise GoalLifecycleError("seal requires contracts_authored")
@@ -337,7 +337,7 @@ class GoalWorktreeWorkflow:
                 ).hexdigest(),
             )
             self._state_store.write(next_state)
-            self._validator.validate(next_state, required_state="goal_ready")
+            next_state = self._validator.validate(next_state, required_state="goal_ready")
             return self._result_payload_get(next_state)
 
     def activate(self, *, common_prefix: str) -> dict[str, object]:
@@ -357,11 +357,11 @@ class GoalWorktreeWorkflow:
             if state.lifecycle_state == "active":
                 self._state_store.write(state)
                 self._repository_manager.cleanup_binding_receipt_ensure(state)
-                self._validator.validate(state, required_state="active")
+                state = self._validator.validate(state, required_state="active")
                 return self._result_payload_get(state)
             if state.lifecycle_state != "goal_ready":
                 raise GoalLifecycleError("activate requires goal_ready")
-            self._validator.validate(state, required_state="goal_ready")
+            state = self._validator.validate(state, required_state="goal_ready")
             next_state = replace(
                 state,
                 cleanup_binding_generation=state.provider_state_generation + 1,
@@ -370,7 +370,7 @@ class GoalWorktreeWorkflow:
             )
             self._state_store.write(next_state)
             self._repository_manager.cleanup_binding_receipt_ensure(next_state)
-            self._validator.validate(next_state, required_state="active")
+            next_state = self._validator.validate(next_state, required_state="active")
             return self._result_payload_get(next_state)
 
     def recover_main_leak(
@@ -400,7 +400,7 @@ class GoalWorktreeWorkflow:
                 main_repository=main_repository,
                 path_list=list(path_list),
             )
-            self._validator.validate(state, required_state=state.lifecycle_state)
+            state = self._validator.validate(state, required_state=state.lifecycle_state)
             self._repair_report.record(f"main-worktree-leak-recovered:{Path(main_repository)}")
             return self._result_payload_get(state)
 
@@ -440,7 +440,7 @@ class GoalWorktreeWorkflow:
                 repository_list=repository_list,
             )
             self._state_store.write(next_state)
-            self._validator.validate(next_state, required_state=next_state.lifecycle_state)
+            next_state = self._validator.validate(next_state, required_state=next_state.lifecycle_state)
             return self._result_payload_get(next_state)
 
     def validate(self, *, common_prefix: str, required_state: str) -> dict[str, object]:
@@ -458,7 +458,7 @@ class GoalWorktreeWorkflow:
         common_prefix_validate(common_prefix)
         with self._coordination.task_lock(common_prefix):
             state = self._state_store.get(common_prefix)
-            self._validator.validate(state, required_state=required_state)
+            state = self._validator.validate(state, required_state=required_state)
             return self._result_payload_get(state)
 
     def _result_payload_get(self, state: TaskState) -> dict[str, object]:

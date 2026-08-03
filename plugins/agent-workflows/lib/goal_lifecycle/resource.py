@@ -50,33 +50,12 @@ class BootstrapResourceManager:
             Values in deterministic immutable order.
         """
 
-        submodule_path_set = self._submodule_path_set_get(task_root)
         previous_by_path_map = {item.path: item for item in previous_state_list}
-        desired_by_path_map: dict[str, tuple[str, bool, str, str]] = {}
-        for resource_class, path_list in manifest.resource_by_key_map.items():
-            strategy = resource_class.split("_", maxsplit=1)[0]
-            required = "_required_" in resource_class
-            for path_text in path_list:
-                _submodule_crossing_reject(path_text, submodule_path_set)
-                source = main_root / path_text
-                source_present = source.exists() or source.is_symlink()
-                if not source_present:
-                    if required:
-                        raise GoalLifecycleError(f"Required bootstrap source is absent: {source}")
-                    desired_by_path_map[path_text] = (resource_class, True, "", "")
-                    continue
-                source_fingerprint = _object_fingerprint(source, declared_root=source)
-                desired_fingerprint = (
-                    _expected_link_fingerprint(source=source, destination=task_root / path_text)
-                    if strategy == "link"
-                    else source_fingerprint
-                )
-                desired_by_path_map[path_text] = (
-                    resource_class,
-                    False,
-                    source_fingerprint,
-                    desired_fingerprint,
-                )
+        desired_by_path_map = self._desired_by_path_map_get(
+            main_root=main_root,
+            task_root=task_root,
+            manifest=manifest,
+        )
 
         known_path_set = set(desired_by_path_map) | set(previous_by_path_map)
         self._unknown_transaction_reject(task_root, known_path_set=known_path_set)
@@ -177,6 +156,64 @@ class BootstrapResourceManager:
                     skipped=False,
                     source_fingerprint=source_fingerprint,
                     task_fingerprint=actual_fingerprint,
+                )
+            )
+        return tuple(sorted(result, key=lambda item: (item.path, item.resource_class)))
+
+    def existing_state_capture(
+        self,
+        *,
+        main_root: Path,
+        task_root: Path,
+        manifest: BootstrapManifest,
+    ) -> tuple[BootstrapResourceState, ...]:
+        """Bind an already materialized resource graph without changing it.
+
+        Args:
+            main_root: Main root.
+            task_root: Task root.
+            manifest: Manifest.
+
+        Returns:
+            Existing resource states in deterministic immutable order.
+        """
+
+        desired_by_path_map = self._desired_by_path_map_get(
+            main_root=main_root,
+            task_root=task_root,
+            manifest=manifest,
+        )
+        self._unknown_transaction_reject(task_root, known_path_set=set(desired_by_path_map))
+        result: list[BootstrapResourceState] = []
+        for path_text, (
+            resource_class,
+            skipped,
+            source_fingerprint,
+            desired_fingerprint,
+        ) in desired_by_path_map.items():
+            destination = task_root / path_text
+            if skipped:
+                if destination.exists() or destination.is_symlink():
+                    raise GoalLifecycleError(
+                        f"Skipped bootstrap destination unexpectedly exists during state recovery: {destination}"
+                    )
+                task_fingerprint = ""
+            else:
+                task_fingerprint = _resource_destination_fingerprint(
+                    destination,
+                    resource_class=resource_class,
+                )
+                if task_fingerprint != desired_fingerprint:
+                    raise GoalLifecycleError(
+                        f"Existing bootstrap destination differs during state recovery: {destination}"
+                    )
+            result.append(
+                BootstrapResourceState(
+                    path=path_text,
+                    resource_class=resource_class,
+                    skipped=skipped,
+                    source_fingerprint=source_fingerprint,
+                    task_fingerprint=task_fingerprint,
                 )
             )
         return tuple(sorted(result, key=lambda item: (item.path, item.resource_class)))
@@ -330,6 +367,52 @@ class BootstrapResourceManager:
         self._transaction_retire(transaction_root)
         if transaction_preexisting:
             self._repair_report.record(f"bootstrap-resource-transaction-recovered:{task_root}:{path_text}")
+
+    def _desired_by_path_map_get(
+        self,
+        *,
+        main_root: Path,
+        task_root: Path,
+        manifest: BootstrapManifest,
+    ) -> dict[str, tuple[str, bool, str, str]]:
+        """Return exact desired source and destination fingerprints for one manifest.
+
+        Args:
+            main_root: Main root.
+            task_root: Task root.
+            manifest: Manifest.
+
+        Returns:
+            Desired resource state by root-relative path.
+        """
+
+        submodule_path_set = self._submodule_path_set_get(task_root)
+        result: dict[str, tuple[str, bool, str, str]] = {}
+        for resource_class, path_list in manifest.resource_by_key_map.items():
+            strategy = resource_class.split("_", maxsplit=1)[0]
+            required = "_required_" in resource_class
+            for path_text in path_list:
+                _submodule_crossing_reject(path_text, submodule_path_set)
+                source = main_root / path_text
+                source_present = source.exists() or source.is_symlink()
+                if not source_present:
+                    if required:
+                        raise GoalLifecycleError(f"Required bootstrap source is absent: {source}")
+                    result[path_text] = (resource_class, True, "", "")
+                    continue
+                source_fingerprint = _object_fingerprint(source, declared_root=source)
+                desired_fingerprint = (
+                    _expected_link_fingerprint(source=source, destination=task_root / path_text)
+                    if strategy == "link"
+                    else source_fingerprint
+                )
+                result[path_text] = (
+                    resource_class,
+                    False,
+                    source_fingerprint,
+                    desired_fingerprint,
+                )
+        return result
 
     def _transaction_retire(self, transaction_root: Path) -> None:
         """Retire one completed staging transaction after destination exposure proof.

@@ -144,6 +144,8 @@ Read-only submodules remain at exact recorded gitlinks. Task-owned submodules ma
 
 Once approved contracts fix the participant and task-owned-submodule sets, a clean read-only checkout at the wrong commit remains read-only and is restored to the recorded gitlink after collision checks. It is not reclassified, promoted into task ownership, or returned to the user as a choice merely because it drifted.
 
+One narrow self-hosting recovery applies when an earlier provider generation omitted the complete recursive inventory: both recorded submodule lists are empty even though the baseline committed tree contains gitlinks. Recovery requires a clean committed parent task tree, identical baseline/current recursive path sets, and exact initialized physical repositories. Unchanged gitlinks are reconstructed as read-only. A changed gitlink is reconstructed as task-owned only when its current commit descends from the baseline, the exact local and fetched `origin/<common-prefix>` branches already equal that commit, and its current committed manifest, ignore contract, and materialized resources can be captured without authoring or mutation. A missing, stale, unpushed, added, removed, dirty, or ambiguous boundary fails closed. This recovery never changes the classification of any non-empty recorded inventory.
+
 Every Git query disables repository-level submodule-ignore suppression and uses literal path handling. Before repairing a clean checkout, validation checks ignored untracked collisions against the target tree. Dirty or unavailable state that could contain user work is preserved and reported rather than reset.
 
 ## Private State
@@ -162,6 +164,8 @@ State binds at least:
 Writes use atomic replacement, file fsync, and parent-directory fsync. Pending worktree, resource, repair, coordination-publication, private-write, and migration operations expose durable intent before mutation. Staging identities are unpredictable and owned only by matching recorded intent; deterministic filenames alone never prove ownership. Fingerprints include object type, mode, structure, raw link target, and length-delimited bytes, preserving non-UTF-8 names without lossy conversion.
 
 No obsolete state or preimage is retired until every current replica records the successor. Recovery completes or rolls back only an exact known phase and reports each repair once. Unknown or contradictory state fails closed.
+
+Provider-omitted submodule recovery publishes one next-generation complete state to the existing and newly delegated repository replicas before retiring its durable branch marker. For an active task, that marker also authorizes idempotent creation of the new delegated boundary's cleanup receipt using the unchanged cleanup-binding generation. A crash after state publication but before receipt publication resumes from that marker; absence of a receipt without the matching pending marker remains a validation failure.
 
 ## Isolation Validation
 
@@ -191,6 +195,7 @@ A failed validation first identifies the changed object, owner, recorded and cur
 - reconstructing missing inactive private state from one complete agreeing replica;
 - synchronizing and initializing missing recursive submodules;
 - restoring a clean read-only submodule to its recorded gitlink after collision checks;
+- reconstructing a wholly provider-omitted recursive inventory from exact committed baseline/current graphs and already pushed task branches;
 - completing or rolling back a known pending resource or coordination transaction;
 - creating a missing initial current-version manifest;
 - recording provably independent non-overlapping main work;
@@ -238,6 +243,7 @@ Executable tests use temporary real Git repositories and cover:
 - strict current YAML schema, `.yaml` naming, duplicate/tag/anchor/alias/merge/unknown-key rejection, exact types, and absence of TOML/`.yml` compatibility;
 - cleanup-declaration validation and seal-time binding without execution;
 - recursive read-only and task-owned submodules, nested ownership, exact gitlinks, dirty/unavailable handling, and ignored-file collision safety;
+- omitted-inventory recovery for unchanged read-only gitlinks and exact pushed task-owned changes, rejection of unpushed or changed path sets, idempotence, and crash recovery between state and active receipt publication;
 - main/user-state preservation, overlap classification, caller-provenance leak recovery, exact committed-overlap attestation, and later-drift rejection;
 - wrong-root rerouting and deterministic worktree, state, manifest, resource, and submodule repair;
 - crash recovery for pending worktree, resource, coordination publication, private write, fingerprint migration, and repair transactions;

@@ -167,6 +167,50 @@ class TaskRepositoryManager:
         )
         return task_root
 
+    def missing_submodule_inventory_recover(
+        self,
+        repository: RepositoryState,
+        *,
+        task_state: TaskState,
+        main_integrity_required: bool = True,
+    ) -> RepositoryState:
+        """Recover a completely omitted recursive inventory after proving its top boundary.
+
+        Args:
+            repository: Exact Git repository root.
+            task_state: Exact task state.
+            main_integrity_required: Main integrity required.
+
+        Returns:
+            Original or recovered repository state.
+        """
+
+        if repository.submodule_gitlink_list or repository.task_owned_submodule_list:
+            return repository
+        self._worktree_manager.validate(repository, common_prefix=task_state.common_prefix)
+        self._boundary_manager.validate(
+            repository,
+            task_state=task_state,
+            main_integrity_required=main_integrity_required,
+        )
+        return self._submodule_manager.missing_inventory_recover(
+            repository,
+            common_prefix=task_state.common_prefix,
+        )
+
+    def pending_submodule_recovery_receipt_ensure(self, state: TaskState) -> None:
+        """Finish active cleanup receipts protected by surviving recovery markers.
+
+        Args:
+            state: Exact task state.
+        """
+
+        for repository in state.repository_list:
+            self._submodule_manager.pending_cleanup_binding_receipt_ensure(
+                repository,
+                task_state=state,
+            )
+
     def pending_retire(self, state: TaskState) -> None:
         """Retire creation markers only after the complete state reached every replica.
 

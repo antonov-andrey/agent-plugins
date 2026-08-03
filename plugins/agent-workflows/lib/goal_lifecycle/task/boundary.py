@@ -163,6 +163,70 @@ class RepositoryBoundaryManager:
             )
         return task_root
 
+    def existing_state_capture(
+        self,
+        *,
+        main_root: Path,
+        task_root: Path,
+        baseline_commit: str,
+        common_prefix: str,
+    ) -> RepositoryBoundaryState:
+        """Bind one already committed task-owned boundary without authoring it.
+
+        Args:
+            main_root: Main root.
+            task_root: Task root.
+            baseline_commit: Baseline commit.
+            common_prefix: Exact task common prefix.
+
+        Returns:
+            Captured repository boundary state.
+        """
+
+        main_root = main_root.resolve(strict=True)
+        task_root = task_root.resolve(strict=True)
+        if self._git.root_get(main_root) != main_root or self._git.root_get(task_root) != task_root:
+            raise GoalLifecycleError(f"Recovered repository boundary is not an exact Git root: {task_root}")
+        if self._git.branch_get(task_root) != common_prefix:
+            raise GoalLifecycleError(f"Recovered task repository boundary has another branch: {task_root}")
+        if self._git.origin_url_get(main_root) != self._git.origin_url_get(task_root):
+            raise GoalLifecycleError(f"Recovered repository boundary origins differ: {task_root}")
+        self._git.clean_require(task_root)
+        task_commit = self._git.commit_get(task_root)
+        main_commit = self._git.commit_get(main_root)
+        self._git.ancestor_require(
+            task_root,
+            baseline_commit,
+            task_commit,
+            label=f"{task_root.name} recovered task boundary",
+        )
+        self._git.ancestor_require(
+            main_root,
+            baseline_commit,
+            main_commit,
+            label=f"{main_root.name} recovered main boundary",
+        )
+        manifest_path = task_root / BOOTSTRAP_MANIFEST_NAME
+        _tracked_file_require(task_root, BOOTSTRAP_MANIFEST_NAME, git=self._git)
+        manifest = bootstrap_manifest_load(manifest_path)
+        _tracked_ignore_validate(task_root, manifest=manifest, git=self._git)
+        resource_state_list = self._resource_manager.existing_state_capture(
+            main_root=main_root,
+            task_root=task_root,
+            manifest=manifest,
+        )
+        return RepositoryBoundaryState(
+            baseline_commit=baseline_commit,
+            branch_name=common_prefix,
+            cleanup_declaration_sha256=(manifest.cleanup.normalized_sha256_get() if manifest.cleanup else ""),
+            main_commit=main_commit,
+            main_root=str(main_root),
+            manifest_sha256=manifest.sha256,
+            origin_url=self._git.origin_url_get(main_root),
+            resource_state_list=resource_state_list,
+            task_root=str(task_root),
+        )
+
     def cleanup_binding_receipt_ensure(self, boundary: RepositoryBoundaryState, *, task_state: TaskState) -> None:
         """Mirror the content-free cleanup binding into task and main Git storage.
 
@@ -231,3 +295,42 @@ def _tracked_ignore_ensure(task_root: Path, *, manifest: BootstrapManifest) -> N
             changed = True
     if changed:
         atomic_bytes_write(gitignore_path, ("\n".join(line_list).strip() + "\n").encode(), mode=0o644)
+
+
+def _tracked_ignore_validate(task_root: Path, *, manifest: BootstrapManifest, git: Git) -> None:
+    """Require the committed ignore contract without changing task source.
+
+    Args:
+        task_root: Task root.
+        manifest: Manifest.
+        git: Git command boundary.
+    """
+
+    _tracked_file_require(task_root, ".gitignore", git=git)
+    gitignore_path = task_root / ".gitignore"
+    if gitignore_path.is_symlink() or not gitignore_path.is_file():
+        raise GoalLifecycleError(f"Tracked ignore owner must be one ordinary file: {gitignore_path}")
+    line_set = set(gitignore_path.read_text(encoding="utf-8").splitlines())
+    required_line_set = {
+        "/.worktree/",
+        *(f"/{path}" for values in manifest.resource_by_key_map.values() for path in values),
+    }
+    missing_line_set = required_line_set - line_set
+    if missing_line_set:
+        raise GoalLifecycleError(
+            f"Recovered task boundary lacks committed ignore rules in {gitignore_path}: "
+            + ", ".join(sorted(missing_line_set))
+        )
+
+
+def _tracked_file_require(task_root: Path, path_text: str, *, git: Git) -> None:
+    """Require one ordinary path to exist in the exact current commit.
+
+    Args:
+        task_root: Task root.
+        path_text: Root-relative path text.
+        git: Git command boundary.
+    """
+
+    if git.run(task_root, ["ls-files", "--error-unmatch", "--", path_text], check=False).returncode != 0:
+        raise GoalLifecycleError(f"Recovered task boundary file is not committed: {task_root / path_text}")

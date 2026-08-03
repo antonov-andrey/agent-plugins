@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import replace
 from pathlib import Path
 
 from goal_lifecycle.checkpoint.model import CheckpointDocument
@@ -53,13 +54,16 @@ class TaskLifecycleValidator:
         *,
         required_state: str,
         main_integrity_required: bool = True,
-    ) -> None:
+    ) -> TaskState:
         """Require the complete current task to satisfy one lifecycle floor.
 
         Args:
             state: Exact runtime state.
             required_state: Required state.
             main_integrity_required: Main integrity required.
+
+        Returns:
+            Validated state, including any deterministic inventory repair.
         """
 
         if required_state not in _LIFECYCLE_INDEX_BY_NAME_MAP:
@@ -92,6 +96,22 @@ class TaskLifecycleValidator:
                 state.sealed_goal_sha256
             ):
                 raise GoalLifecycleError("Sealed task artifacts changed")
+        recovered_repository_list = tuple(
+            self._repository_manager.missing_submodule_inventory_recover(
+                repository,
+                task_state=state,
+                main_integrity_required=main_integrity_required,
+            )
+            for repository in state.repository_list
+        )
+        if recovered_repository_list != state.repository_list:
+            state = replace(
+                state,
+                provider_state_generation=state.provider_state_generation + 1,
+                repository_list=recovered_repository_list,
+            )
+            self._state_store.write(state)
+        self._repository_manager.pending_submodule_recovery_receipt_ensure(state)
         for repository in state.repository_list:
             task_root = self._repository_manager.validate(
                 repository,
@@ -103,3 +123,4 @@ class TaskLifecycleValidator:
             self._state_store.replica_require(state, task_root=Path(boundary.task_root))
             self._state_store.replica_require(state, task_root=Path(boundary.main_root))
         self._repository_manager.pending_retire(state)
+        return state
