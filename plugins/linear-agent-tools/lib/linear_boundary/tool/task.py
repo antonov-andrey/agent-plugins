@@ -13,14 +13,10 @@ LIBRARY_ROOT = Path(__file__).resolve().parents[2]
 if str(LIBRARY_ROOT) not in sys.path:
     sys.path.insert(0, str(LIBRARY_ROOT))
 
-from linear_boundary import (
-    IssueStatusName,
-    ProjectStatusName,
-    TaskExecutionSnapshot,
-    TransitionProof,
-    transition_require,
-)
-from linear_boundary.model import LinearContractError
+from linear_boundary.contract import LinearContractError
+from linear_boundary.status import IssueStatusName, ProjectStatusName
+from linear_boundary.task.model import TaskExecutionSnapshot, TransitionProof
+from linear_boundary.task.workflow import transition_require
 
 
 def _parser_get() -> argparse.ArgumentParser:
@@ -69,7 +65,7 @@ def _dispatch_snapshot_parse(payload: object) -> TaskExecutionSnapshot:
             project_status=ProjectStatusName(payload["project_status"]),
             role_label=payload["role_label"],
             delivery_kind=payload["delivery_kind"],
-            label_name_list=tuple(payload["label_name_list"]),
+            label_name_list=list(payload["label_name_list"]),
             assignee_id=payload["assignee_id"],
             delegate_id=payload["delegate_id"],
             execution_identity_id=payload["execution_identity_id"],

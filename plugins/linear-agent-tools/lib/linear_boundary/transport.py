@@ -30,7 +30,7 @@ class LinearResponseError(LinearTransportError):
 
 
 @dataclass(frozen=True, slots=True)
-class RetryPolicy:
+class LinearRetryPolicy:
     """Bound one safe repeat policy for an idempotent GraphQL operation."""
 
     attempt_count: int = 4
@@ -50,6 +50,14 @@ class RetryPolicy:
             raise ValueError("maximum_delay_seconds must not be less than initial_delay_seconds")
 
 
+@dataclass(frozen=True, slots=True)
+class LinearHttpResponse:
+    """Carry one decoded GraphQL HTTP response."""
+
+    payload: object
+    headers: Message
+
+
 class LinearGraphQLTransport:
     """Execute exact typed operations against the official Linear endpoint."""
 
@@ -61,7 +69,7 @@ class LinearGraphQLTransport:
         self,
         credential: str,
         *,
-        retry: RetryPolicy | None = None,
+        retry: LinearRetryPolicy | None = None,
         opener: Callable[..., object] = urllib.request.urlopen,
         sleeper: Callable[[float], None] = time.sleep,
         random_source: Callable[[], float] = random.random,
@@ -85,7 +93,7 @@ class LinearGraphQLTransport:
         ):
             raise LinearAuthenticationError("Linear credential is absent or malformed")
         self._credential = credential
-        self._retry = retry or RetryPolicy()
+        self._retry = retry or LinearRetryPolicy()
         self._opener = opener
         self._sleep = sleeper
         self._random = random_source
@@ -133,28 +141,28 @@ class LinearGraphQLTransport:
             sort_keys=True,
         ).encode("utf-8")
         attempt_limit = self._retry.attempt_count if repeat_safe else 1
-        last_rate_limit = False
+        was_rate_limited = False
         for attempt_index in range(attempt_limit):
             try:
-                payload, headers = self._request(encoded)
+                response = self._request(encoded)
                 return self._data_extract(
-                    payload,
-                    headers=headers,
+                    response.payload,
+                    headers=response.headers,
                     repeat_safe=repeat_safe,
                     attempt_index=attempt_index,
                 )
             except LinearAuthenticationError:
                 raise
-            except _TransientLinearFailure as error:
-                last_rate_limit = error.rate_limited
+            except TransientLinearFailure as error:
+                was_rate_limited = error.rate_limited
                 if attempt_index + 1 >= attempt_limit:
                     break
                 self._sleep(self._delay_get(attempt_index, headers=error.headers))
-        if last_rate_limit:
+        if was_rate_limited:
             raise LinearRateLimitError("Linear rate limit remained unavailable after bounded retries")
         raise LinearTransportError("Linear operation failed after bounded safe retries")
 
-    def _request(self, encoded: bytes) -> tuple[object, Message]:
+    def _request(self, encoded: bytes) -> LinearHttpResponse:
         """Perform one HTTP attempt and decode its JSON body.
 
         Args:
@@ -183,16 +191,16 @@ class LinearGraphQLTransport:
                 raise LinearAuthenticationError("Linear rejected the supplied credential or scope") from None
             if error.code == 400:
                 try:
-                    return json.loads(error.read()), error.headers
+                    return LinearHttpResponse(payload=json.loads(error.read()), headers=error.headers)
                 except UnicodeDecodeError, json.JSONDecodeError:
                     raise LinearResponseError("Linear GraphQL returned malformed JSON") from None
             if error.code == 429 or error.code in {408, 500, 502, 503, 504}:
-                raise _TransientLinearFailure(rate_limited=error.code == 429, headers=error.headers) from None
+                raise TransientLinearFailure(rate_limited=error.code == 429, headers=error.headers) from None
             raise LinearResponseError(f"Linear GraphQL returned unexpected HTTP status {error.code}") from None
         except TimeoutError, urllib.error.URLError, ConnectionError:
-            raise _TransientLinearFailure(rate_limited=False, headers=Message()) from None
+            raise TransientLinearFailure(rate_limited=False, headers=Message()) from None
         try:
-            return json.loads(raw), headers
+            return LinearHttpResponse(payload=json.loads(raw), headers=headers)
         except UnicodeDecodeError, json.JSONDecodeError:
             raise LinearResponseError("Linear GraphQL returned malformed JSON") from None
 
@@ -230,7 +238,7 @@ class LinearGraphQLTransport:
             if code_set & {"AUTHENTICATION_ERROR", "FORBIDDEN", "UNAUTHENTICATED"}:
                 raise LinearAuthenticationError("Linear rejected the supplied credential or scope")
             if code_set & {"RATELIMITED", "RATE_LIMITED"} and repeat_safe:
-                raise _TransientLinearFailure(rate_limited=True, headers=headers)
+                raise TransientLinearFailure(rate_limited=True, headers=headers)
             raise LinearResponseError(
                 f"Linear GraphQL rejected operation at attempt {attempt_index + 1} with typed provider errors"
             )
@@ -270,7 +278,7 @@ class LinearGraphQLTransport:
         return exponential * (0.75 + 0.5 * self._random())
 
 
-class _TransientLinearFailure(Exception):
+class TransientLinearFailure(Exception):
     """Carry one internal retry classification without external error text."""
 
     def __init__(self, *, rate_limited: bool, headers: Message) -> None:

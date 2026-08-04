@@ -21,32 +21,30 @@ LIBRARY_ROOT = PLUGIN_ROOT / "lib"
 if str(LIBRARY_ROOT) not in sys.path:
     sys.path.insert(0, str(LIBRARY_ROOT))
 
-from linear_boundary.graphql import LinearWorkflowConfigurationGraphQL
-from linear_boundary.model import (
+from linear_boundary.configuration.graphql import LinearWorkflowConfigurationGraphQL
+from linear_boundary.configuration.model import (
     ISSUE_STATUS_DESIRED,
     LABEL_DESIRED,
     PROJECT_STATUS_DESIRED,
     ConfigurationPlan,
     DestinationIdentity,
-    IssueStatusName,
-    LinearContractError,
     LinearLabel,
-    ProjectStatusName,
     StatusDefinition,
-    TaskExecutionSnapshot,
-    TransitionProof,
     WorkflowConfigurationSnapshot,
     configuration_plan_build,
     configuration_plan_status_identifiers_allocate,
     configuration_plan_status_identifiers_require,
     configuration_plan_subset_require,
-    transition_require,
 )
+from linear_boundary.contract import LinearContractError
+from linear_boundary.status import IssueStatusName, ProjectStatusName
+from linear_boundary.task.model import TaskExecutionSnapshot, TransitionProof
+from linear_boundary.task.workflow import transition_require
 from linear_boundary.transport import (
     LinearAuthenticationError,
     LinearGraphQLTransport,
     LinearResponseError,
-    RetryPolicy,
+    LinearRetryPolicy,
 )
 
 WORKSPACE_ID = "11111111-1111-4111-8111-111111111111"
@@ -129,14 +127,14 @@ def test_mcp_label_snapshot_accepts_nullable_foreign_description(
         encoding="utf-8",
     )
 
-    assert module._labels_load(snapshot) == (
+    assert module._labels_load(snapshot) == [
         LinearLabel(
             id="00000000-0000-4000-8000-000000000001",
             name="Bug",
             color="#EB5757",
             description="",
-        ),
-    )
+        )
+    ]
 
 
 def test_status_apply_precedes_still_missing_official_mcp_labels(
@@ -152,7 +150,7 @@ def test_status_apply_precedes_still_missing_official_mcp_labels(
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     approved = configuration_plan_status_identifiers_allocate(
-        configuration_plan_build(WorkflowConfigurationSnapshot(_destination(), (), (), ()))
+        configuration_plan_build(WorkflowConfigurationSnapshot(_destination(), [], [], []))
     )
     labels_path = tmp_path / "labels.json"
     labels_path.write_text("[]\n", encoding="utf-8")
@@ -302,27 +300,25 @@ def test_configuration_plan_is_exact_and_idempotent() -> None:
 
     partial = WorkflowConfigurationSnapshot(
         destination=_destination(),
-        issue_status_list=tuple(
-            _existing_status(item, index) for index, item in enumerate(ISSUE_STATUS_DESIRED[:3], 1)
-        ),
-        project_status_list=(),
-        label_list=(),
+        issue_status_list=list(_existing_status(item, index) for index, item in enumerate(ISSUE_STATUS_DESIRED[:3], 1)),
+        project_status_list=[],
+        label_list=[],
     )
 
     plan = configuration_plan_build(partial)
 
     assert [item.name for item in plan.issue_status_create_list] == [item.name for item in ISSUE_STATUS_DESIRED[3:]]
-    assert plan.project_status_create_list == PROJECT_STATUS_DESIRED
-    assert plan.label_create_list == LABEL_DESIRED
-    assert plan.mutation_allowed()
+    assert plan.project_status_create_list == list(PROJECT_STATUS_DESIRED)
+    assert plan.label_create_list == list(LABEL_DESIRED)
+    assert plan.can_mutate()
 
     current = WorkflowConfigurationSnapshot(
         destination=_destination(),
-        issue_status_list=tuple(_existing_status(item, index) for index, item in enumerate(ISSUE_STATUS_DESIRED, 1)),
-        project_status_list=tuple(
+        issue_status_list=list(_existing_status(item, index) for index, item in enumerate(ISSUE_STATUS_DESIRED, 1)),
+        project_status_list=list(
             _existing_status(item, index + 20) for index, item in enumerate(PROJECT_STATUS_DESIRED, 1)
         ),
-        label_list=tuple(_existing_label(item, index) for index, item in enumerate(LABEL_DESIRED, 1)),
+        label_list=list(_existing_label(item, index) for index, item in enumerate(LABEL_DESIRED, 1)),
     )
 
     assert configuration_plan_build(current).is_current()
@@ -332,7 +328,7 @@ def test_configuration_plan_roundtrip_and_fresh_subset_guard() -> None:
     """One approved fingerprint authorizes only an exact remaining subset."""
 
     approved = configuration_plan_status_identifiers_allocate(
-        configuration_plan_build(WorkflowConfigurationSnapshot(_destination(), (), (), ()))
+        configuration_plan_build(WorkflowConfigurationSnapshot(_destination(), [], [], []))
     )
     parsed = ConfigurationPlan.from_payload(approved.payload())
 
@@ -349,10 +345,10 @@ def test_configuration_plan_roundtrip_and_fresh_subset_guard() -> None:
     assert configuration_plan_status_identifiers_allocate(approved) == approved
     current = ConfigurationPlan(
         destination=approved.destination,
-        issue_status_create_list=tuple(replace(item, id="") for item in approved.issue_status_create_list[1:]),
-        project_status_create_list=tuple(replace(item, id="") for item in approved.project_status_create_list),
-        label_create_list=(),
-        conflict_list=(),
+        issue_status_create_list=[replace(item, id="") for item in approved.issue_status_create_list[1:]],
+        project_status_create_list=[replace(item, id="") for item in approved.project_status_create_list],
+        label_create_list=[],
+        conflict_list=[],
     )
     configuration_plan_subset_require(current, approved)
 
@@ -361,10 +357,10 @@ def test_configuration_plan_roundtrip_and_fresh_subset_guard() -> None:
         configuration_plan_subset_require(
             replace(
                 current,
-                issue_status_create_list=(
+                issue_status_create_list=[
                     changed,
                     *current.issue_status_create_list[1:],
-                ),
+                ],
             ),
             approved,
         )
@@ -395,11 +391,9 @@ def test_configuration_rejects_wrong_category_and_foreign_label() -> None:
     )
     foreign_label = _existing_label(LABEL_DESIRED[0], 2)
     foreign_label = LinearLabel(foreign_label.id, foreign_label.name, foreign_label.color, "foreign owner")
-    plan = configuration_plan_build(
-        WorkflowConfigurationSnapshot(_destination(), (wrong_status,), (), (foreign_label,))
-    )
+    plan = configuration_plan_build(WorkflowConfigurationSnapshot(_destination(), [wrong_status], [], [foreign_label]))
 
-    assert not plan.mutation_allowed()
+    assert not plan.can_mutate()
     assert {(item.kind, item.name) for item in plan.conflict_list} == {
         ("issue-status", "Backlog"),
         ("label", "task:implementation"),
@@ -409,13 +403,13 @@ def test_configuration_rejects_wrong_category_and_foreign_label() -> None:
         _existing_label(LABEL_DESIRED[0], 3),
         color="#000000",
     )
-    color_plan = configuration_plan_build(WorkflowConfigurationSnapshot(_destination(), (), (), (wrong_color,)))
+    color_plan = configuration_plan_build(WorkflowConfigurationSnapshot(_destination(), [], [], [wrong_color]))
     assert ("label", "task:implementation") in {(item.kind, item.name) for item in color_plan.conflict_list}
 
     wrong_case_status = replace(_existing_status(ISSUE_STATUS_DESIRED[1], 4), name="todo")
     wrong_case_label = replace(_existing_label(LABEL_DESIRED[0], 5), name="TASK:IMPLEMENTATION")
     casing_plan = configuration_plan_build(
-        WorkflowConfigurationSnapshot(_destination(), (wrong_case_status,), (), (wrong_case_label,))
+        WorkflowConfigurationSnapshot(_destination(), [wrong_case_status], [], [wrong_case_label])
     )
     assert {(item.kind, item.name, item.reason) for item in casing_plan.conflict_list} == {
         ("issue-status", "Todo", "same name uses different casing"),
@@ -431,7 +425,7 @@ def test_dispatchability_uses_exact_status_project_label_identity_and_blockers()
         project_status=ProjectStatusName.IN_PROGRESS,
         role_label="task:implementation",
         delivery_kind="code",
-        label_name_list=("task:implementation", "agent:codex"),
+        label_name_list=["task:implementation", "agent:codex"],
         assignee_id=VIEWER_ID,
         delegate_id="",
         execution_identity_id=VIEWER_ID,
@@ -439,25 +433,25 @@ def test_dispatchability_uses_exact_status_project_label_identity_and_blockers()
         issue_contract_complete=True,
     )
 
-    assert ready.dispatchable()
-    assert not replace(ready, unresolved_blocker_count=1).dispatchable()
-    assert not replace(ready, issue_status=IssueStatusName.HUMAN_REVIEW).dispatchable()
-    assert not replace(ready, project_status=ProjectStatusName.PLANNED).dispatchable()
-    assert replace(ready, assignee_id="", delegate_id=VIEWER_ID).dispatchable()
-    assert replace(ready, issue_status=IssueStatusName.MERGING).dispatchable()
+    assert ready.can_dispatch()
+    assert not replace(ready, unresolved_blocker_count=1).can_dispatch()
+    assert not replace(ready, issue_status=IssueStatusName.HUMAN_REVIEW).can_dispatch()
+    assert not replace(ready, project_status=ProjectStatusName.PLANNED).can_dispatch()
+    assert replace(ready, assignee_id="", delegate_id=VIEWER_ID).can_dispatch()
+    assert replace(ready, issue_status=IssueStatusName.MERGING).can_dispatch()
     assert not replace(
         ready,
         issue_status=IssueStatusName.MERGING,
         role_label="task:review",
         delivery_kind="evidence",
-        label_name_list=("task:review", "agent:codex"),
-    ).dispatchable()
+        label_name_list=["task:review", "agent:codex"],
+    ).can_dispatch()
 
     with pytest.raises(LinearContractError, match="exactly one"):
         replace(ready, delegate_id=VIEWER_ID)
 
     with pytest.raises(LinearContractError, match="exact single Linear role label"):
-        replace(ready, label_name_list=("task:human", "agent:codex"))
+        replace(ready, label_name_list=["task:human", "agent:codex"])
 
 
 def test_task_state_cli_exposes_closed_dispatch_and_transition_gates(
@@ -732,7 +726,7 @@ def test_transport_redacts_credential_and_retries_only_safe_operation() -> None:
 
     transport = LinearGraphQLTransport(
         "linear-secret-token",
-        retry=RetryPolicy(attempt_count=2),
+        retry=LinearRetryPolicy(attempt_count=2),
         opener=opener,
         sleeper=delay_list.append,
         random_source=lambda: 0.5,
@@ -785,7 +779,7 @@ def test_transport_parses_http_400_graphql_rate_limit_and_uses_reset_guidance() 
 
     transport = LinearGraphQLTransport(
         "secret",
-        retry=RetryPolicy(attempt_count=2, maximum_delay_seconds=20),
+        retry=LinearRetryPolicy(attempt_count=2, maximum_delay_seconds=20),
         opener=opener,
         sleeper=delay_list.append,
         clock=lambda: 1000.0,
@@ -825,7 +819,7 @@ def test_transport_retries_transient_server_failure_only_for_safe_operation() ->
 
     result = LinearGraphQLTransport(
         "secret",
-        retry=RetryPolicy(attempt_count=2, initial_delay_seconds=0, maximum_delay_seconds=0),
+        retry=LinearRetryPolicy(attempt_count=2, initial_delay_seconds=0, maximum_delay_seconds=0),
         opener=opener,
         sleeper=lambda _delay: None,
     ).execute(
@@ -921,7 +915,7 @@ def test_graphql_configuration_plan_can_discover_workspace_but_binds_its_fingerp
         expected_workspace_id=None,
         expected_viewer_id=VIEWER_ID,
         expected_team_id=TEAM_ID,
-        label_list=tuple(_existing_label(item, index) for index, item in enumerate(LABEL_DESIRED, 1)),
+        label_list=list(_existing_label(item, index) for index, item in enumerate(LABEL_DESIRED, 1)),
     )
 
     assert plan.destination == _destination()
@@ -936,13 +930,13 @@ def test_graphql_configuration_rereads_approved_destination_before_status_mutati
     partial_project_status_list = PROJECT_STATUS_DESIRED[:-1]
     current_snapshot = WorkflowConfigurationSnapshot(
         destination=_destination(),
-        issue_status_list=tuple(
+        issue_status_list=list(
             _existing_status(item, index) for index, item in enumerate(partial_issue_status_list, 1)
         ),
-        project_status_list=tuple(
+        project_status_list=list(
             _existing_status(item, index + 20) for index, item in enumerate(partial_project_status_list, 1)
         ),
-        label_list=tuple(_existing_label(item, index) for index, item in enumerate(LABEL_DESIRED, 1)),
+        label_list=list(_existing_label(item, index) for index, item in enumerate(LABEL_DESIRED, 1)),
     )
     approved = configuration_plan_status_identifiers_allocate(configuration_plan_build(current_snapshot))
     transport = _ScriptedTransport(

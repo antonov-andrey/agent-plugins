@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable
 
-from linear_boundary.model import (
+from linear_boundary.configuration.model import (
     ConfigurationPlan,
     DestinationIdentity,
-    LinearContractError,
     LinearLabel,
     StatusDefinition,
     WorkflowConfigurationSnapshot,
@@ -16,6 +14,7 @@ from linear_boundary.model import (
     configuration_plan_status_identifiers_require,
     configuration_plan_subset_require,
 )
+from linear_boundary.contract import LinearContractError
 from linear_boundary.transport import LinearGraphQLTransport, LinearTransportError
 
 _IDENTITY_AND_WORKFLOW_QUERY = """
@@ -62,13 +61,13 @@ mutation LinearAgentProjectStatusCreate($input: ProjectStatusCreateInput!) {
 """
 
 
-@dataclass(frozen=True, slots=True)
-class GraphQLConfigurationRead:
+@dataclass(slots=True)
+class WorkflowConfigurationGraphQLRead:
     """Contain the GraphQL-owned configuration and guarded destination."""
 
     destination: DestinationIdentity
-    issue_status_list: tuple[StatusDefinition, ...]
-    project_status_list: tuple[StatusDefinition, ...]
+    issue_status_list: list[StatusDefinition]
+    project_status_list: list[StatusDefinition]
 
 
 class LinearWorkflowConfigurationGraphQL:
@@ -89,7 +88,7 @@ class LinearWorkflowConfigurationGraphQL:
         expected_workspace_id: str | None,
         expected_viewer_id: str,
         expected_team_id: str,
-    ) -> GraphQLConfigurationRead:
+    ) -> WorkflowConfigurationGraphQLRead:
         """Fully paginate relevant configuration and enforce destination identity.
 
         Args:
@@ -120,31 +119,32 @@ class LinearWorkflowConfigurationGraphQL:
             organization = _object_get(data, "organization")
             team = _object_get(data, "team")
             membership = _object_get(team, "membership")
+            viewer_admin = viewer.get("admin")
+            viewer_guest = viewer.get("guest")
+            viewer_active = viewer.get("active")
+            if (
+                not isinstance(viewer_admin, bool)
+                or not isinstance(viewer_guest, bool)
+                or not isinstance(viewer_active, bool)
+            ):
+                raise LinearContractError("Linear viewer authority fields must be boolean")
             current_destination = DestinationIdentity(
                 workspace_id=_text_get(organization, "id"),
                 viewer_id=_text_get(viewer, "id"),
                 team_id=_text_get(team, "id"),
-                viewer_is_admin=_bool_get(viewer, "admin"),
-                viewer_is_guest=_bool_get(viewer, "guest"),
-                viewer_is_active=_bool_get(viewer, "active")
-                and membership.get("archivedAt") is None,
+                viewer_is_admin=viewer_admin,
+                viewer_is_guest=viewer_guest,
+                viewer_is_active=viewer_active and membership.get("archivedAt") is None,
             )
             if (
-                (
-                    expected_workspace_id is not None
-                    and current_destination.workspace_id != expected_workspace_id
-                )
+                (expected_workspace_id is not None and current_destination.workspace_id != expected_workspace_id)
                 or current_destination.viewer_id != expected_viewer_id
                 or current_destination.team_id != expected_team_id
             ):
-                raise LinearContractError(
-                    "Authenticated Linear destination differs from the exact approved IDs"
-                )
+                raise LinearContractError("Authenticated Linear destination differs from the exact approved IDs")
             current_destination.mutation_authority_require()
             if destination is not None and destination != current_destination:
-                raise LinearContractError(
-                    "Linear destination changed while workflow configuration was read"
-                )
+                raise LinearContractError("Linear destination changed while workflow configuration was read")
             destination = current_destination
             connection = _object_get(team, "states")
             workflow_status_list.extend(_status_list_get(connection))
@@ -164,9 +164,7 @@ class LinearWorkflowConfigurationGraphQL:
             organization = _object_get(data, "organization")
             workspace_id = _text_get(organization, "id")
             if workspace_id != destination.workspace_id:
-                raise LinearContractError(
-                    "Linear workspace changed while Project statuses were read"
-                )
+                raise LinearContractError("Linear workspace changed while Project statuses were read")
             connection = _object_get(data, "projectStatuses")
             project_status_list.extend(_status_list_get(connection))
             after = _next_cursor_get(connection)
@@ -174,10 +172,10 @@ class LinearWorkflowConfigurationGraphQL:
                 break
         if destination is None:
             raise LinearContractError("Linear destination read produced no page")
-        return GraphQLConfigurationRead(
+        return WorkflowConfigurationGraphQLRead(
             destination=destination,
-            issue_status_list=tuple(workflow_status_list),
-            project_status_list=tuple(project_status_list),
+            issue_status_list=workflow_status_list,
+            project_status_list=project_status_list,
         )
 
     def plan(
@@ -186,7 +184,7 @@ class LinearWorkflowConfigurationGraphQL:
         expected_workspace_id: str | None,
         expected_viewer_id: str,
         expected_team_id: str,
-        label_list: Iterable[LinearLabel] = (),
+        label_list: list[LinearLabel],
     ) -> ConfigurationPlan:
         """Build an exact configuration plan including MCP-read labels.
 
@@ -211,7 +209,7 @@ class LinearWorkflowConfigurationGraphQL:
                 destination=current.destination,
                 issue_status_list=current.issue_status_list,
                 project_status_list=current.project_status_list,
-                label_list=tuple(label_list),
+                label_list=list(label_list),
             )
         )
 
@@ -232,10 +230,8 @@ class LinearWorkflowConfigurationGraphQL:
             approved_plan: Previewed conflict-free plan.
         """
 
-        if not approved_plan.mutation_allowed():
-            raise LinearContractError(
-                "Conflicting workflow configuration cannot be applied"
-            )
+        if not approved_plan.can_mutate():
+            raise LinearContractError("Conflicting workflow configuration cannot be applied")
         configuration_plan_status_identifiers_require(approved_plan)
         approved_destination = approved_plan.destination
         if (
@@ -243,9 +239,7 @@ class LinearWorkflowConfigurationGraphQL:
             or approved_destination.viewer_id != expected_viewer_id
             or approved_destination.team_id != expected_team_id
         ):
-            raise LinearContractError(
-                "Approved plan destination differs from apply destination"
-            )
+            raise LinearContractError("Approved plan destination differs from apply destination")
         current = self.read(
             expected_workspace_id=expected_workspace_id,
             expected_viewer_id=expected_viewer_id,
@@ -256,7 +250,7 @@ class LinearWorkflowConfigurationGraphQL:
                 destination=current.destination,
                 issue_status_list=current.issue_status_list,
                 project_status_list=current.project_status_list,
-                label_list=(),
+                label_list=[],
             )
         )
         configuration_plan_subset_require(
@@ -264,22 +258,20 @@ class LinearWorkflowConfigurationGraphQL:
                 destination=current_plan.destination,
                 issue_status_create_list=current_plan.issue_status_create_list,
                 project_status_create_list=current_plan.project_status_create_list,
-                label_create_list=(),
+                label_create_list=[],
                 conflict_list=current_plan.conflict_list,
             ),
             ConfigurationPlan(
                 destination=approved_plan.destination,
                 issue_status_create_list=approved_plan.issue_status_create_list,
                 project_status_create_list=approved_plan.project_status_create_list,
-                label_create_list=(),
+                label_create_list=[],
                 conflict_list=approved_plan.conflict_list,
             ),
         )
-        approved_issue_status_by_name = {
-            item.name: item for item in approved_plan.issue_status_create_list
-        }
+        approved_issue_status_by_name_map = {item.name: item for item in approved_plan.issue_status_create_list}
         for status in current_plan.issue_status_create_list:
-            approved_status = approved_issue_status_by_name[status.name]
+            approved_status = approved_issue_status_by_name_map[status.name]
             self._create_once(
                 operation_name="LinearAgentWorkflowStateCreate",
                 document=_WORKFLOW_STATE_CREATE,
@@ -296,11 +288,9 @@ class LinearWorkflowConfigurationGraphQL:
                 },
                 result_key="workflowStateCreate",
             )
-        approved_project_status_by_name = {
-            item.name: item for item in approved_plan.project_status_create_list
-        }
+        approved_project_status_by_name_map = {item.name: item for item in approved_plan.project_status_create_list}
         for status in current_plan.project_status_create_list:
-            approved_status = approved_project_status_by_name[status.name]
+            approved_status = approved_project_status_by_name_map[status.name]
             self._create_once(
                 operation_name="LinearAgentProjectStatusCreate",
                 document=_PROJECT_STATUS_CREATE,
@@ -326,17 +316,11 @@ class LinearWorkflowConfigurationGraphQL:
                 destination=current.destination,
                 issue_status_list=current.issue_status_list,
                 project_status_list=current.project_status_list,
-                label_list=(),
+                label_list=[],
             )
         )
-        if (
-            readback.conflict_list
-            or readback.issue_status_create_list
-            or readback.project_status_create_list
-        ):
-            raise LinearContractError(
-                "Linear status read-back differs from the approved configuration plan"
-            )
+        if readback.conflict_list or readback.issue_status_create_list or readback.project_status_create_list:
+            raise LinearContractError("Linear status read-back differs from the approved configuration plan")
 
     def _create_once(
         self,
@@ -400,23 +384,6 @@ def _text_get(payload: dict[str, object], name: str) -> str:
     return value
 
 
-def _bool_get(payload: dict[str, object], name: str) -> bool:
-    """Return one required boolean field.
-
-    Args:
-        payload: Parent payload.
-        name: Exact field name.
-
-    Returns:
-        The boolean value.
-    """
-
-    value = payload.get(name)
-    if not isinstance(value, bool):
-        raise LinearContractError(f"Linear field {name} must be boolean")
-    return value
-
-
 def _status_list_get(connection: dict[str, object]) -> list[StatusDefinition]:
     """Parse one status connection page.
 
@@ -428,9 +395,7 @@ def _status_list_get(connection: dict[str, object]) -> list[StatusDefinition]:
     """
 
     node_list = connection.get("nodes")
-    if not isinstance(node_list, list) or any(
-        not isinstance(item, dict) for item in node_list
-    ):
+    if not isinstance(node_list, list) or any(not isinstance(item, dict) for item in node_list):
         raise LinearContractError("Linear status connection nodes have another shape")
     result: list[StatusDefinition] = []
     for item in node_list:
@@ -443,12 +408,7 @@ def _status_list_get(connection: dict[str, object]) -> list[StatusDefinition]:
                 category=_text_get(item, "type"),
                 color=_text_get(item, "color"),
                 description=description if isinstance(description, str) else "",
-                position=(
-                    position
-                    if isinstance(position, (int, float))
-                    and not isinstance(position, bool)
-                    else 0.0
-                ),
+                position=(position if isinstance(position, (int, float)) and not isinstance(position, bool) else 0.0),
             )
         )
     return result
@@ -465,13 +425,13 @@ def _next_cursor_get(connection: dict[str, object]) -> str | None:
     """
 
     page_info = _object_get(connection, "pageInfo")
-    has_next = _bool_get(page_info, "hasNextPage")
+    has_next = page_info.get("hasNextPage")
+    if not isinstance(has_next, bool):
+        raise LinearContractError("Linear field hasNextPage must be boolean")
     cursor = page_info.get("endCursor")
     if has_next:
         if not isinstance(cursor, str) or not cursor:
-            raise LinearContractError(
-                "Linear paginated connection omitted its next cursor"
-            )
+            raise LinearContractError("Linear paginated connection omitted its next cursor")
         return cursor
     if cursor is not None and not isinstance(cursor, str):
         raise LinearContractError("Linear pagination end cursor has another shape")

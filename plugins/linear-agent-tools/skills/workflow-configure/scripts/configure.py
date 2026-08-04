@@ -14,15 +14,15 @@ LIBRARY_ROOT = Path(__file__).resolve().parents[3] / "lib"
 if str(LIBRARY_ROOT) not in sys.path:
     sys.path.insert(0, str(LIBRARY_ROOT))
 
-from linear_boundary.graphql import LinearWorkflowConfigurationGraphQL
-from linear_boundary.model import (
+from linear_boundary.configuration.graphql import LinearWorkflowConfigurationGraphQL
+from linear_boundary.configuration.model import (
     ConfigurationPlan,
-    LinearContractError,
     LinearLabel,
     configuration_plan_status_identifiers_allocate,
     configuration_plan_status_identifiers_require,
     configuration_plan_subset_require,
 )
+from linear_boundary.contract import LinearContractError
 from linear_boundary.transport import (
     LinearAuthenticationError,
     LinearGraphQLTransport,
@@ -30,16 +30,17 @@ from linear_boundary.transport import (
 )
 
 
-def _parser_get() -> argparse.ArgumentParser:
-    """Build the closed one-shot configuration parser.
+def _args_parse(argv: list[str] | None) -> argparse.Namespace:
+    """Parse the closed one-shot configuration arguments.
+
+    Args:
+        argv: Optional direct argument list.
 
     Returns:
-        The argument parser.
+        Parsed arguments.
     """
 
-    parser = argparse.ArgumentParser(
-        description="Plan or apply the GraphQL-owned Linear workflow status delta."
-    )
+    parser = argparse.ArgumentParser(description="Plan or apply the GraphQL-owned Linear workflow status delta.")
     subparsers = parser.add_subparsers(dest="command", required=True)
     for command in ("plan", "apply"):
         operation = subparsers.add_parser(command)
@@ -63,7 +64,7 @@ def _parser_get() -> argparse.ArgumentParser:
                 type=Path,
                 help="Exact plan output previously approved by the user.",
             )
-    return parser
+    return parser.parse_args(argv)
 
 
 def _credential_get() -> str:
@@ -98,7 +99,7 @@ def _json_load(path: Path, *, label: str) -> object:
         raise LinearContractError(f"{label} is malformed") from error
 
 
-def _labels_load(path: Path) -> tuple[LinearLabel, ...]:
+def _labels_load(path: Path) -> list[LinearLabel]:
     """Load one complete MCP-read label snapshot.
 
     Args:
@@ -109,9 +110,7 @@ def _labels_load(path: Path) -> tuple[LinearLabel, ...]:
     """
 
     payload = _json_load(path, label="Label snapshot")
-    if not isinstance(payload, list) or any(
-        not isinstance(item, dict) for item in payload
-    ):
+    if not isinstance(payload, list) or any(not isinstance(item, dict) for item in payload):
         raise LinearContractError("Label snapshot root must be a list of objects")
     expected = {"id", "name", "color", "description"}
     if any(set(item) != expected for item in payload):
@@ -129,7 +128,7 @@ def _labels_load(path: Path) -> tuple[LinearLabel, ...]:
                 description=description,
             )
         )
-    return tuple(normalized)
+    return normalized
 
 
 def _plan_envelope(plan: ConfigurationPlan) -> dict[str, object]:
@@ -158,16 +157,12 @@ def _approved_plan_load(path: Path) -> ConfigurationPlan:
     payload = _json_load(path, label="Approved plan")
     if not isinstance(payload, dict) or "plan_sha256" not in payload:
         raise LinearContractError("Approved plan envelope has another shape")
-    plan_payload = {
-        name: value for name, value in payload.items() if name != "plan_sha256"
-    }
+    plan_payload = {name: value for name, value in payload.items() if name != "plan_sha256"}
     plan = ConfigurationPlan.from_payload(plan_payload)
     if payload["plan_sha256"] != plan.fingerprint():
         raise LinearContractError("Approved plan fingerprint differs from its content")
-    if not plan.mutation_allowed():
-        raise LinearContractError(
-            "Conflicting workflow configuration cannot be approved"
-        )
+    if not plan.can_mutate():
+        raise LinearContractError("Conflicting workflow configuration cannot be approved")
     configuration_plan_status_identifiers_require(plan)
     return plan
 
@@ -182,12 +177,10 @@ def main(argv: list[str] | None = None) -> int:
         Zero on success or two for contract rejection.
     """
 
-    args = _parser_get().parse_args(argv)
+    args = _args_parse(argv)
     try:
         label_list = _labels_load(args.labels_input)
-        service = LinearWorkflowConfigurationGraphQL(
-            LinearGraphQLTransport(_credential_get())
-        )
+        service = LinearWorkflowConfigurationGraphQL(LinearGraphQLTransport(_credential_get()))
         plan = service.plan(
             expected_workspace_id=args.workspace_id,
             expected_viewer_id=args.viewer_id,
@@ -196,21 +189,15 @@ def main(argv: list[str] | None = None) -> int:
         )
         if args.command == "plan":
             plan = configuration_plan_status_identifiers_allocate(plan)
-            print(
-                json.dumps(
-                    _plan_envelope(plan), ensure_ascii=False, indent=2, sort_keys=True
-                )
-            )
-            return 0 if plan.mutation_allowed() else 2
+            print(json.dumps(_plan_envelope(plan), ensure_ascii=False, indent=2, sort_keys=True))
+            return 0 if plan.can_mutate() else 2
         approved_plan = _approved_plan_load(args.approved_plan_input)
         if (
             approved_plan.destination.workspace_id != args.workspace_id
             or approved_plan.destination.viewer_id != args.viewer_id
             or approved_plan.destination.team_id != args.team_id
         ):
-            raise LinearContractError(
-                "Approved plan destination differs from apply arguments"
-            )
+            raise LinearContractError("Approved plan destination differs from apply arguments")
         configuration_plan_subset_require(plan, approved_plan)
         service.missing_statuses_create(
             expected_workspace_id=args.workspace_id,
