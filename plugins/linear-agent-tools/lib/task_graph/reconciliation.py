@@ -5,16 +5,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 import re
-from typing import Iterable
+from collections.abc import Iterable
 
 from task_graph.model import TaskGraph, TaskGraphError, TaskRole
 from task_graph.publication import (
     GraphPublicationView,
     IssuePublication,
-    graph_publication_view_build,
 )
 
-_UUID_PATTERN = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+_UUID_PATTERN = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+)
 _NODE_KEY_PATTERN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 _PROJECT_KEY_PATTERN = re.compile(
     r"linear-agent-tools:v1:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}:[0-9a-f]{64}"
@@ -31,7 +32,9 @@ _KNOWN_ISSUE_STATUS_SET = frozenset(
         "Canceled",
     }
 )
-_KNOWN_PROJECT_STATUS_SET = frozenset({"Planned", "In Progress", "Completed", "Canceled"})
+_KNOWN_PROJECT_STATUS_SET = frozenset(
+    {"Planned", "In Progress", "Completed", "Canceled"}
+)
 
 
 def _uuid_require(value: object, *, label: str) -> None:
@@ -51,7 +54,11 @@ def _node_key_require(value: object, *, label: str) -> None:
 def _single_line_require(value: object, *, label: str) -> None:
     """Require one non-empty single-line string."""
 
-    if not isinstance(value, str) or not value or any(character in value for character in ("\x00", "\n", "\r")):
+    if (
+        not isinstance(value, str)
+        or not value
+        or any(character in value for character in ("\x00", "\n", "\r"))
+    ):
         raise TaskGraphError(f"{label} must be non-empty single-line text")
 
 
@@ -96,21 +103,37 @@ class RemoteIssue:
         _uuid_require(self.id, label="Remote issue ID")
         _node_key_require(self.node_key, label="Remote issue node key")
         _single_line_require(self.title, label="Remote issue title")
-        if not isinstance(self.description, str) or not self.description.strip() or "\x00" in self.description:
+        if (
+            not isinstance(self.description, str)
+            or not self.description.strip()
+            or "\x00" in self.description
+        ):
             raise TaskGraphError("Remote issue description must be non-empty text")
         if self.status_name not in _KNOWN_ISSUE_STATUS_SET:
             raise TaskGraphError("Remote issue status is unsupported")
-        assignment_id_list = [value for value in (self.assignee_id, self.delegate_id) if value]
-        if len(assignment_id_list) > 1 or (not assignment_id_list and self.status_name != "Backlog"):
-            raise TaskGraphError("Only a staged Backlog issue may omit its exact assignee or delegate")
+        assignment_id_list = [
+            value for value in (self.assignee_id, self.delegate_id) if value
+        ]
+        if len(assignment_id_list) > 1 or (
+            not assignment_id_list and self.status_name != "Backlog"
+        ):
+            raise TaskGraphError(
+                "Only a staged Backlog issue may omit its exact assignee or delegate"
+            )
         if assignment_id_list:
-            _uuid_require(assignment_id_list[0], label="Remote issue execution identity")
+            _uuid_require(
+                assignment_id_list[0], label="Remote issue execution identity"
+            )
         for label, value_list in (
             ("label names", self.label_name_list),
             ("blocker keys", self.blocker_key_list),
         ):
-            if not isinstance(value_list, list) or len(value_list) != len(set(value_list)):
-                raise TaskGraphError(f"Remote issue {label} must be a duplicate-free list")
+            if not isinstance(value_list, list) or len(value_list) != len(
+                set(value_list)
+            ):
+                raise TaskGraphError(
+                    f"Remote issue {label} must be a duplicate-free list"
+                )
             for value in value_list:
                 _single_line_require(value, label=f"Remote issue {label}")
         for blocker_key in self.blocker_key_list:
@@ -143,7 +166,9 @@ class RemoteIssue:
         if not isinstance(payload, dict) or set(payload) != expected:
             raise TaskGraphError("Remote issue snapshot has another shape")
         for name in ("label_name_list", "blocker_key_list"):
-            if not isinstance(payload[name], list) or any(not isinstance(item, str) for item in payload[name]):
+            if not isinstance(payload[name], list) or any(
+                not isinstance(item, str) for item in payload[name]
+            ):
                 raise TaskGraphError(f"Remote issue {name} must be a text list")
         return cls(
             id=payload["id"],
@@ -201,10 +226,17 @@ class RemoteProject:
 
         _uuid_require(self.id, label="Remote Project ID")
         _uuid_require(self.team_id, label="Remote Project team ID")
-        if not isinstance(self.project_key, str) or _PROJECT_KEY_PATTERN.fullmatch(self.project_key) is None:
+        if (
+            not isinstance(self.project_key, str)
+            or _PROJECT_KEY_PATTERN.fullmatch(self.project_key) is None
+        ):
             raise TaskGraphError("Remote Project key has another shape")
         _single_line_require(self.name, label="Remote Project name")
-        if not isinstance(self.description, str) or not self.description.strip() or "\x00" in self.description:
+        if (
+            not isinstance(self.description, str)
+            or not self.description.strip()
+            or "\x00" in self.description
+        ):
             raise TaskGraphError("Remote Project description must be non-empty text")
         if self.status_name not in _KNOWN_PROJECT_STATUS_SET:
             raise TaskGraphError("Remote Project status is unsupported")
@@ -215,7 +247,9 @@ class RemoteProject:
         document_id_list = [item.id for item in self.document_list]
         if len(document_id_list) != len(set(document_id_list)):
             raise TaskGraphError("Remote Project repeats one document identity")
-        if not isinstance(self.issue_list, list) or any(not isinstance(item, RemoteIssue) for item in self.issue_list):
+        if not isinstance(self.issue_list, list) or any(
+            not isinstance(item, RemoteIssue) for item in self.issue_list
+        ):
             raise TaskGraphError("Remote Project issue list has another shape")
         issue_id_list = [item.id for item in self.issue_list]
         if len(issue_id_list) != len(set(issue_id_list)):
@@ -258,8 +292,12 @@ class RemoteProject:
             name=payload["name"],
             description=payload["description"],
             status_name=payload["status_name"],
-            document_list=[RemoteDocument.from_payload(item) for item in payload["document_list"]],
-            issue_list=[RemoteIssue.from_payload(item) for item in payload["issue_list"]],
+            document_list=[
+                RemoteDocument.from_payload(item) for item in payload["document_list"]
+            ],
+            issue_list=[
+                RemoteIssue.from_payload(item) for item in payload["issue_list"]
+            ],
         )
 
 
@@ -307,7 +345,9 @@ class ReconciliationPlan:
         }
 
 
-def reconciliation_plan_build(graph: TaskGraph, remote: RemoteProject | None) -> ReconciliationPlan:
+def reconciliation_plan_build(
+    graph: TaskGraph, remote: RemoteProject | None
+) -> ReconciliationPlan:
     """Return the next safe activation-barrier phase after exact read-back.
 
     Args:
@@ -318,7 +358,7 @@ def reconciliation_plan_build(graph: TaskGraph, remote: RemoteProject | None) ->
         Next phase and exact idempotent host actions.
     """
 
-    view = graph_publication_view_build(graph)
+    view = GraphPublicationView.from_graph(graph)
     if remote is None:
         return ReconciliationPlan(
             phase=PublicationPhase.PROJECT,
@@ -346,10 +386,18 @@ def reconciliation_plan_build(graph: TaskGraph, remote: RemoteProject | None) ->
             activation_ready=remote.status_name == "In Progress",
         )
     if remote.status_name != "Planned":
-        raise TaskGraphError("Graph import Project must remain Planned until its activation transition")
-    matching_document_list = [item for item in remote.document_list if item.title == view.import_document_title]
+        raise TaskGraphError(
+            "Graph import Project must remain Planned until its activation transition"
+        )
+    matching_document_list = [
+        item
+        for item in remote.document_list
+        if item.title == view.import_document_title
+    ]
     if len(matching_document_list) > 1:
-        raise TaskGraphError("Linear Project contains duplicate import documents for the exact source")
+        raise TaskGraphError(
+            "Linear Project contains duplicate import documents for the exact source"
+        )
     if not matching_document_list:
         return ReconciliationPlan(
             PublicationPhase.DOCUMENT,
@@ -374,7 +422,9 @@ def reconciliation_plan_build(graph: TaskGraph, remote: RemoteProject | None) ->
             not current_document.content.startswith(provider_marker)
             or project_key_marker not in current_document.content
         ):
-            raise TaskGraphError("Linear Project import-document title collides with a foreign document")
+            raise TaskGraphError(
+                "Linear Project import-document title collides with a foreign document"
+            )
         return ReconciliationPlan(
             PublicationPhase.DOCUMENT,
             [
@@ -393,23 +443,33 @@ def reconciliation_plan_build(graph: TaskGraph, remote: RemoteProject | None) ->
         )
     desired_issue_by_node_key_map = {item.node_key: item for item in view.issue_list}
     remote_issue_by_node_key_map = _remote_issue_map_get(remote.issue_list)
-    unknown_key_set = set(remote_issue_by_node_key_map) - set(desired_issue_by_node_key_map)
+    unknown_key_set = set(remote_issue_by_node_key_map) - set(
+        desired_issue_by_node_key_map
+    )
     if unknown_key_set:
-        raise TaskGraphError(f"Planned Project contains unknown issue keys: {sorted(unknown_key_set)}")
+        raise TaskGraphError(
+            f"Planned Project contains unknown issue keys: {sorted(unknown_key_set)}"
+        )
     issue_action_list: list[PublicationAction] = []
     for node_key, desired in desired_issue_by_node_key_map.items():
         current = remote_issue_by_node_key_map.get(node_key)
         if current is None:
-            issue_action_list.append(_issue_create_action(desired, project_id=remote.id))
+            issue_action_list.append(
+                _issue_create_action(desired, project_id=remote.id)
+            )
         else:
             _staged_issue_owned_fields_require(desired, current)
     if issue_action_list:
-        return ReconciliationPlan(PublicationPhase.ISSUES, issue_action_list, activation_ready=False)
+        return ReconciliationPlan(
+            PublicationPhase.ISSUES, issue_action_list, activation_ready=False
+        )
     relation_action_list: list[PublicationAction] = []
     for desired in view.issue_list:
         current = remote_issue_by_node_key_map[desired.node_key]
         desired_blocker_set = {
-            edge.blocker_node_key for edge in view.blocker_edge_list if edge.blocked_node_key == desired.node_key
+            edge.blocker_node_key
+            for edge in view.blocker_edge_list
+            if edge.blocked_node_key == desired.node_key
         }
         unknown_blocker_set = set(current.blocker_key_list) - desired_blocker_set
         if unknown_blocker_set:
@@ -418,14 +478,18 @@ def reconciliation_plan_build(graph: TaskGraph, remote: RemoteProject | None) ->
             )
         for blocker_key in sorted(desired_blocker_set - set(current.blocker_key_list)):
             if current.status_name != "Backlog":
-                raise TaskGraphError(f"Activated issue {desired.node_key} is missing an approved blocker relation")
+                raise TaskGraphError(
+                    f"Activated issue {desired.node_key} is missing an approved blocker relation"
+                )
             relation_action_list.append(
                 PublicationAction(
                     kind="blocker-create",
                     stable_key=f"{blocker_key}->{desired.node_key}",
                     payload={
                         "blocked_issue_id": current.id,
-                        "blocker_issue_id": remote_issue_by_node_key_map[blocker_key].id,
+                        "blocker_issue_id": remote_issue_by_node_key_map[
+                            blocker_key
+                        ].id,
                     },
                 )
             )
@@ -450,9 +514,16 @@ def reconciliation_plan_build(graph: TaskGraph, remote: RemoteProject | None) ->
             "task:human",
         }
         if current_role_label_set - {node_by_key_map[desired.node_key].role}:
-            raise TaskGraphError(f"Issue {desired.node_key} has a conflicting task role label")
-        if node_by_key_map[desired.node_key].role is TaskRole.HUMAN and "agent:codex" in current.label_name_list:
-            raise TaskGraphError(f"Human issue {desired.node_key} has the forbidden dispatch label")
+            raise TaskGraphError(
+                f"Issue {desired.node_key} has a conflicting task role label"
+            )
+        if (
+            node_by_key_map[desired.node_key].role is TaskRole.HUMAN
+            and "agent:codex" in current.label_name_list
+        ):
+            raise TaskGraphError(
+                f"Human issue {desired.node_key} has the forbidden dispatch label"
+            )
         unexpected_label_set = set(current.label_name_list) - required_label_set
         if unexpected_label_set:
             raise TaskGraphError(
@@ -466,7 +537,9 @@ def reconciliation_plan_build(graph: TaskGraph, remote: RemoteProject | None) ->
             or current.delegate_id != desired.delegate_id
         ):
             if current.status_name != "Backlog":
-                raise TaskGraphError(f"Activated issue {desired.node_key} has incomplete activation metadata")
+                raise TaskGraphError(
+                    f"Activated issue {desired.node_key} has incomplete activation metadata"
+                )
             metadata_action_list.append(
                 PublicationAction(
                     kind="issue-activation-metadata-update",
@@ -497,7 +570,9 @@ def reconciliation_plan_build(graph: TaskGraph, remote: RemoteProject | None) ->
                 )
             )
         elif current.status_name != "Todo":
-            raise TaskGraphError(f"Staged issue {desired.node_key} has an invalid activation status")
+            raise TaskGraphError(
+                f"Staged issue {desired.node_key} has an invalid activation status"
+            )
     if activation_action_list:
         return ReconciliationPlan(
             PublicationPhase.NODE_ACTIVATION,
@@ -517,24 +592,34 @@ def reconciliation_plan_build(graph: TaskGraph, remote: RemoteProject | None) ->
     )
 
 
-def activation_readback_require(graph: TaskGraph, remote: RemoteProject) -> ReconciliationPlan:
+def activation_readback_require(
+    graph: TaskGraph, remote: RemoteProject
+) -> ReconciliationPlan:
     """Prove the exact complete graph immediately after its one-way activation handoff.
 
     This strict comparison is intentionally separate from ordinary reconciliation: after
     successful handoff, issue lifecycle fields belong to Linear and may legitimately move.
     """
 
-    view = graph_publication_view_build(graph)
+    view = GraphPublicationView.from_graph(graph)
     _project_identity_require(view, remote)
     if remote.name != view.project_name or remote.status_name != "In Progress":
-        raise TaskGraphError("Activated Linear Project differs from the exact handoff state")
+        raise TaskGraphError(
+            "Activated Linear Project differs from the exact handoff state"
+        )
     _import_document_exact_require(view, remote)
     desired_issue_by_node_key_map = {item.node_key: item for item in view.issue_list}
     remote_issue_by_node_key_map = _remote_issue_map_get(remote.issue_list)
     if set(remote_issue_by_node_key_map) != set(desired_issue_by_node_key_map):
-        raise TaskGraphError("Activated Linear Project issue set differs from the exact handoff graph")
+        raise TaskGraphError(
+            "Activated Linear Project issue set differs from the exact handoff graph"
+        )
     blocker_key_set_by_node_key_map = {
-        node_key: {edge.blocker_node_key for edge in view.blocker_edge_list if edge.blocked_node_key == node_key}
+        node_key: {
+            edge.blocker_node_key
+            for edge in view.blocker_edge_list
+            if edge.blocked_node_key == node_key
+        }
         for node_key in desired_issue_by_node_key_map
     }
     node_by_key_map = {item.node_key: item for item in graph.node_list}
@@ -550,9 +635,12 @@ def activation_readback_require(graph: TaskGraph, remote: RemoteProject) -> Reco
             or set(current.label_name_list) != required_label_set
             or current.assignee_id != desired.assignee_id
             or current.delegate_id != desired.delegate_id
-            or set(current.blocker_key_list) != blocker_key_set_by_node_key_map[node_key]
+            or set(current.blocker_key_list)
+            != blocker_key_set_by_node_key_map[node_key]
         ):
-            raise TaskGraphError(f"Activated Linear issue {node_key} differs from the exact handoff graph")
+            raise TaskGraphError(
+                f"Activated Linear issue {node_key} differs from the exact handoff graph"
+            )
     return ReconciliationPlan(PublicationPhase.COMPLETE, [], activation_ready=True)
 
 
@@ -570,10 +658,12 @@ def cancellation_plan_build(
 
     if not isinstance(human_decision, bool) or not human_decision:
         raise TaskGraphError("Project cancellation requires an explicit human decision")
-    view = graph_publication_view_build(graph)
+    view = GraphPublicationView.from_graph(graph)
     _project_identity_require(view, remote)
     if remote.status_name == "Completed":
-        raise TaskGraphError("A completed Linear Project cannot be canceled or reopened")
+        raise TaskGraphError(
+            "A completed Linear Project cannot be canceled or reopened"
+        )
     if remote.status_name in {"Planned", "In Progress"}:
         return ReconciliationPlan(
             PublicationPhase.PROJECT_CANCELLATION,
@@ -587,7 +677,9 @@ def cancellation_plan_build(
             activation_ready=False,
         )
     if remote.status_name != "Canceled":
-        raise TaskGraphError("Linear Project cancellation encountered an unsupported status")
+        raise TaskGraphError(
+            "Linear Project cancellation encountered an unsupported status"
+        )
     action_list = [
         PublicationAction(
             kind="issue-status-update",
@@ -598,11 +690,15 @@ def cancellation_plan_build(
         if issue.status_name not in {"Done", "Canceled"}
     ]
     if action_list:
-        return ReconciliationPlan(PublicationPhase.NODE_CANCELLATION, action_list, activation_ready=False)
+        return ReconciliationPlan(
+            PublicationPhase.NODE_CANCELLATION, action_list, activation_ready=False
+        )
     return ReconciliationPlan(PublicationPhase.COMPLETE, [], activation_ready=False)
 
 
-def _project_identity_require(view: GraphPublicationView, remote: RemoteProject) -> None:
+def _project_identity_require(
+    view: GraphPublicationView, remote: RemoteProject
+) -> None:
     """Require exact Project identity before any import repair.
 
     Args:
@@ -615,17 +711,30 @@ def _project_identity_require(view: GraphPublicationView, remote: RemoteProject)
         or remote.project_key != view.project_key
         or remote.description != view.project_description
     ):
-        raise TaskGraphError("Linear Project key conflicts with the requested source identity")
+        raise TaskGraphError(
+            "Linear Project key conflicts with the requested source identity"
+        )
     if remote.status_name == "Planned" and remote.name != view.project_name:
         raise TaskGraphError("Linear Project name conflicts with the approved graph")
 
 
-def _import_document_exact_require(view: GraphPublicationView, remote: RemoteProject) -> None:
+def _import_document_exact_require(
+    view: GraphPublicationView, remote: RemoteProject
+) -> None:
     """Require exactly one immutable provider import document for this graph."""
 
-    matching_document_list = [item for item in remote.document_list if item.title == view.import_document_title]
-    if len(matching_document_list) != 1 or matching_document_list[0].content != view.import_document_content:
-        raise TaskGraphError("Activated Linear Project import receipt differs from its immutable source")
+    matching_document_list = [
+        item
+        for item in remote.document_list
+        if item.title == view.import_document_title
+    ]
+    if (
+        len(matching_document_list) != 1
+        or matching_document_list[0].content != view.import_document_content
+    ):
+        raise TaskGraphError(
+            "Activated Linear Project import receipt differs from its immutable source"
+        )
 
 
 def _remote_issue_map_get(issue_list: Iterable[RemoteIssue]) -> dict[str, RemoteIssue]:
@@ -641,12 +750,16 @@ def _remote_issue_map_get(issue_list: Iterable[RemoteIssue]) -> dict[str, Remote
     issue_by_node_key_map: dict[str, RemoteIssue] = {}
     for issue in issue_list:
         if not issue.node_key or issue.node_key in issue_by_node_key_map:
-            raise TaskGraphError("Linear Project contains an absent or duplicate provider node key")
+            raise TaskGraphError(
+                "Linear Project contains an absent or duplicate provider node key"
+            )
         issue_by_node_key_map[issue.node_key] = issue
     return issue_by_node_key_map
 
 
-def _issue_create_action(issue: IssuePublication, *, project_id: str) -> PublicationAction:
+def _issue_create_action(
+    issue: IssuePublication, *, project_id: str
+) -> PublicationAction:
     """Return one Backlog issue-create action without dispatch metadata.
 
     Args:
@@ -673,7 +786,9 @@ def _issue_create_action(issue: IssuePublication, *, project_id: str) -> Publica
     )
 
 
-def _staged_issue_owned_fields_require(desired: IssuePublication, current: RemoteIssue) -> None:
+def _staged_issue_owned_fields_require(
+    desired: IssuePublication, current: RemoteIssue
+) -> None:
     """Reject a stable key collision with different provider-owned content.
 
     Args:
@@ -682,6 +797,10 @@ def _staged_issue_owned_fields_require(desired: IssuePublication, current: Remot
     """
 
     if current.title != desired.title or current.description != desired.description:
-        raise TaskGraphError(f"Issue {desired.node_key} conflicts with its stable source key")
+        raise TaskGraphError(
+            f"Issue {desired.node_key} conflicts with its stable source key"
+        )
     if current.status_name not in {"Backlog", "Todo"}:
-        raise TaskGraphError(f"Staged issue {desired.node_key} has an invalid pre-activation status")
+        raise TaskGraphError(
+            f"Staged issue {desired.node_key} has an invalid pre-activation status"
+        )

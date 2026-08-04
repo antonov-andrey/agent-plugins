@@ -16,7 +16,7 @@ if str(LIBRARY_ROOT) not in sys.path:
 from task_graph.delta import TaskGraphDelta
 from task_graph.delta_reconciliation import delta_reconciliation_plan_build
 from task_graph.model import TaskGraph, TaskGraphError
-from task_graph.publication import delta_publication_view_build, graph_publication_view_build
+from task_graph.publication import DeltaPublicationView, GraphPublicationView
 from task_graph.reconciliation import (
     PublicationPhase,
     RemoteDocument,
@@ -149,8 +149,12 @@ def _graph_payload() -> dict[str, object]:
         "https://github.com/antonov-andrey/project-goals/tree/main/example",
         "https://github.com/antonov-andrey/project-goals/tree/" + "a" * 40,
         "https://github.com/antonov-andrey/other/tree/" + "a" * 40 + "/example",
-        "https://github.com/antonov-andrey/project-goals/tree/" + "a" * 40 + "/example?mutable=1",
-        "https://github.com/antonov-andrey/project-goals/tree/" + "a" * 40 + "/example/goal.md",
+        "https://github.com/antonov-andrey/project-goals/tree/"
+        + "a" * 40
+        + "/example?mutable=1",
+        "https://github.com/antonov-andrey/project-goals/tree/"
+        + "a" * 40
+        + "/example/goal.md",
     ],
 )
 def test_project_goals_source_requires_exact_commit_pinned_task_directory(
@@ -207,7 +211,9 @@ def _delta_payload(graph: TaskGraph) -> dict[str, object]:
     }
 
 
-def _remote_issue_list(graph: TaskGraph, *, activated: bool, relations: bool) -> list[RemoteIssue]:
+def _remote_issue_list(
+    graph: TaskGraph, *, activated: bool, relations: bool
+) -> list[RemoteIssue]:
     """Build deterministic remote issue snapshots from rendered content.
 
     Args:
@@ -219,7 +225,7 @@ def _remote_issue_list(graph: TaskGraph, *, activated: bool, relations: bool) ->
         Remote issues.
     """
 
-    view = graph_publication_view_build(graph)
+    view = GraphPublicationView.from_graph(graph)
     node_by_key_map = {item.node_key: item for item in graph.node_list}
     return [
         RemoteIssue(
@@ -230,13 +236,21 @@ def _remote_issue_list(graph: TaskGraph, *, activated: bool, relations: bool) ->
             status_name="Todo" if activated else "Backlog",
             label_name_list=(
                 [node_by_key_map[item.node_key].role]
-                + (["agent:codex"] if node_by_key_map[item.node_key].can_agent_execute() else [])
+                + (
+                    ["agent:codex"]
+                    if node_by_key_map[item.node_key].can_agent_execute()
+                    else []
+                )
                 if activated
                 else []
             ),
             assignee_id=item.assignee_id if activated else "",
             delegate_id=item.delegate_id if activated else "",
-            blocker_key_list=(list(node_by_key_map[item.node_key].blocker_key_list) if relations else []),
+            blocker_key_list=(
+                list(node_by_key_map[item.node_key].blocker_key_list)
+                if relations
+                else []
+            ),
         )
         for index, item in enumerate(view.issue_list, 1)
     ]
@@ -265,7 +279,7 @@ def _remote(
         Remote Project.
     """
 
-    view = graph_publication_view_build(graph)
+    view = GraphPublicationView.from_graph(graph)
     return RemoteProject(
         id=PROJECT_ID,
         team_id=TEAM_ID,
@@ -284,14 +298,18 @@ def _remote(
             if document
             else []
         ),
-        issue_list=(_remote_issue_list(graph, activated=activated, relations=relations) if issues else []),
+        issue_list=(
+            _remote_issue_list(graph, activated=activated, relations=relations)
+            if issues
+            else []
+        ),
     )
 
 
 def _delta_receipt_add(delta: TaskGraphDelta, remote: RemoteProject) -> RemoteProject:
     """Return a Project snapshot containing the exact approved delta receipt."""
 
-    view = delta_publication_view_build(delta)
+    view = DeltaPublicationView.from_delta(delta)
     return replace(
         remote,
         document_list=[
@@ -309,7 +327,7 @@ def test_graph_validates_roles_and_renders_one_shared_issue_contract() -> None:
     """A complete graph renders stable visible identities and task sections."""
 
     graph = TaskGraph.from_payload(_graph_payload())
-    view = graph_publication_view_build(graph)
+    view = GraphPublicationView.from_graph(graph)
 
     assert len(view.issue_list) == 4
     assert view.project_key.endswith(graph.source_fingerprint())
@@ -328,7 +346,11 @@ def test_graph_supports_exact_delegate_assignment_without_null() -> None:
     payload["node_list"][0]["delegate_id"] = ASSIGNEE_ID
 
     graph = TaskGraph.from_payload(payload)
-    issue = next(item for item in graph_publication_view_build(graph).issue_list if item.node_key == "implementation")
+    issue = next(
+        item
+        for item in GraphPublicationView.from_graph(graph).issue_list
+        if item.node_key == "implementation"
+    )
 
     assert issue.assignee_id == ""
     assert issue.delegate_id == ASSIGNEE_ID
@@ -344,7 +366,9 @@ def test_graph_supports_exact_delegate_assignment_without_null() -> None:
         TaskGraph.from_payload(payload)
 
 
-def test_cross_repository_code_requires_visible_ordered_partial_merge_recovery() -> None:
+def test_cross_repository_code_requires_visible_ordered_partial_merge_recovery() -> (
+    None
+):
     """An indivisible multi-repository task exposes both merge order and recovery."""
 
     payload = _graph_payload()
@@ -359,8 +383,10 @@ def test_cross_repository_code_requires_visible_ordered_partial_merge_recovery()
     with pytest.raises(TaskGraphError, match="partial merge recovery"):
         TaskGraph.from_payload(payload)
 
-    implementation["partial_merge_recovery"] = "Preserve completed merges and open one bounded recovery task."
-    view = graph_publication_view_build(TaskGraph.from_payload(payload))
+    implementation["partial_merge_recovery"] = (
+        "Preserve completed merges and open one bounded recovery task."
+    )
+    view = GraphPublicationView.from_graph(TaskGraph.from_payload(payload))
     issue = next(item for item in view.issue_list if item.node_key == "implementation")
     assert "## Ordered Merge Plan And Partial Recovery" in issue.description
     assert "Preserve completed merges" in issue.description
@@ -380,7 +406,9 @@ def test_graph_rejects_cycle_and_wrong_role_delivery_pair() -> None:
         TaskGraph.from_payload(wrong)
 
 
-def test_direct_model_construction_requires_lists_and_detaches_caller_collections() -> None:
+def test_direct_model_construction_requires_lists_and_detaches_caller_collections() -> (
+    None
+):
     """Internal callers use the same list contract and cannot mutate stored lists indirectly."""
 
     graph = TaskGraph.from_payload(_graph_payload())
@@ -389,7 +417,9 @@ def test_direct_model_construction_requires_lists_and_detaches_caller_collection
     with pytest.raises(TaskGraphError, match="Task scope.*list"):
         replace(implementation, scope_list=("Wrong collection",))
     with pytest.raises(TaskGraphError, match="command_argument_list.*list"):
-        replace(implementation.verification_list[0], command_argument_list=("pytest", "-q"))
+        replace(
+            implementation.verification_list[0], command_argument_list=("pytest", "-q")
+        )
     with pytest.raises(TaskGraphError, match="node list"):
         replace(graph, node_list=tuple(graph.node_list))
 
@@ -460,10 +490,14 @@ def test_issue_resource_consumers_are_exact_and_downstream() -> None:
     graph = TaskGraph.from_payload(payload)
     resource = graph.node_list[0].resource_list[0]
     implementation = next(
-        item for item in graph_publication_view_build(graph).issue_list if item.node_key == "implementation"
+        item
+        for item in GraphPublicationView.from_graph(graph).issue_list
+        if item.node_key == "implementation"
     )
     assert resource.consumer_node_key_list == ["review", "acceptance"]
-    assert 'downstream consumers `["review", "acceptance"]`' in implementation.description
+    assert (
+        'downstream consumers `["review", "acceptance"]`' in implementation.description
+    )
 
     payload["node_list"][0]["resource_list"][0]["consumer_node_key_list"] = ["unknown"]
     with pytest.raises(TaskGraphError, match="unknown consumers"):
@@ -506,7 +540,9 @@ def test_delta_resource_keys_remain_unique_across_new_and_accepted_issues() -> N
 
     duplicate_new = _delta_payload(graph)
     duplicate_new["node_list"][0]["resource_list"] = [_resource("delta-environment")]
-    second = _node("second-remediation", "task:implementation", "code", [], repository=True)
+    second = _node(
+        "second-remediation", "task:implementation", "code", [], repository=True
+    )
     second["resource_list"] = [_resource("delta-environment")]
     duplicate_new["node_list"].append(second)
     duplicate_new["blocker_edge_list"].append(
@@ -519,7 +555,9 @@ def test_delta_resource_keys_remain_unique_across_new_and_accepted_issues() -> N
         TaskGraphDelta.from_payload(duplicate_new)
 
     accepted_collision = _delta_payload(graph)
-    accepted_collision["node_list"][0]["resource_list"] = [_resource("shared-environment")]
+    accepted_collision["node_list"][0]["resource_list"] = [
+        _resource("shared-environment")
+    ]
     delta = TaskGraphDelta.from_payload(accepted_collision)
     remote = _remote(
         graph,
@@ -545,7 +583,9 @@ def test_graph_requires_every_task_to_reach_all_applicable_downstream_gates() ->
         TaskGraph.from_payload(unreviewed)
 
     human_bypass = _graph_payload()
-    human_bypass["node_list"].insert(1, _node("human-decision", "task:human", "human", []))
+    human_bypass["node_list"].insert(
+        1, _node("human-decision", "task:human", "human", [])
+    )
     human_bypass["node_list"][-1]["blocker_key_list"].append("human-decision")
     with pytest.raises(TaskGraphError, match="human-decision.*downstream path"):
         TaskGraph.from_payload(human_bypass)
@@ -555,7 +595,9 @@ def test_instruction_adoption_is_an_explicit_blocker_not_a_legacy_fallback() -> 
     """A stale consumer is migrated by a first-class owner task before Product work."""
 
     payload = _graph_payload()
-    adoption = _node("instruction-adoption", "task:implementation", "code", [], repository=True)
+    adoption = _node(
+        "instruction-adoption", "task:implementation", "code", [], repository=True
+    )
     product = _node(
         "product-implementation",
         "task:implementation",
@@ -573,7 +615,9 @@ def test_instruction_adoption_is_an_explicit_blocker_not_a_legacy_fallback() -> 
 
     graph = TaskGraph.from_payload(payload)
 
-    product_node = next(item for item in graph.node_list if item.node_key == "product-implementation")
+    product_node = next(
+        item for item in graph.node_list if item.node_key == "product-implementation"
+    )
     assert product_node.blocker_key_list == ["instruction-adoption"]
     assert graph.graph_fingerprint()
 
@@ -585,18 +629,38 @@ def test_activation_barrier_advances_one_idempotent_phase_at_a_time() -> None:
 
     project_plan = reconciliation_plan_build(graph, None)
     assert project_plan.phase is PublicationPhase.PROJECT
-    assert project_plan.action_list[0].payload["description"].startswith("<!-- linear-agent-tools-project:v1 -->")
-    document_plan = reconciliation_plan_build(graph, _remote(graph, document=False, issues=False))
+    assert (
+        project_plan.action_list[0]
+        .payload["description"]
+        .startswith("<!-- linear-agent-tools-project:v1 -->")
+    )
+    document_plan = reconciliation_plan_build(
+        graph, _remote(graph, document=False, issues=False)
+    )
     assert document_plan.phase is PublicationPhase.DOCUMENT
     assert (
-        reconciliation_plan_build(graph, _remote(graph, document=True, issues=False)).phase is PublicationPhase.ISSUES
+        reconciliation_plan_build(
+            graph, _remote(graph, document=True, issues=False)
+        ).phase
+        is PublicationPhase.ISSUES
     )
-    issue_creation = reconciliation_plan_build(graph, _remote(graph, document=True, issues=False))
-    assert all(action.payload["label_name_list"] == [] for action in issue_creation.action_list)
-    assert all(action.payload["assignee_id"] == "" for action in issue_creation.action_list)
-    assert all(action.payload["delegate_id"] == "" for action in issue_creation.action_list)
+    issue_creation = reconciliation_plan_build(
+        graph, _remote(graph, document=True, issues=False)
+    )
+    assert all(
+        action.payload["label_name_list"] == [] for action in issue_creation.action_list
+    )
+    assert all(
+        action.payload["assignee_id"] == "" for action in issue_creation.action_list
+    )
+    assert all(
+        action.payload["delegate_id"] == "" for action in issue_creation.action_list
+    )
     assert (
-        reconciliation_plan_build(graph, _remote(graph, document=True, issues=True)).phase is PublicationPhase.RELATIONS
+        reconciliation_plan_build(
+            graph, _remote(graph, document=True, issues=True)
+        ).phase
+        is PublicationPhase.RELATIONS
     )
     assert (
         reconciliation_plan_build(
@@ -622,7 +686,10 @@ def test_activation_barrier_advances_one_idempotent_phase_at_a_time() -> None:
             for issue in metadata_ready.issue_list
         ],
     )
-    assert reconciliation_plan_build(graph, metadata_ready).phase is PublicationPhase.NODE_ACTIVATION
+    assert (
+        reconciliation_plan_build(graph, metadata_ready).phase
+        is PublicationPhase.NODE_ACTIVATION
+    )
     activation = reconciliation_plan_build(
         graph,
         _remote(graph, document=True, issues=True, relations=True, activated=True),
@@ -648,7 +715,7 @@ def test_project_creation_publishes_exact_provider_identity() -> None:
     """Project recovery starts from a visible immutable provider identity."""
 
     graph = TaskGraph.from_payload(_graph_payload())
-    view = graph_publication_view_build(graph)
+    view = GraphPublicationView.from_graph(graph)
 
     action = reconciliation_plan_build(graph, None).action_list[0]
 
@@ -667,7 +734,7 @@ def test_import_document_recovery_rejects_duplicates_and_foreign_collision() -> 
     """Recovery updates only one exact provider-owned document and never a title collision."""
 
     graph = TaskGraph.from_payload(_graph_payload())
-    view = graph_publication_view_build(graph)
+    view = GraphPublicationView.from_graph(graph)
     remote = _remote(graph, document=True, issues=False)
     exact = remote.document_list[0]
 
@@ -696,7 +763,9 @@ def test_import_document_recovery_rejects_duplicates_and_foreign_collision() -> 
             )
         ),
     )
-    plan = reconciliation_plan_build(graph, replace(remote, document_list=[stale_provider]))
+    plan = reconciliation_plan_build(
+        graph, replace(remote, document_list=[stale_provider])
+    )
 
     assert plan.phase is PublicationPhase.DOCUMENT
     assert plan.action_list[0].kind == "import-document-update"
@@ -704,7 +773,9 @@ def test_import_document_recovery_rejects_duplicates_and_foreign_collision() -> 
     assert plan.action_list[0].payload["content"] == view.import_document_content
 
 
-def test_activation_readback_proves_exact_handoff_without_freezing_later_linear_state() -> None:
+def test_activation_readback_proves_exact_handoff_without_freezing_later_linear_state() -> (
+    None
+):
     """The immediate handoff proof is strict while ordinary later reconciliation remains source-only."""
 
     graph = TaskGraph.from_payload(_graph_payload())
@@ -721,13 +792,19 @@ def test_activation_readback_proves_exact_handoff_without_freezing_later_linear_
     progressed = replace(
         activated,
         issue_list=[
-            (replace(item, status_name="In Progress") if item.node_key == "implementation" else item)
+            (
+                replace(item, status_name="In Progress")
+                if item.node_key == "implementation"
+                else item
+            )
             for item in activated.issue_list
         ],
     )
     with pytest.raises(TaskGraphError, match="exact handoff graph"):
         activation_readback_require(graph, progressed)
-    assert reconciliation_plan_build(graph, progressed).phase is PublicationPhase.COMPLETE
+    assert (
+        reconciliation_plan_build(graph, progressed).phase is PublicationPhase.COMPLETE
+    )
 
 
 def test_initial_import_rejects_unapproved_label_before_project_activation() -> None:
@@ -747,7 +824,9 @@ def test_initial_import_rejects_unapproved_label_before_project_activation() -> 
         *remote.issue_list[1:],
     ]
 
-    with pytest.raises(TaskGraphError, match="outside its approved activation metadata"):
+    with pytest.raises(
+        TaskGraphError, match="outside its approved activation metadata"
+    ):
         reconciliation_plan_build(graph, replace(remote, issue_list=issue_list))
 
 
@@ -764,7 +843,11 @@ def test_interrupted_issue_import_reuses_stable_keys_without_duplicates() -> Non
         description=partial.description,
         status_name=partial.status_name,
         document_list=partial.document_list,
-        issue_list=[item for item in partial.issue_list if item.node_key in {"implementation", "review"}],
+        issue_list=[
+            item
+            for item in partial.issue_list
+            if item.node_key in {"implementation", "review"}
+        ],
     )
     plan = reconciliation_plan_build(graph, partial)
 
@@ -809,7 +892,8 @@ def test_remote_snapshot_parser_rejects_malformed_provider_identities() -> None:
         "description": remote.description,
         "status_name": remote.status_name,
         "document_list": [
-            {"id": item.id, "title": item.title, "content": item.content} for item in remote.document_list
+            {"id": item.id, "title": item.title, "content": item.content}
+            for item in remote.document_list
         ],
         "issue_list": [
             {
@@ -832,7 +916,9 @@ def test_remote_snapshot_parser_rejects_malformed_provider_identities() -> None:
         RemoteProject.from_payload(payload)
 
 
-def test_active_project_is_not_reimported_and_terminal_project_is_not_reopened() -> None:
+def test_active_project_is_not_reimported_and_terminal_project_is_not_reopened() -> (
+    None
+):
     """Post-handoff state belongs to Linear while immutable import receipt remains proven."""
 
     graph = TaskGraph.from_payload(_graph_payload())
@@ -844,7 +930,9 @@ def test_active_project_is_not_reimported_and_terminal_project_is_not_reopened()
         assert result.phase is PublicationPhase.COMPLETE
         assert not result.action_list
 
-    corrupted = _remote(graph, document=False, issues=False, project_status="In Progress")
+    corrupted = _remote(
+        graph, document=False, issues=False, project_status="In Progress"
+    )
     with pytest.raises(TaskGraphError, match="import receipt"):
         reconciliation_plan_build(graph, corrupted)
 
@@ -863,7 +951,9 @@ def test_active_project_is_not_reimported_and_terminal_project_is_not_reopened()
         reconciliation_plan_build(graph, wrong_team)
 
 
-def test_project_cancellation_stops_dispatch_before_canceling_unfinished_issues() -> None:
+def test_project_cancellation_stops_dispatch_before_canceling_unfinished_issues() -> (
+    None
+):
     """Cancellation is explicit, Project-first, idempotent and never reopens completion."""
 
     graph = TaskGraph.from_payload(_graph_payload())
@@ -885,16 +975,25 @@ def test_project_cancellation_stops_dispatch_before_canceling_unfinished_issues(
     canceled = replace(active, status_name="Canceled")
     issue_plan = cancellation_plan_build(graph, canceled, human_decision=True)
     assert issue_plan.phase is PublicationPhase.NODE_CANCELLATION
-    assert {item.payload["status_name"] for item in issue_plan.action_list} == {"Canceled"}
+    assert {item.payload["status_name"] for item in issue_plan.action_list} == {
+        "Canceled"
+    }
 
     terminal = replace(
         canceled,
-        issue_list=[replace(item, status_name="Canceled") for item in canceled.issue_list],
+        issue_list=[
+            replace(item, status_name="Canceled") for item in canceled.issue_list
+        ],
     )
-    assert cancellation_plan_build(graph, terminal, human_decision=True).phase is PublicationPhase.COMPLETE
+    assert (
+        cancellation_plan_build(graph, terminal, human_decision=True).phase
+        is PublicationPhase.COMPLETE
+    )
 
     with pytest.raises(TaskGraphError, match="completed.*cannot be canceled"):
-        cancellation_plan_build(graph, replace(active, status_name="Completed"), human_decision=True)
+        cancellation_plan_build(
+            graph, replace(active, status_name="Completed"), human_decision=True
+        )
 
 
 def test_partial_or_damaged_import_can_be_canceled_without_an_import_document() -> None:
@@ -909,17 +1008,21 @@ def test_partial_or_damaged_import_can_be_canceled_without_an_import_document() 
 
     active_without_document = replace(partial, status_name="In Progress")
     assert (
-        cancellation_plan_build(graph, active_without_document, human_decision=True).phase
+        cancellation_plan_build(
+            graph, active_without_document, human_decision=True
+        ).phase
         is PublicationPhase.PROJECT_CANCELLATION
     )
 
 
-def test_active_project_delta_advances_issue_relation_metadata_and_todo_separately() -> None:
+def test_active_project_delta_advances_issue_relation_metadata_and_todo_separately() -> (
+    None
+):
     """A delta adds its dispatch label only after relations and makes Todo the last mutation."""
 
     graph = TaskGraph.from_payload(_graph_payload())
     delta = TaskGraphDelta.from_payload(_delta_payload(graph))
-    view = delta_publication_view_build(delta)
+    view = DeltaPublicationView.from_delta(delta)
     remote = _remote(
         graph,
         document=True,
@@ -932,9 +1035,14 @@ def test_active_project_delta_advances_issue_relation_metadata_and_todo_separate
     receipt_plan = delta_reconciliation_plan_build(delta, remote)
     assert receipt_plan.phase is PublicationPhase.DELTA_DOCUMENT
     assert receipt_plan.action_list[0].kind == "delta-document-create"
-    assert receipt_plan.action_list[0].payload["content"] == view.import_document_content
+    assert (
+        receipt_plan.action_list[0].payload["content"] == view.import_document_content
+    )
     remote = _delta_receipt_add(delta, remote)
-    assert delta_reconciliation_plan_build(delta, remote).phase is PublicationPhase.DELTA_ISSUES
+    assert (
+        delta_reconciliation_plan_build(delta, remote).phase
+        is PublicationPhase.DELTA_ISSUES
+    )
 
     remediation = RemoteIssue(
         id="70000000-0000-4000-8000-000000000001",
@@ -948,7 +1056,10 @@ def test_active_project_delta_advances_issue_relation_metadata_and_todo_separate
         blocker_key_list=[],
     )
     with_issue = replace(remote, issue_list=[*remote.issue_list, remediation])
-    assert delta_reconciliation_plan_build(delta, with_issue).phase is PublicationPhase.DELTA_RELATIONS
+    assert (
+        delta_reconciliation_plan_build(delta, with_issue).phase
+        is PublicationPhase.DELTA_RELATIONS
+    )
 
     with_relation = replace(
         with_issue,
@@ -977,7 +1088,10 @@ def test_active_project_delta_advances_issue_relation_metadata_and_todo_separate
             for item in with_relation.issue_list
         ],
     )
-    assert delta_reconciliation_plan_build(delta, with_reverification).phase is PublicationPhase.DELTA_METADATA
+    assert (
+        delta_reconciliation_plan_build(delta, with_reverification).phase
+        is PublicationPhase.DELTA_METADATA
+    )
 
     with_metadata = replace(
         with_reverification,
@@ -998,7 +1112,11 @@ def test_active_project_delta_advances_issue_relation_metadata_and_todo_separate
     activated = replace(
         with_metadata,
         issue_list=[
-            (replace(item, status_name="Todo") if item.node_key == "remediation" else item)
+            (
+                replace(item, status_name="Todo")
+                if item.node_key == "remediation"
+                else item
+            )
             for item in with_metadata.issue_list
         ],
     )
@@ -1029,7 +1147,7 @@ def test_active_project_delta_never_bypasses_or_reopens_downstream_verification(
     if not declare_reverification:
         payload["reverification_node_key_list"] = []
     delta = TaskGraphDelta.from_payload(payload)
-    view = delta_publication_view_build(delta)
+    view = DeltaPublicationView.from_delta(delta)
     remote = _delta_receipt_add(
         delta,
         _remote(
@@ -1071,7 +1189,9 @@ def test_active_project_delta_never_bypasses_or_reopens_downstream_verification(
         ],
     )
 
-    with pytest.raises(TaskGraphError, match="must already be Todo or explicitly return"):
+    with pytest.raises(
+        TaskGraphError, match="must already be Todo or explicitly return"
+    ):
         delta_reconciliation_plan_build(delta, relation_ready)
 
 
@@ -1094,7 +1214,7 @@ def test_active_project_delta_may_reverify_only_review_or_acceptance() -> None:
         }
     ]
     delta = TaskGraphDelta.from_payload(payload)
-    view = delta_publication_view_build(delta)
+    view = DeltaPublicationView.from_delta(delta)
     remote = _delta_receipt_add(
         delta,
         _remote(
@@ -1145,7 +1265,7 @@ def test_active_project_delta_rejects_unapproved_label_before_node_activation() 
 
     graph = TaskGraph.from_payload(_graph_payload())
     delta = TaskGraphDelta.from_payload(_delta_payload(graph))
-    view = delta_publication_view_build(delta)
+    view = DeltaPublicationView.from_delta(delta)
     remote = _remote(
         graph,
         document=True,
@@ -1171,7 +1291,9 @@ def test_active_project_delta_rejects_unapproved_label_before_node_activation() 
         issue_list=[
             *[
                 (
-                    replace(item, blocker_key_list=[*item.blocker_key_list, "remediation"])
+                    replace(
+                        item, blocker_key_list=[*item.blocker_key_list, "remediation"]
+                    )
                     if item.node_key == "review"
                     else item
                 )
@@ -1181,11 +1303,15 @@ def test_active_project_delta_rejects_unapproved_label_before_node_activation() 
         ],
     )
 
-    with pytest.raises(TaskGraphError, match="outside its approved activation metadata"):
+    with pytest.raises(
+        TaskGraphError, match="outside its approved activation metadata"
+    ):
         delta_reconciliation_plan_build(delta, with_issue)
 
 
-def test_active_project_delta_requires_downstream_gates_and_exact_active_destination() -> None:
+def test_active_project_delta_requires_downstream_gates_and_exact_active_destination() -> (
+    None
+):
     """An additive node cannot bypass review/acceptance/cleanup or reopen a terminal Project."""
 
     graph = TaskGraph.from_payload(_graph_payload())
@@ -1201,7 +1327,7 @@ def test_active_project_delta_requires_downstream_gates_and_exact_active_destina
         activated=True,
         project_status="In Progress",
     )
-    view = delta_publication_view_build(delta)
+    view = DeltaPublicationView.from_delta(delta)
     remediation = RemoteIssue(
         id="70000000-0000-4000-8000-000000000001",
         node_key="remediation",
@@ -1213,7 +1339,9 @@ def test_active_project_delta_requires_downstream_gates_and_exact_active_destina
         delegate_id="",
         blocker_key_list=[],
     )
-    with_issue = replace(_delta_receipt_add(delta, remote), issue_list=[*remote.issue_list, remediation])
+    with_issue = replace(
+        _delta_receipt_add(delta, remote), issue_list=[*remote.issue_list, remediation]
+    )
 
     with pytest.raises(TaskGraphError, match="downstream path"):
         delta_reconciliation_plan_build(delta, with_issue)
@@ -1240,7 +1368,7 @@ def test_active_project_delta_requires_downstream_gates_and_exact_active_destina
         delta_reconciliation_plan_build(valid_delta, corrupt_receipt)
 
     with_delta_receipt = _delta_receipt_add(valid_delta, remote)
-    delta_view = delta_publication_view_build(valid_delta)
+    delta_view = DeltaPublicationView.from_delta(valid_delta)
     duplicate_delta_receipt = replace(
         with_delta_receipt,
         document_list=[
@@ -1258,7 +1386,11 @@ def test_active_project_delta_requires_downstream_gates_and_exact_active_destina
     changed_delta_receipt = replace(
         with_delta_receipt,
         document_list=[
-            (replace(item, content="foreign") if item.title == delta_view.import_document_title else item)
+            (
+                replace(item, content="foreign")
+                if item.title == delta_view.import_document_title
+                else item
+            )
             for item in with_delta_receipt.document_list
         ],
     )
@@ -1266,12 +1398,14 @@ def test_active_project_delta_requires_downstream_gates_and_exact_active_destina
         delta_reconciliation_plan_build(valid_delta, changed_delta_receipt)
 
 
-def test_active_project_delta_preserves_unrelated_nodes_and_rejects_unsafe_progressed_metadata() -> None:
+def test_active_project_delta_preserves_unrelated_nodes_and_rejects_unsafe_progressed_metadata() -> (
+    None
+):
     """Unknown active-Project content is retained while provider-owned delta fields remain exact."""
 
     graph = TaskGraph.from_payload(_graph_payload())
     delta = TaskGraphDelta.from_payload(_delta_payload(graph))
-    view = delta_publication_view_build(delta)
+    view = DeltaPublicationView.from_delta(delta)
     remote = _remote(
         graph,
         document=True,
@@ -1303,8 +1437,13 @@ def test_active_project_delta_preserves_unrelated_nodes_and_rejects_unsafe_progr
         delegate_id="",
         blocker_key_list=[],
     )
-    with_nodes = replace(remote, issue_list=[*remote.issue_list, unrelated, remediation])
-    assert delta_reconciliation_plan_build(delta, with_nodes).phase is PublicationPhase.DELTA_RELATIONS
+    with_nodes = replace(
+        remote, issue_list=[*remote.issue_list, unrelated, remediation]
+    )
+    assert (
+        delta_reconciliation_plan_build(delta, with_nodes).phase
+        is PublicationPhase.DELTA_RELATIONS
+    )
 
     relation_ready = replace(
         with_nodes,
@@ -1312,7 +1451,11 @@ def test_active_project_delta_preserves_unrelated_nodes_and_rejects_unsafe_progr
             (
                 replace(item, blocker_key_list=[*item.blocker_key_list, "remediation"])
                 if item.node_key == "review"
-                else (replace(item, status_name="In Progress") if item.node_key == "remediation" else item)
+                else (
+                    replace(item, status_name="In Progress")
+                    if item.node_key == "remediation"
+                    else item
+                )
             )
             for item in with_nodes.issue_list
         ],
@@ -1321,12 +1464,14 @@ def test_active_project_delta_preserves_unrelated_nodes_and_rejects_unsafe_progr
         delta_reconciliation_plan_build(delta, relation_ready)
 
 
-def test_active_project_delta_rejects_missing_relation_after_new_node_left_backlog() -> None:
+def test_active_project_delta_rejects_missing_relation_after_new_node_left_backlog() -> (
+    None
+):
     """A crashed publisher cannot repair topology after prematurely activating a new node."""
 
     graph = TaskGraph.from_payload(_graph_payload())
     delta = TaskGraphDelta.from_payload(_delta_payload(graph))
-    view = delta_publication_view_build(delta)
+    view = DeltaPublicationView.from_delta(delta)
     remote = _remote(
         graph,
         document=True,
@@ -1348,8 +1493,12 @@ def test_active_project_delta_rejects_missing_relation_after_new_node_left_backl
         blocker_key_list=[],
     )
 
-    with pytest.raises(TaskGraphError, match="relation is absent after a new node left Backlog"):
-        delta_reconciliation_plan_build(delta, replace(remote, issue_list=[*remote.issue_list, remediation]))
+    with pytest.raises(
+        TaskGraphError, match="relation is absent after a new node left Backlog"
+    ):
+        delta_reconciliation_plan_build(
+            delta, replace(remote, issue_list=[*remote.issue_list, remediation])
+        )
 
 
 @pytest.mark.parametrize("direction", ["incoming", "outgoing"])
@@ -1360,7 +1509,7 @@ def test_active_project_delta_rejects_unapproved_relations_involving_new_node(
 
     graph = TaskGraph.from_payload(_graph_payload())
     delta = TaskGraphDelta.from_payload(_delta_payload(graph))
-    view = delta_publication_view_build(delta)
+    view = DeltaPublicationView.from_delta(delta)
     remote = _remote(
         graph,
         document=True,

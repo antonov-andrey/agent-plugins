@@ -16,7 +16,7 @@ if str(LIBRARY_ROOT) not in sys.path:
 from task_graph.delta import TaskGraphDelta
 from task_graph.delta_reconciliation import delta_reconciliation_plan_build
 from task_graph.model import TaskGraph, TaskGraphError
-from task_graph.publication import delta_publication_view_build, graph_publication_view_build
+from task_graph.publication import DeltaPublicationView, GraphPublicationView
 from task_graph.reconciliation import (
     RemoteProject,
     activation_readback_require,
@@ -32,7 +32,9 @@ def _parser_get() -> argparse.ArgumentParser:
         The argument parser.
     """
 
-    parser = argparse.ArgumentParser(description="Validate and plan one Linear Project task graph import.")
+    parser = argparse.ArgumentParser(
+        description="Validate and plan one Linear Project task graph import."
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
     for command in (
         "validate",
@@ -101,7 +103,9 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser_get().parse_args(argv)
     try:
         if args.command.startswith("delta-"):
-            delta = TaskGraphDelta.from_payload(_json_load(args.delta_input, label="Delta input"))
+            delta = TaskGraphDelta.from_payload(
+                _json_load(args.delta_input, label="Delta input")
+            )
             if args.command == "delta-validate":
                 payload: dict[str, object] = {
                     "schema_version": 1,
@@ -112,12 +116,16 @@ def main(argv: list[str] | None = None) -> int:
                     "source_fingerprint": delta.source.fingerprint(),
                 }
             elif args.command == "delta-render":
-                payload = delta_publication_view_build(delta).payload()
+                payload = DeltaPublicationView.from_delta(delta).payload()
             else:
-                remote = RemoteProject.from_payload(_json_load(args.snapshot_input, label="Project snapshot"))
+                remote = RemoteProject.from_payload(
+                    _json_load(args.snapshot_input, label="Project snapshot")
+                )
                 payload = delta_reconciliation_plan_build(delta, remote).payload()
         else:
-            graph = TaskGraph.from_payload(_json_load(args.graph_input, label="Graph input"))
+            graph = TaskGraph.from_payload(
+                _json_load(args.graph_input, label="Graph input")
+            )
             if args.command == "validate":
                 payload = {
                     "schema_version": 1,
@@ -127,19 +135,25 @@ def main(argv: list[str] | None = None) -> int:
                     "source_fingerprint": graph.source_fingerprint(),
                 }
             elif args.command == "render":
-                payload = graph_publication_view_build(graph).payload()
+                payload = GraphPublicationView.from_graph(graph).payload()
             elif args.command == "reconcile":
                 remote = (
-                    RemoteProject.from_payload(_json_load(args.snapshot_input, label="Project snapshot"))
+                    RemoteProject.from_payload(
+                        _json_load(args.snapshot_input, label="Project snapshot")
+                    )
                     if args.snapshot_input is not None
                     else None
                 )
                 payload = reconciliation_plan_build(graph, remote).payload()
             elif args.command == "activation-confirm":
-                remote = RemoteProject.from_payload(_json_load(args.snapshot_input, label="Project snapshot"))
+                remote = RemoteProject.from_payload(
+                    _json_load(args.snapshot_input, label="Project snapshot")
+                )
                 payload = activation_readback_require(graph, remote).payload()
             else:
-                remote = RemoteProject.from_payload(_json_load(args.snapshot_input, label="Project snapshot"))
+                remote = RemoteProject.from_payload(
+                    _json_load(args.snapshot_input, label="Project snapshot")
+                )
                 payload = cancellation_plan_build(
                     graph,
                     remote,
@@ -148,7 +162,9 @@ def main(argv: list[str] | None = None) -> int:
     except (TaskGraphError, ValueError, TypeError) as error:
         print(str(error), file=sys.stderr)
         return 2
-    print(json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True))
+    print(
+        json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    )
     return 0
 
 
