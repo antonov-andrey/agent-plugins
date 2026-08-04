@@ -9,7 +9,9 @@ import sys
 
 import pytest
 
-LIBRARY_ROOT = Path(__file__).resolve().parents[2]
+REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
+PLUGIN_ROOT = REPOSITORY_ROOT / "plugins" / "agent-workflows"
+LIBRARY_ROOT = PLUGIN_ROOT / "lib"
 if str(LIBRARY_ROOT) not in sys.path:
     sys.path.insert(0, str(LIBRARY_ROOT))
 
@@ -220,7 +222,7 @@ def test_cli_emits_machine_readable_snapshot(tmp_path: Path) -> None:
 
     root, _remote = _repository_create(tmp_path)
     goal, specification = _input_pair_create(tmp_path)
-    script = Path(__file__).resolve().parents[3] / "skills" / "goal-brainstorm" / "scripts" / "source.py"
+    script = PLUGIN_ROOT / "skills" / "goal-brainstorm" / "scripts" / "source.py"
 
     result = subprocess.run(
         [

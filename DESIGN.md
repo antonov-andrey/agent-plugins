@@ -81,6 +81,8 @@ agent-plugins/
       .codex-plugin/plugin.json
       skills/
   test/
+    agent_workflows/
+    linear_agent_tools/
 ```
 
 Plugin `agent-workflows` владеет skills:
@@ -121,6 +123,10 @@ Plugin `linear-agent-tools` владеет skills:
 Общие `explain`, `section-audit`, `sequential-batch` и `subagent-transport` mechanics принадлежат plugin-local support owners внутри `agent-workflows`. Public `agent-workflows:sequential-batch` является stable dependency для project-local workflows, которым нужны эти mechanics. Consumer projects не содержат их копии. Opinionated audit cards и mechanical code-standard checks не принадлежат `agent-workflows`; они поступают из выбранных `project-standards` skills и project-local contracts.
 
 Plugin-local support owner размещается в `plugins/<plugin>/lib/<owner>/`. Переиспользуемый Python-модуль, вызываемый skill-local script, принадлежит непосредственно этому owner path. Каталог `tool/` существует только для исполняемых CLI entrypoints самого support owner, а `tool/lib/` — только для реализации, общей для нескольких таких entrypoints. Тонкий исполняемый интерфейс, принадлежащий workflow skill, размещается в `skills/<skill>/scripts/`. Структура каталогов определяется реальным владельцем и направлением вызова, а не копируется с другого support owner.
+
+Codex plugin manifest не устанавливает произвольные Python dependencies: он объявляет plugin surfaces, а skill metadata может объявлять только MCP tool dependencies. Поэтому непосредственно исполняемые Python scripts и их plugin-local `lib` используют Python standard library. Capability, которому действительно нужен third-party runtime, получает отдельный явно устанавливаемый runtime owner либо MCP boundary; неописанный import из случайного project venv запрещён. `requirements-dev.txt` принадлежит только воспроизводимым formatting, validation и test tools и не является runtime dependency installable plugins.
+
+Все repository-level provider suites расположены только под `test/<plugin>/<owner>/`. Корневой `pytest.ini` явно включает shared owner-aware pytest plugin; `pytest -q` обязан обнаруживать весь tracked provider suite, а не только корневые smoke tests. Произвольные `plugins/**/lib/**/test/` roots запрещены, поскольку они не являются самостоятельными Skill или Submodule test owners.
 
 Workflow входит в `agent-workflows` только по явно утверждённому пользователем source-to-target решению. Для утверждённого переноса workflow обязан:
 

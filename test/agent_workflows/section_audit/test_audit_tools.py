@@ -8,7 +8,8 @@ import subprocess
 import sys
 from uuid import UUID
 
-TOOL_ROOT = Path(__file__).resolve().parents[1] / "tool"
+REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
+TOOL_ROOT = REPOSITORY_ROOT / "plugins" / "agent-workflows" / "lib" / "section-audit" / "tool"
 
 
 def _tool_run(

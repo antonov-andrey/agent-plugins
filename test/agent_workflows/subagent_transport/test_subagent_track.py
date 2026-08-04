@@ -9,7 +9,8 @@ import sys
 
 import pytest
 
-SUBAGENT_TRANSPORT_TOOL_ROOT = Path(__file__).resolve().parents[1] / "tool"
+REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
+SUBAGENT_TRANSPORT_TOOL_ROOT = REPOSITORY_ROOT / "plugins" / "agent-workflows" / "lib" / "subagent-transport" / "tool"
 if str(SUBAGENT_TRANSPORT_TOOL_ROOT) not in sys.path:
     sys.path.insert(0, str(SUBAGENT_TRANSPORT_TOOL_ROOT))
 

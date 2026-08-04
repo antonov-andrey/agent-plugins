@@ -10,8 +10,8 @@ import re
 import subprocess
 import sys
 
-ROOT = Path(__file__).resolve().parents[6]
-PLUGIN_ROOT = Path(__file__).resolve().parents[4]
+ROOT = Path(__file__).resolve().parents[4]
+PLUGIN_ROOT = ROOT / "plugins" / "agent-workflows"
 MECHANICAL_TEMPLATE_PATH = PLUGIN_ROOT / "lib" / "code-antipattern-audit" / "template" / "mechanical.md"
 SEMANTIC_TEMPLATE_PATH = PLUGIN_ROOT / "lib" / "code-antipattern-audit" / "template" / "semantic.md"
 VALID_REPORT_SCOPE = "script/demo"

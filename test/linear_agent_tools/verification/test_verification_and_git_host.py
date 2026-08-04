@@ -10,7 +10,9 @@ import sys
 
 import pytest
 
-LIBRARY_ROOT = Path(__file__).resolve().parents[2]
+REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
+PLUGIN_ROOT = REPOSITORY_ROOT / "plugins" / "linear-agent-tools"
+LIBRARY_ROOT = PLUGIN_ROOT / "lib"
 if str(LIBRARY_ROOT) not in sys.path:
     sys.path.insert(0, str(LIBRARY_ROOT))
 
@@ -257,7 +259,7 @@ def test_receipt_normalizes_utc_and_rejects_naive_instant() -> None:
 def test_receipt_cli_reuses_the_exact_linear_comment_shape(tmp_path: Path) -> None:
     """The CLI consumes the same provider comment body that its create operation emits."""
 
-    script = Path(__file__).resolve().parents[3] / "skills" / "task-implement" / "scripts" / "receipt.py"
+    script = PLUGIN_ROOT / "skills" / "task-implement" / "scripts" / "receipt.py"
     input_path = tmp_path / "input.json"
     comment_path = tmp_path / "comment.md"
     input_path.write_text(json.dumps(_verification_input().payload()), encoding="utf-8")
@@ -458,7 +460,7 @@ def test_shared_evidence_cli_renders_candidate_without_persistent_state(
 ) -> None:
     """Every role can use one deterministic owner CLI for candidate evidence."""
 
-    script = Path(__file__).resolve().parents[1] / "tool" / "evidence.py"
+    script = LIBRARY_ROOT / "verification" / "tool" / "evidence.py"
     input_path = tmp_path / "candidate.json"
     candidate = CandidateInput(
         delivery_kind="evidence",

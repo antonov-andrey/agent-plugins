@@ -63,6 +63,8 @@ agent-plugins/
   skill_behavior_eval/
     corpus-v1.json
   test/
+    agent_workflows/
+    linear_agent_tools/
   .worktree/
   worktree-bootstrap.yaml
 ```
@@ -76,7 +78,7 @@ agent-plugins/
 - `plugins/workflow-container-agent-tools/` owns reusable workflow-container agent procedures.
 - `README.md` owns user-facing repository documentation.
 - `skill_behavior_eval/corpus-v1.json` owns versioned activation and semantic output scenarios for this repository's providers; the shared model runner remains owned by `project-standards:project-instruction-developer`.
-- `test/` owns repository-level provider tests.
+- `test/` owns every repository-level provider test; suites are grouped first by plugin and then by the exact code owner they verify. Provider-library tests MUST NOT be hidden under arbitrary `plugins/**/lib/**/test/` paths because the shared owner-aware pytest discovery does not recognize those as test owners.
 - `.worktree/` is the local Linear task-worktree container whose reusable semantics are owned by `linear-agent-tools:task-implement` and `linear-agent-tools:task-cleanup`.
 - `worktree-bootstrap.yaml` binds this repository's local task resources and optional direct-argv cleanup command to the reusable manifest contract owned by `linear-agent-tools:task-implement` and `linear-agent-tools:task-cleanup`; source artifacts themselves live only in `project-goals` before Linear handoff.
 

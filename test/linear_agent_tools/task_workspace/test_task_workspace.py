@@ -9,7 +9,8 @@ import sys
 
 import pytest
 
-LIBRARY_ROOT = Path(__file__).resolve().parents[2]
+REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
+LIBRARY_ROOT = REPOSITORY_ROOT / "plugins" / "linear-agent-tools" / "lib"
 if str(LIBRARY_ROOT) not in sys.path:
     sys.path.insert(0, str(LIBRARY_ROOT))
 
@@ -32,6 +33,7 @@ from task_workspace import (
     WorkspaceConfig,
     WorkspaceRequest,
 )
+from task_workspace.bootstrap import manifest_parse
 from task_workspace.lock import IssueWorkspaceLock
 from task_workspace.repository import WorkspaceRepository, origin_identity_get
 from task_workspace.submodule import recursive_submodule_snapshot_get
@@ -104,6 +106,53 @@ resource:
         (root / "local-config.json").write_text('{"mode":"test"}\n', encoding="utf-8")
         (root / "secret.txt").write_text("secret\n", encoding="utf-8")
     return root, remote, initial
+
+
+def test_bootstrap_manifest_parser_is_self_contained_and_schema_bounded(tmp_path: Path) -> None:
+    """The installable plugin parses only its owned YAML schema without PyYAML."""
+
+    (tmp_path / "config:file").write_text("value\n", encoding="utf-8")
+    plan = manifest_parse(
+        b"""schema_version: 2
+resource:
+  copy_optional_path_list: []
+  copy_required_path_list:
+    - "config:file"
+  link_optional_path_list: []
+  link_required_path_list: []
+cleanup:
+  command_argument_list:
+    - python
+    - manage.py
+    - destroy
+    - --git-worktree
+    - '{common_prefix}'
+""",
+        main_root=tmp_path,
+    )
+
+    assert [item.relative_path for item in plan.resource_list] == ["config:file"]
+    assert plan.cleanup_argument_list == ("python", "manage.py", "destroy", "--git-worktree", "{common_prefix}")
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b"schema_version: 2\nschema_version: 2\n",
+        b"schema_version: 2\nresource:\n  copy_optional_path_list: []\n  copy_optional_path_list: []\n",
+        b"---\nschema_version: 2\n",
+        b"schema_version: &version 2\nresource: *version\n",
+        b"schema_version: 2\nresource: {copy_optional_path_list: []}\n",
+        b"schema_version: 2\nresource:\n    copy_optional_path_list: []\n",
+        b"schema_version: 2\nresource:\n  copy_optional_path_list:\n    - 'broken'quote'\n",
+        b"schema_version: 2\nresource:\n  copy_optional_path_list:\n    - #comment\n",
+    ],
+)
+def test_bootstrap_manifest_parser_rejects_yaml_outside_owned_subset(payload: bytes, tmp_path: Path) -> None:
+    """Ambiguous general-YAML features cannot enter the bootstrap contract."""
+
+    with pytest.raises(TaskWorkspaceError):
+        manifest_parse(payload, main_root=tmp_path)
 
 
 def _request(remote: Path, *, issue: str = "AND-101", baseline: str = "") -> WorkspaceRequest:
@@ -378,7 +427,7 @@ def test_attempt_guard_holds_issue_ownership_for_its_process_lifetime(
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    script = Path(__file__).resolve().parents[1] / "tool" / "attempt.py"
+    script = LIBRARY_ROOT / "task_workspace" / "tool" / "attempt.py"
     environment = {
         **os.environ,
         "LINEAR_AGENT_WORKSPACE_ROOT": str(workspace.resolve()),

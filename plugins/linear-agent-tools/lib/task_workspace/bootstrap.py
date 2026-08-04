@@ -2,143 +2,22 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass
 import hashlib
+import json
 import os
 from pathlib import Path, PurePosixPath
 import re
 import secrets
 import shutil
 
-import yaml
-from yaml.constructor import ConstructorError
-from yaml.nodes import MappingNode, Node, ScalarNode, SequenceNode
-from yaml.tokens import AliasToken, AnchorToken, DirectiveToken, TagToken
-
 from task_workspace.model import BootstrapResourceState, TaskWorkspaceError
 
-_STANDARD_TAG_SET = {
-    "tag:yaml.org,2002:bool",
-    "tag:yaml.org,2002:float",
-    "tag:yaml.org,2002:int",
-    "tag:yaml.org,2002:map",
-    "tag:yaml.org,2002:null",
-    "tag:yaml.org,2002:seq",
-    "tag:yaml.org,2002:str",
-}
-
-
-class _UniqueKeySafeLoader(yaml.SafeLoader):
-    """Isolated YAML 1.2 Core loader rejecting duplicate and merge keys."""
-
-    yaml_implicit_resolvers: dict[object, list[tuple[str, re.Pattern[str]]]] = {}
-
-
-_UniqueKeySafeLoader.add_implicit_resolver(
-    "tag:yaml.org,2002:null",
-    re.compile(r"^(?:~|null|Null|NULL|)$"),
-    ["~", "n", "N", ""],
-)
-_UniqueKeySafeLoader.add_implicit_resolver(
-    "tag:yaml.org,2002:bool",
-    re.compile(r"^(?:true|True|TRUE|false|False|FALSE)$"),
-    list("tTfF"),
-)
-_UniqueKeySafeLoader.add_implicit_resolver(
-    "tag:yaml.org,2002:int",
-    re.compile(r"^[-+]?(?:0o[0-7]+|0x[0-9a-fA-F]+|[0-9]+)$"),
-    list("-+0123456789"),
-)
-_UniqueKeySafeLoader.add_implicit_resolver(
-    "tag:yaml.org,2002:float",
-    re.compile(
-        r"^[-+]?(?:(?:[0-9]+)?\.[0-9]+(?:[eE][-+]?[0-9]+)?|[0-9]+(?:[eE][-+]?[0-9]+)|"
-        r"\.(?:inf|Inf|INF)|\.(?:nan|NaN|NAN))$"
-    ),
-    list("-+0123456789."),
-)
-
-
-def _integer_construct(loader: _UniqueKeySafeLoader, node: ScalarNode) -> int:
-    """Construct one YAML 1.2 integer without YAML 1.1 octal behavior.
-
-    Args:
-        loader: Active isolated loader.
-        node: Scalar node.
-
-    Returns:
-        Parsed integer.
-    """
-
-    value = loader.construct_scalar(node)
-    sign = -1 if value.startswith("-") else 1
-    unsigned = value[1:] if value.startswith(("-", "+")) else value
-    if unsigned.startswith("0o"):
-        return sign * int(unsigned[2:], 8)
-    if unsigned.startswith("0x"):
-        return sign * int(unsigned[2:], 16)
-    return sign * int(unsigned, 10)
-
-
-def _mapping_construct(
-    loader: _UniqueKeySafeLoader,
-    node: MappingNode,
-    deep: bool = False,
-) -> dict[object, object]:
-    """Construct one mapping while rejecting duplicate semantic keys.
-
-    Args:
-        loader: Active isolated loader.
-        node: Mapping node.
-        deep: Whether to construct nested values deeply.
-
-    Returns:
-        Unique mapping.
-    """
-
-    result: dict[object, object] = {}
-    for key_node, value_node in node.value:
-        key = loader.construct_object(key_node, deep=deep)
-        if key == "<<":
-            raise ConstructorError(None, None, "YAML merge keys are forbidden", key_node.start_mark)
-        try:
-            present = key in result
-        except TypeError as error:
-            raise ConstructorError(None, None, "YAML mapping key must be scalar", key_node.start_mark) from error
-        if present:
-            raise ConstructorError(None, None, f"duplicate YAML key: {key!r}", key_node.start_mark)
-        result[key] = loader.construct_object(value_node, deep=deep)
-    return result
-
-
-_UniqueKeySafeLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _mapping_construct)
-_UniqueKeySafeLoader.add_constructor("tag:yaml.org,2002:int", _integer_construct)
-
-
-def _node_validate(node: Node, *, seen_identity_set: set[int]) -> None:
-    """Reject aliases, custom tags and unsupported YAML node shapes.
-
-    Args:
-        node: Candidate composed node.
-        seen_identity_set: Node identities already traversed.
-    """
-
-    if node.tag not in _STANDARD_TAG_SET:
-        raise TaskWorkspaceError(f"YAML custom tag is forbidden: {node.tag}")
-    identity = id(node)
-    if identity in seen_identity_set:
-        raise TaskWorkspaceError("YAML aliases are forbidden")
-    seen_identity_set.add(identity)
-    if isinstance(node, MappingNode):
-        for key_node, value_node in node.value:
-            _node_validate(key_node, seen_identity_set=seen_identity_set)
-            _node_validate(value_node, seen_identity_set=seen_identity_set)
-    elif isinstance(node, SequenceNode):
-        for child in node.value:
-            _node_validate(child, seen_identity_set=seen_identity_set)
-    elif not isinstance(node, ScalarNode):
-        raise TaskWorkspaceError("YAML contains an unsupported node")
+_MAPPING_LINE_PATTERN = re.compile(r"(?P<indent> *)(?P<key>[a-z][a-z0-9_]*)\s*:(?P<value>.*)")
+_SEQUENCE_LINE_PATTERN = re.compile(r" {4}- (?P<value>.+)")
+_INTEGER_PATTERN = re.compile(r"[-+]?(?:0|[1-9][0-9]*)")
+_FLOAT_PATTERN = re.compile(r"[-+]?(?:(?:0|[1-9][0-9]*)\.[0-9]+|(?:0|[1-9][0-9]*)[eE][-+]?[0-9]+)")
+_SINGLE_QUOTED_PATTERN = re.compile(r"'(?P<value>(?:[^']|'')*)'")
 
 
 @dataclass(frozen=True, slots=True)
@@ -321,7 +200,7 @@ def resource_ready_require(resource: BootstrapResource, *, task_root: Path) -> N
 
 
 def _yaml_document_load(payload_bytes: bytes) -> object:
-    """Read one exact strict UTF-8 YAML 1.2 document.
+    """Read the exact strict YAML subset owned by the bootstrap manifest.
 
     Args:
         payload_bytes: Exact committed ordinary-file bytes.
@@ -338,20 +217,106 @@ def _yaml_document_load(payload_bytes: bytes) -> object:
         raise TaskWorkspaceError("Bootstrap manifest is not UTF-8") from error
     if "\x00" in payload_text:
         raise TaskWorkspaceError("Bootstrap manifest contains NUL")
-    try:
-        token_list = list(yaml.scan(payload_text))
-        if any(isinstance(token, (AliasToken, AnchorToken, DirectiveToken, TagToken)) for token in token_list):
-            raise TaskWorkspaceError("YAML aliases, anchors, directives and tags are forbidden")
-        node_list = list(yaml.compose_all(payload_text, Loader=_UniqueKeySafeLoader))
-        if len(node_list) != 1 or node_list[0] is None:
-            raise TaskWorkspaceError("Bootstrap manifest must contain exactly one non-empty document")
-        _node_validate(node_list[0], seen_identity_set=set())
-        payload_list = list(yaml.load_all(payload_text, Loader=_UniqueKeySafeLoader))
-    except (ConstructorError, yaml.YAMLError) as error:
-        raise TaskWorkspaceError("Bootstrap manifest is malformed") from error
-    if len(payload_list) != 1:
-        raise TaskWorkspaceError("Bootstrap manifest must contain exactly one document")
-    return payload_list[0]
+    if "\t" in payload_text:
+        raise TaskWorkspaceError("Bootstrap manifest may not contain tabs")
+    line_list = payload_text.splitlines()
+    if not line_list or any(line.strip() in {"---", "..."} for line in line_list):
+        raise TaskWorkspaceError("Bootstrap manifest must contain exactly one implicit document")
+
+    payload: dict[str, object] = {}
+    section_by_name_map: dict[str, dict[str, object]] = {}
+    current_section_name = ""
+    current_list_name = ""
+    for line_number, line in enumerate(line_list, start=1):
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        sequence_match = _SEQUENCE_LINE_PATTERN.fullmatch(line)
+        if sequence_match is not None:
+            if not current_section_name or not current_list_name:
+                raise TaskWorkspaceError(f"Bootstrap manifest has an unexpected list item at line {line_number}")
+            item_list = section_by_name_map[current_section_name][current_list_name]
+            if not isinstance(item_list, list):
+                raise TaskWorkspaceError(f"Bootstrap manifest list ownership is malformed at line {line_number}")
+            item_list.append(_yaml_scalar_parse(sequence_match.group("value"), line_number=line_number))
+            continue
+
+        mapping_match = _MAPPING_LINE_PATTERN.fullmatch(line)
+        if mapping_match is None:
+            raise TaskWorkspaceError(f"Bootstrap manifest has unsupported YAML at line {line_number}")
+        indent = len(mapping_match.group("indent"))
+        key = mapping_match.group("key")
+        raw_value = mapping_match.group("value").strip()
+        if indent == 0:
+            current_list_name = ""
+            if key in payload:
+                raise TaskWorkspaceError(f"Bootstrap manifest repeats key {key}")
+            if raw_value:
+                payload[key] = _yaml_scalar_parse(raw_value, line_number=line_number)
+                current_section_name = ""
+            else:
+                section: dict[str, object] = {}
+                payload[key] = section
+                section_by_name_map[key] = section
+                current_section_name = key
+            continue
+        if indent != 2 or not current_section_name:
+            raise TaskWorkspaceError(f"Bootstrap manifest has invalid indentation at line {line_number}")
+        section = section_by_name_map[current_section_name]
+        if key in section:
+            raise TaskWorkspaceError(f"Bootstrap manifest repeats key {current_section_name}.{key}")
+        if raw_value == "[]":
+            section[key] = []
+            current_list_name = ""
+        elif not raw_value:
+            section[key] = []
+            current_list_name = key
+        else:
+            section[key] = _yaml_scalar_parse(raw_value, line_number=line_number)
+            current_list_name = ""
+    if not payload:
+        raise TaskWorkspaceError("Bootstrap manifest must contain exactly one non-empty document")
+    return payload
+
+
+def _yaml_scalar_parse(value: str, *, line_number: int) -> object:
+    """Parse one scalar from the manifest-owned YAML subset.
+
+    Args:
+        value: Exact scalar text without surrounding indentation.
+        line_number: One-based source line for bounded diagnostics.
+
+    Returns:
+        Parsed scalar value.
+    """
+
+    if not value or any(character in value for character in "\x00\r\n"):
+        raise TaskWorkspaceError(f"Bootstrap manifest scalar is malformed at line {line_number}")
+    if value.startswith('"'):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError as error:
+            raise TaskWorkspaceError(f"Bootstrap manifest quoted scalar is malformed at line {line_number}") from error
+        if not isinstance(parsed, str):
+            raise TaskWorkspaceError(f"Bootstrap manifest quoted scalar must be text at line {line_number}")
+        return parsed
+    if value.startswith("'"):
+        single_quoted_match = _SINGLE_QUOTED_PATTERN.fullmatch(value)
+        if single_quoted_match is None:
+            raise TaskWorkspaceError(f"Bootstrap manifest quoted scalar is malformed at line {line_number}")
+        return single_quoted_match.group("value").replace("''", "'")
+    if value in {"null", "Null", "NULL", "~"}:
+        return None
+    if value in {"true", "True", "TRUE"}:
+        return True
+    if value in {"false", "False", "FALSE"}:
+        return False
+    if _INTEGER_PATTERN.fullmatch(value) is not None:
+        return int(value, 10)
+    if _FLOAT_PATTERN.fullmatch(value) is not None:
+        return float(value)
+    if value.startswith(("&", "*", "!", "%", "[", "{", "|", ">", "@", "`", "#")) or ": " in value or " #" in value:
+        raise TaskWorkspaceError(f"Bootstrap manifest plain scalar is unsupported at line {line_number}")
+    return value
 
 
 def _destination_parent_require(

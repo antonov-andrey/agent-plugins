@@ -69,6 +69,7 @@ A Linear Project is the task container for one agreed source outcome, not a mirr
 ## Development
 
 ```bash
+python -m pip install -r requirements-dev.txt
 pytest -q
 python ~/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py plugins/agent-workflows
 python ~/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py plugins/linear-agent-tools
