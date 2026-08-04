@@ -30,9 +30,7 @@ def _args_parse(argv: list[str] | None = None) -> argparse.Namespace:
         Parsed arguments.
     """
 
-    parser = argparse.ArgumentParser(
-        description="Create or evaluate one exact verification receipt."
-    )
+    parser = argparse.ArgumentParser(description="Create or evaluate one exact verification receipt.")
     subparsers = parser.add_subparsers(dest="command", required=True)
     create = subparsers.add_parser("create")
     create.add_argument("--input", required=True, type=Path)
@@ -99,9 +97,7 @@ def main(argv: list[str] | None = None) -> int:
 
     args = _args_parse(argv)
     try:
-        current = VerificationInput.from_payload(
-            _json_load(args.input, label="Verification input")
-        )
+        current = VerificationInput.from_payload(_json_load(args.input, label="Verification input"))
         if args.command == "create":
             receipt = VerificationReceipt.from_input(
                 current,

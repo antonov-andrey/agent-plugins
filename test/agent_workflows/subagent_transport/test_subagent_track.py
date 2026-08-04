@@ -10,14 +10,7 @@ import sys
 import pytest
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
-SUBAGENT_TRANSPORT_TOOL_ROOT = (
-    REPOSITORY_ROOT
-    / "plugins"
-    / "agent-workflows"
-    / "lib"
-    / "subagent-transport"
-    / "tool"
-)
+SUBAGENT_TRANSPORT_TOOL_ROOT = REPOSITORY_ROOT / "plugins" / "agent-workflows" / "lib" / "subagent-transport" / "tool"
 if str(SUBAGENT_TRANSPORT_TOOL_ROOT) not in sys.path:
     sys.path.insert(0, str(SUBAGENT_TRANSPORT_TOOL_ROOT))
 
@@ -57,20 +50,9 @@ def test_subagent_idle_ms_get_prefers_matching_session_rollout(tmp_path: Path) -
     """
 
     codex_root = tmp_path / ".codex"
-    session_path = (
-        codex_root
-        / "sessions"
-        / "2026"
-        / "03"
-        / "26"
-        / f"rollout-demo-{AGENT_ID}.jsonl"
-    )
-    _jsonl_append(
-        session_path, {"timestamp": "2026-03-26T10:00:00Z", "type": "session_meta"}
-    )
-    _jsonl_append(
-        session_path, {"timestamp": "2026-03-26T10:00:05Z", "type": "response_item"}
-    )
+    session_path = codex_root / "sessions" / "2026" / "03" / "26" / f"rollout-demo-{AGENT_ID}.jsonl"
+    _jsonl_append(session_path, {"timestamp": "2026-03-26T10:00:00Z", "type": "session_meta"})
+    _jsonl_append(session_path, {"timestamp": "2026-03-26T10:00:05Z", "type": "response_item"})
     (codex_root / "log").mkdir(parents=True, exist_ok=True)
     (codex_root / "log" / "codex-tui.log").write_text(
         "\n".join(
@@ -102,16 +84,10 @@ def test_session_rollout_path_list_collect_uses_filename_lookup(
     """
 
     sessions_root = tmp_path / ".codex" / "sessions"
-    direct_path = (
-        sessions_root / "2026" / "03" / "26" / f"rollout-demo-{AGENT_ID}.jsonl"
-    )
-    _jsonl_append(
-        direct_path, {"timestamp": "2026-03-26T10:00:00Z", "type": "session_meta"}
-    )
+    direct_path = sessions_root / "2026" / "03" / "26" / f"rollout-demo-{AGENT_ID}.jsonl"
+    _jsonl_append(direct_path, {"timestamp": "2026-03-26T10:00:00Z", "type": "session_meta"})
 
-    assert subagent_track_lib._session_rollout_path_list_collect(
-        sessions_root, AGENT_ID
-    ) == [direct_path]
+    assert subagent_track_lib._session_rollout_path_list_collect(sessions_root, AGENT_ID) == [direct_path]
 
 
 def test_session_timestamp_reader_skips_ambiguous_json_records(tmp_path: Path) -> None:
@@ -211,9 +187,7 @@ def test_log_last_timestamp_get_skips_regex_parse_for_unrelated_lines(
     latest = subagent_track_lib._log_last_timestamp_get(log_path, AGENT_ID)
 
     assert latest == datetime(2026, 3, 26, 10, 0, 9, tzinfo=timezone.utc)
-    assert observed_line_list == [
-        f"2026-03-26T10:00:09Z  INFO thread_id={AGENT_ID} matching line\n"
-    ]
+    assert observed_line_list == [f"2026-03-26T10:00:09Z  INFO thread_id={AGENT_ID} matching line\n"]
 
 
 def test_subagent_status_get_returns_ok_for_active_agent(tmp_path: Path) -> None:
@@ -224,17 +198,8 @@ def test_subagent_status_get_returns_ok_for_active_agent(tmp_path: Path) -> None
     """
 
     codex_root = tmp_path / ".codex"
-    session_path = (
-        codex_root
-        / "sessions"
-        / "2026"
-        / "03"
-        / "26"
-        / f"rollout-demo-{AGENT_ID}.jsonl"
-    )
-    _jsonl_append(
-        session_path, {"timestamp": "2026-03-26T10:00:05Z", "type": "response_item"}
-    )
+    session_path = codex_root / "sessions" / "2026" / "03" / "26" / f"rollout-demo-{AGENT_ID}.jsonl"
+    _jsonl_append(session_path, {"timestamp": "2026-03-26T10:00:05Z", "type": "response_item"})
 
     status = subagent_status_get(
         AGENT_ID,
@@ -253,17 +218,8 @@ def test_subagent_status_get_returns_timeout_for_idle_agent(tmp_path: Path) -> N
     """
 
     codex_root = tmp_path / ".codex"
-    session_path = (
-        codex_root
-        / "sessions"
-        / "2026"
-        / "03"
-        / "26"
-        / f"rollout-demo-{AGENT_ID}.jsonl"
-    )
-    _jsonl_append(
-        session_path, {"timestamp": "2026-03-26T10:00:05Z", "type": "response_item"}
-    )
+    session_path = codex_root / "sessions" / "2026" / "03" / "26" / f"rollout-demo-{AGENT_ID}.jsonl"
+    _jsonl_append(session_path, {"timestamp": "2026-03-26T10:00:05Z", "type": "response_item"})
 
     status = subagent_status_get(
         AGENT_ID,
@@ -310,9 +266,7 @@ def test_subagent_status_get_returns_error_agent_id_not_found_for_invalid_uuid(
     assert status == STATUS_ERROR_AGENT_ID_NOT_FOUND
 
 
-def test_main_prints_ok(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_main_prints_ok(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """The CLI wrapper must print `OK`.
 
     Args:
@@ -320,9 +274,7 @@ def test_main_prints_ok(
         capsys: Pytest output-capture helper.
     """
 
-    monkeypatch.setattr(
-        subagent_track, "subagent_status_get", lambda *args, **kwargs: STATUS_OK
-    )
+    monkeypatch.setattr(subagent_track, "subagent_status_get", lambda *args, **kwargs: STATUS_OK)
 
     exit_code = subagent_track.main(["--agent-id", AGENT_ID])
     captured = capsys.readouterr()
@@ -332,9 +284,7 @@ def test_main_prints_ok(
     assert captured.err == ""
 
 
-def test_main_prints_timeout(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_main_prints_timeout(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """The CLI wrapper must print `TIMEOUT`.
 
     Args:
@@ -342,9 +292,7 @@ def test_main_prints_timeout(
         capsys: Pytest output-capture helper.
     """
 
-    monkeypatch.setattr(
-        subagent_track, "subagent_status_get", lambda *args, **kwargs: STATUS_TIMEOUT
-    )
+    monkeypatch.setattr(subagent_track, "subagent_status_get", lambda *args, **kwargs: STATUS_TIMEOUT)
 
     exit_code = subagent_track.main(["--agent-id", AGENT_ID])
     captured = capsys.readouterr()

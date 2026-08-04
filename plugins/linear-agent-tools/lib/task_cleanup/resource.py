@@ -56,9 +56,7 @@ class ResourceCleaner:
                 f"Project-owned cleanup could not start for exact resource {resource.key}"
             ) from error
         if completed_process.returncode != 0:
-            raise TaskCleanupError(
-                f"Project-owned cleanup failed for exact resource {resource.key}"
-            )
+            raise TaskCleanupError(f"Project-owned cleanup failed for exact resource {resource.key}")
 
 
 def cleanup_binding_run(
@@ -80,8 +78,7 @@ def cleanup_binding_run(
     if not argument_list:
         return
     expanded_argument_list = [
-        _argument_expand(item, placeholder_by_name_map=placeholder_by_name_map)
-        for item in argument_list
+        _argument_expand(item, placeholder_by_name_map=placeholder_by_name_map) for item in argument_list
     ]
     try:
         completed_process = runner(
@@ -91,9 +88,7 @@ def cleanup_binding_run(
             capture_output=True,
         )
     except OSError as error:
-        raise TaskCleanupError(
-            "Project-local workspace cleanup binding could not start"
-        ) from error
+        raise TaskCleanupError("Project-local workspace cleanup binding could not start") from error
     if completed_process.returncode != 0:
         raise TaskCleanupError("Project-local workspace cleanup binding failed")
 
@@ -112,12 +107,6 @@ def _argument_expand(value: str, *, placeholder_by_name_map: Mapping[str, str]) 
     expanded_argument = value
     for name, replacement in placeholder_by_name_map.items():
         expanded_argument = expanded_argument.replace("{" + name + "}", replacement)
-    if (
-        "{" in expanded_argument
-        or "}" in expanded_argument
-        or "\x00" in expanded_argument
-    ):
-        raise TaskCleanupError(
-            "Cleanup argv contains an unknown or malformed placeholder"
-        )
+    if "{" in expanded_argument or "}" in expanded_argument or "\x00" in expanded_argument:
+        raise TaskCleanupError("Cleanup argv contains an unknown or malformed placeholder")
     return expanded_argument

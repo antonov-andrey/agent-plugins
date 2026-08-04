@@ -27,9 +27,7 @@ def _parser_get() -> argparse.ArgumentParser:
         The argument parser.
     """
 
-    parser = argparse.ArgumentParser(
-        description="Idempotently clean exact state owned by one Linear task."
-    )
+    parser = argparse.ArgumentParser(description="Idempotently clean exact state owned by one Linear task.")
     parser.add_argument("--request-input", required=True, type=Path)
     return parser
 
@@ -65,9 +63,7 @@ def main(argv: list[str] | None = None) -> int:
 
     args = _parser_get().parse_args(argv)
     try:
-        result = TaskCleanupReconciler(WorkspaceConfig.from_environment()).cleanup(
-            _request_load(args.request_input)
-        )
+        result = TaskCleanupReconciler(WorkspaceConfig.from_environment()).cleanup(_request_load(args.request_input))
     except (GitHubContractError, TaskCleanupError, TaskWorkspaceError) as error:
         print(str(error), file=sys.stderr)
         return 2

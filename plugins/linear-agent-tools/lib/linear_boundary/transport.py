@@ -49,17 +49,10 @@ class LinearRetryPolicy:
             "maximum_delay_seconds": self.maximum_delay_seconds,
         }
         for name, value in delay_by_name_map.items():
-            if (
-                isinstance(value, bool)
-                or not isinstance(value, (int, float))
-                or not math.isfinite(value)
-                or value < 0
-            ):
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
                 raise ValueError(f"{name} must be one finite non-negative number")
         if self.maximum_delay_seconds < self.initial_delay_seconds:
-            raise ValueError(
-                "maximum_delay_seconds must not be less than initial_delay_seconds"
-            )
+            raise ValueError("maximum_delay_seconds must not be less than initial_delay_seconds")
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,9 +164,7 @@ class LinearGraphQLTransport:
                     break
                 self._sleep(self._delay_get(attempt_index, headers=error.headers))
         if is_rate_limited:
-            raise LinearRateLimitError(
-                "Linear rate limit remained unavailable after bounded retries"
-            )
+            raise LinearRateLimitError("Linear rate limit remained unavailable after bounded retries")
         raise LinearTransportError("Linear operation failed after bounded safe retries")
 
     def _request(self, encoded: bytes) -> LinearHttpResponse:
@@ -202,35 +193,21 @@ class LinearGraphQLTransport:
                 raw = response.read()
         except urllib.error.HTTPError as error:
             if error.code in {401, 403}:
-                raise LinearAuthenticationError(
-                    "Linear rejected the supplied credential or scope"
-                ) from None
+                raise LinearAuthenticationError("Linear rejected the supplied credential or scope") from None
             if error.code == 400:
                 try:
-                    return LinearHttpResponse(
-                        payload=json_load_strict(error.read()), headers=error.headers
-                    )
+                    return LinearHttpResponse(payload=json_load_strict(error.read()), headers=error.headers)
                 except JsonContractError:
-                    raise LinearResponseError(
-                        "Linear GraphQL returned malformed JSON"
-                    ) from None
+                    raise LinearResponseError("Linear GraphQL returned malformed JSON") from None
             if error.code == 429 or error.code in {408, 500, 502, 503, 504}:
-                raise TransientLinearFailure(
-                    rate_limited=error.code == 429, headers=error.headers
-                ) from None
-            raise LinearResponseError(
-                f"Linear GraphQL returned unexpected HTTP status {error.code}"
-            ) from None
+                raise TransientLinearFailure(rate_limited=error.code == 429, headers=error.headers) from None
+            raise LinearResponseError(f"Linear GraphQL returned unexpected HTTP status {error.code}") from None
         except TimeoutError, urllib.error.URLError, ConnectionError:
-            raise TransientLinearFailure(
-                rate_limited=False, headers=Message()
-            ) from None
+            raise TransientLinearFailure(rate_limited=False, headers=Message()) from None
         try:
             return LinearHttpResponse(payload=json_load_strict(raw), headers=headers)
         except JsonContractError:
-            raise LinearResponseError(
-                "Linear GraphQL returned malformed JSON"
-            ) from None
+            raise LinearResponseError("Linear GraphQL returned malformed JSON") from None
 
     def _data_extract(
         self,
@@ -256,9 +233,7 @@ class LinearGraphQLTransport:
             raise LinearResponseError("Linear GraphQL response root must be an object")
         error_list = payload.get("errors", [])
         if error_list:
-            if not isinstance(error_list, list) or any(
-                not isinstance(item, dict) for item in error_list
-            ):
+            if not isinstance(error_list, list) or any(not isinstance(item, dict) for item in error_list):
                 raise LinearResponseError("Linear GraphQL errors have another shape")
             code_set = {
                 item.get("extensions", {}).get("code")
@@ -266,9 +241,7 @@ class LinearGraphQLTransport:
                 if isinstance(item.get("extensions"), dict)
             }
             if code_set & {"AUTHENTICATION_ERROR", "FORBIDDEN", "UNAUTHENTICATED"}:
-                raise LinearAuthenticationError(
-                    "Linear rejected the supplied credential or scope"
-                )
+                raise LinearAuthenticationError("Linear rejected the supplied credential or scope")
             if code_set & {"RATELIMITED", "RATE_LIMITED"} and repeat_safe:
                 raise TransientLinearFailure(rate_limited=True, headers=headers)
             raise LinearResponseError(
@@ -293,14 +266,10 @@ class LinearGraphQLTransport:
         retry_after = headers.get("Retry-After")
         if retry_after is not None:
             try:
-                return min(
-                    max(float(retry_after), 0.0), self._retry.maximum_delay_seconds
-                )
+                return min(max(float(retry_after), 0.0), self._retry.maximum_delay_seconds)
             except ValueError:
                 pass
-        reset = headers.get("X-RateLimit-Endpoint-Requests-Reset") or headers.get(
-            "X-RateLimit-Requests-Reset"
-        )
+        reset = headers.get("X-RateLimit-Endpoint-Requests-Reset") or headers.get("X-RateLimit-Requests-Reset")
         if reset is not None:
             try:
                 until_reset = max(float(reset) / 1000.0 - self._clock(), 0.0)

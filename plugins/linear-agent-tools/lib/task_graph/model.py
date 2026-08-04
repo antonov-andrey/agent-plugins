@@ -11,13 +11,9 @@ import re
 from urllib.parse import unquote, urlsplit
 
 _KEY_PATTERN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
-_UUID_PATTERN = re.compile(
-    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
-)
+_UUID_PATTERN = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 _COMMIT_PATTERN = re.compile(r"[0-9a-f]{40,64}")
-_PROJECT_GOALS_PREFIX_PATTERN = re.compile(
-    r"[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z0-9]+(?:-[a-z0-9]+)*"
-)
+_PROJECT_GOALS_PREFIX_PATTERN = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z0-9]+(?:-[a-z0-9]+)*")
 
 
 class TaskGraphError(RuntimeError):
@@ -77,9 +73,7 @@ class TaskBlockerEdge:
             or _KEY_PATTERN.fullmatch(self.blocked_node_key) is None
             or self.blocker_node_key == self.blocked_node_key
         ):
-            raise TaskGraphError(
-                "Task blocker edge must join two distinct lowercase semantic slugs"
-            )
+            raise TaskGraphError("Task blocker edge must join two distinct lowercase semantic slugs")
 
     def payload(self) -> dict[str, str]:
         """Return one canonical JSON-ready edge object."""
@@ -132,9 +126,7 @@ def _text_validate(value: object, *, label: str, multiline: bool = False) -> str
     return value
 
 
-def _text_list_parse(
-    value: object, *, label: str, empty_allowed: bool = False
-) -> list[str]:
+def _text_list_parse(value: object, *, label: str, empty_allowed: bool = False) -> list[str]:
     """Return one duplicate-free ordered text list.
 
     Args:
@@ -147,9 +139,7 @@ def _text_list_parse(
     """
 
     if not isinstance(value, list) or (not value and not empty_allowed):
-        raise TaskGraphError(
-            f"{label} must be a {'possibly empty ' if empty_allowed else 'non-empty '}list"
-        )
+        raise TaskGraphError(f"{label} must be a {'possibly empty ' if empty_allowed else 'non-empty '}list")
     result_list = [_text_validate(item, label=label) for item in value]
     if len(result_list) != len(set(result_list)):
         raise TaskGraphError(f"{label} must not contain duplicates")
@@ -165,9 +155,7 @@ def _text_list_validate(
     """Validate one already-typed text list."""
 
     if not isinstance(value, list) or (not value and not empty_allowed):
-        raise TaskGraphError(
-            f"{label} must be a {'possibly empty ' if empty_allowed else 'non-empty '}list"
-        )
+        raise TaskGraphError(f"{label} must be a {'possibly empty ' if empty_allowed else 'non-empty '}list")
     for item in value:
         _text_validate(item, label=label)
     if len(value) != len(set(value)):
@@ -194,9 +182,7 @@ class SourceIdentity:
         _text_validate(self.content, label="Source content", multiline=True)
         if self.kind == "project-goals":
             if _COMMIT_PATTERN.fullmatch(self.revision) is None:
-                raise TaskGraphError(
-                    "A project-goals source revision must be one full Git commit"
-                )
+                raise TaskGraphError("A project-goals source revision must be one full Git commit")
             _project_goals_url_require(self.canonical_url, revision=self.revision)
 
     def fingerprint(self) -> str:
@@ -242,15 +228,8 @@ def _project_goals_url_require(canonical_url: str, *, revision: str) -> None:
     """
 
     parsed = urlsplit(canonical_url)
-    if (
-        parsed.scheme != "https"
-        or parsed.netloc.lower() != "github.com"
-        or parsed.query
-        or parsed.fragment
-    ):
-        raise TaskGraphError(
-            "A project-goals canonical URL must be one clean HTTPS GitHub URL"
-        )
+    if parsed.scheme != "https" or parsed.netloc.lower() != "github.com" or parsed.query or parsed.fragment:
+        raise TaskGraphError("A project-goals canonical URL must be one clean HTTPS GitHub URL")
     path_part_list = [unquote(item) for item in parsed.path.split("/") if item]
     if (
         len(path_part_list) != 5
@@ -259,17 +238,11 @@ def _project_goals_url_require(canonical_url: str, *, revision: str) -> None:
         or path_part_list[3] != revision
         or _PROJECT_GOALS_PREFIX_PATTERN.fullmatch(path_part_list[4]) is None
         or any(
-            item in {".", ".."}
-            or not item
-            or "/" in item
-            or "\\" in item
-            or "\x00" in item
+            item in {".", ".."} or not item or "/" in item or "\\" in item or "\x00" in item
             for item in path_part_list[4:]
         )
     ):
-        raise TaskGraphError(
-            "A project-goals canonical URL must identify its exact commit-pinned task directory"
-        )
+        raise TaskGraphError("A project-goals canonical URL must identify its exact commit-pinned task directory")
 
 
 @dataclass(frozen=True, slots=True)
@@ -336,13 +309,8 @@ class VerificationStep:
         if self.repository_url:
             _text_validate(self.repository_url, label="Verification repository URL")
         _text_validate(self.working_directory, label="Verification working directory")
-        if (
-            not isinstance(self.command_argument_list, list)
-            or not self.command_argument_list
-        ):
-            raise TaskGraphError(
-                "Verification command_argument_list must be a non-empty list"
-            )
+        if not isinstance(self.command_argument_list, list) or not self.command_argument_list:
+            raise TaskGraphError("Verification command_argument_list must be a non-empty list")
         for argument in self.command_argument_list:
             _text_validate(argument, label="Verification direct argument")
         _text_list_validate(
@@ -352,12 +320,8 @@ class VerificationStep:
         )
         if not isinstance(self.environment_identity_required, bool):
             raise TaskGraphError("environment_identity_required must be boolean")
-        object.__setattr__(
-            self, "command_argument_list", list(self.command_argument_list)
-        )
-        object.__setattr__(
-            self, "dependency_path_list", list(self.dependency_path_list)
-        )
+        object.__setattr__(self, "command_argument_list", list(self.command_argument_list))
+        object.__setattr__(self, "dependency_path_list", list(self.dependency_path_list))
 
     @classmethod
     def from_payload(cls, payload: object) -> "VerificationStep":
@@ -386,9 +350,7 @@ class VerificationStep:
             kind=VerificationKind(payload["kind"]),
             repository_url=payload["repository_url"],
             working_directory=payload["working_directory"],
-            command_argument_list=_text_list_parse(
-                payload["command_argument_list"], label="Verification argv"
-            ),
+            command_argument_list=_text_list_parse(payload["command_argument_list"], label="Verification argv"),
             dependency_path_list=_text_list_parse(
                 payload["dependency_path_list"],
                 label="Verification dependency paths",
@@ -418,13 +380,8 @@ class ResourceDeclaration:
             raise TaskGraphError("Resource lifetime is unsupported")
         _text_validate(self.owner_identity, label="Resource owner identity")
         _text_validate(self.repository_url, label="Resource repository URL")
-        if (
-            not isinstance(self.cleanup_argument_list, list)
-            or not self.cleanup_argument_list
-        ):
-            raise TaskGraphError(
-                "Resource cleanup must use one non-empty direct-argv list"
-            )
+        if not isinstance(self.cleanup_argument_list, list) or not self.cleanup_argument_list:
+            raise TaskGraphError("Resource cleanup must use one non-empty direct-argv list")
         for argument in self.cleanup_argument_list:
             _text_validate(argument, label="Resource cleanup direct argument")
         _text_list_validate(
@@ -432,22 +389,12 @@ class ResourceDeclaration:
             label="Resource consumer node keys",
             empty_allowed=True,
         )
-        if any(
-            _KEY_PATTERN.fullmatch(item) is None for item in self.consumer_node_key_list
-        ):
-            raise TaskGraphError(
-                "Resource consumer node keys must be lowercase semantic slugs"
-            )
+        if any(_KEY_PATTERN.fullmatch(item) is None for item in self.consumer_node_key_list):
+            raise TaskGraphError("Resource consumer node keys must be lowercase semantic slugs")
         if self.lifetime is not ResourceLifetime.ISSUE and self.consumer_node_key_list:
-            raise TaskGraphError(
-                "Only an issue-lifetime resource may declare downstream consumers"
-            )
-        object.__setattr__(
-            self, "cleanup_argument_list", list(self.cleanup_argument_list)
-        )
-        object.__setattr__(
-            self, "consumer_node_key_list", list(self.consumer_node_key_list)
-        )
+            raise TaskGraphError("Only an issue-lifetime resource may declare downstream consumers")
+        object.__setattr__(self, "cleanup_argument_list", list(self.cleanup_argument_list))
+        object.__setattr__(self, "consumer_node_key_list", list(self.consumer_node_key_list))
 
     def fingerprint(self) -> str:
         """Return the exact durable cleanup-declaration identity.
@@ -493,9 +440,7 @@ class ResourceDeclaration:
             lifetime=ResourceLifetime(payload["lifetime"]),
             owner_identity=payload["owner_identity"],
             repository_url=payload["repository_url"],
-            cleanup_argument_list=_text_list_parse(
-                payload["cleanup_argument_list"], label="Resource cleanup argv"
-            ),
+            cleanup_argument_list=_text_list_parse(payload["cleanup_argument_list"], label="Resource cleanup argv"),
             consumer_node_key_list=_text_list_parse(
                 payload["consumer_node_key_list"],
                 label="Resource consumer node keys",
@@ -535,63 +480,36 @@ class TaskNode:
         _text_validate(self.title, label="Task title")
         _text_validate(self.outcome, label="Task outcome", multiline=True)
         _text_list_validate(self.scope_list, label="Task scope")
-        _text_list_validate(
-            self.non_goal_list, label="Task non-goals", empty_allowed=True
-        )
-        if (
-            not isinstance(self.role, TaskRole)
-            or self.delivery_kind not in _DELIVERY_KIND_SET_BY_ROLE_MAP[self.role]
-        ):
+        _text_list_validate(self.non_goal_list, label="Task non-goals", empty_allowed=True)
+        if not isinstance(self.role, TaskRole) or self.delivery_kind not in _DELIVERY_KIND_SET_BY_ROLE_MAP[self.role]:
             raise TaskGraphError("Task role and delivery kind are incompatible")
-        assignment_id_list = [
-            value for value in (self.assignee_id, self.delegate_id) if value
-        ]
-        if (
-            len(assignment_id_list) != 1
-            or _UUID_PATTERN.fullmatch(assignment_id_list[0]) is None
-        ):
-            raise TaskGraphError(
-                "Task must have exactly one lowercase Linear assignee or delegate UUID"
-            )
+        assignment_id_list = [value for value in (self.assignee_id, self.delegate_id) if value]
+        if len(assignment_id_list) != 1 or _UUID_PATTERN.fullmatch(assignment_id_list[0]) is None:
+            raise TaskGraphError("Task must have exactly one lowercase Linear assignee or delegate UUID")
         if not isinstance(self.repository_list, list) or any(
             not isinstance(item, RepositoryTarget) for item in self.repository_list
         ):
-            raise TaskGraphError(
-                "Task repository list must contain only repository targets"
-            )
+            raise TaskGraphError("Task repository list must contain only repository targets")
         if self.delivery_kind is DeliveryKind.CODE and not self.repository_list:
-            raise TaskGraphError(
-                "Code delivery requires at least one canonical repository"
-            )
+            raise TaskGraphError("Code delivery requires at least one canonical repository")
         repository_url_list = [item.origin_url for item in self.repository_list]
         if len(repository_url_list) != len(set(repository_url_list)):
             raise TaskGraphError("Task repeats one repository target")
         if not isinstance(self.resource_list, list) or any(
             not isinstance(item, ResourceDeclaration) for item in self.resource_list
         ):
-            raise TaskGraphError(
-                "Task resource list must contain only resource declarations"
-            )
+            raise TaskGraphError("Task resource list must contain only resource declarations")
         if not isinstance(self.verification_list, list) or any(
             not isinstance(item, VerificationStep) for item in self.verification_list
         ):
-            raise TaskGraphError(
-                "Task verification list must contain only verification steps"
-            )
+            raise TaskGraphError("Task verification list must contain only verification steps")
         repository_url_set = set(repository_url_list)
         if any(
-            item.repository_url and item.repository_url not in repository_url_set
-            for item in self.verification_list
+            item.repository_url and item.repository_url not in repository_url_set for item in self.verification_list
         ):
-            raise TaskGraphError(
-                "Verification repository must be an explicit task repository target"
-            )
-        if any(
-            item.repository_url not in repository_url_set for item in self.resource_list
-        ):
-            raise TaskGraphError(
-                "Resource repository must be an explicit task repository target"
-            )
+            raise TaskGraphError("Verification repository must be an explicit task repository target")
+        if any(item.repository_url not in repository_url_set for item in self.resource_list):
+            raise TaskGraphError("Resource repository must be an explicit task repository target")
         if self.delivery_kind is DeliveryKind.CODE and len(self.repository_list) > 1:
             _text_validate(
                 self.partial_merge_recovery,
@@ -599,25 +517,14 @@ class TaskNode:
                 multiline=True,
             )
         elif self.partial_merge_recovery != "":
-            raise TaskGraphError(
-                "Partial merge recovery is valid only for cross-repository code delivery"
-            )
+            raise TaskGraphError("Partial merge recovery is valid only for cross-repository code delivery")
         _text_list_validate(self.required_contract_list, label="Required contracts")
-        _text_list_validate(
-            self.required_skill_list, label="Required skills", empty_allowed=True
-        )
-        _text_list_validate(
-            self.blocker_key_list, label="Task blockers", empty_allowed=True
-        )
+        _text_list_validate(self.required_skill_list, label="Required skills", empty_allowed=True)
+        _text_list_validate(self.blocker_key_list, label="Task blockers", empty_allowed=True)
         if not self.verification_list:
             raise TaskGraphError("Task must define observable verification")
-        if (
-            len(self.blocker_key_list) != len(set(self.blocker_key_list))
-            or self.node_key in self.blocker_key_list
-        ):
-            raise TaskGraphError(
-                "Task blockers must be unique and must not contain the task itself"
-            )
+        if len(self.blocker_key_list) != len(set(self.blocker_key_list)) or self.node_key in self.blocker_key_list:
+            raise TaskGraphError("Task blockers must be unique and must not contain the task itself")
         resource_key_list = [item.key for item in self.resource_list]
         if len(resource_key_list) != len(set(resource_key_list)):
             raise TaskGraphError("Task repeats one resource key")
@@ -633,9 +540,7 @@ class TaskNode:
         object.__setattr__(self, "scope_list", list(self.scope_list))
         object.__setattr__(self, "non_goal_list", list(self.non_goal_list))
         object.__setattr__(self, "repository_list", list(self.repository_list))
-        object.__setattr__(
-            self, "required_contract_list", list(self.required_contract_list)
-        )
+        object.__setattr__(self, "required_contract_list", list(self.required_contract_list))
         object.__setattr__(self, "required_skill_list", list(self.required_skill_list))
         object.__setattr__(self, "blocker_key_list", list(self.blocker_key_list))
         object.__setattr__(self, "resource_list", list(self.resource_list))
@@ -749,41 +654,24 @@ class TaskNode:
             title=payload["title"],
             outcome=payload["outcome"],
             scope_list=_text_list_parse(payload["scope_list"], label="Task scope"),
-            non_goal_list=_text_list_parse(
-                payload["non_goal_list"], label="Task non-goals", empty_allowed=True
-            ),
+            non_goal_list=_text_list_parse(payload["non_goal_list"], label="Task non-goals", empty_allowed=True),
             role=TaskRole(payload["role"]),
             delivery_kind=DeliveryKind(payload["delivery_kind"]),
             assignee_id=payload["assignee_id"],
             delegate_id=payload["delegate_id"],
-            repository_list=[
-                RepositoryTarget.from_payload(item)
-                for item in payload["repository_list"]
-            ],
+            repository_list=[RepositoryTarget.from_payload(item) for item in payload["repository_list"]],
             partial_merge_recovery=payload["partial_merge_recovery"],
-            required_contract_list=_text_list_parse(
-                payload["required_contract_list"], label="Required contracts"
-            ),
+            required_contract_list=_text_list_parse(payload["required_contract_list"], label="Required contracts"),
             required_skill_list=_text_list_parse(
                 payload["required_skill_list"],
                 label="Required skills",
                 empty_allowed=True,
             ),
-            blocker_key_list=_text_list_parse(
-                payload["blocker_key_list"], label="Task blockers", empty_allowed=True
-            ),
-            resource_list=[
-                ResourceDeclaration.from_payload(item)
-                for item in payload["resource_list"]
-            ],
-            verification_list=[
-                VerificationStep.from_payload(item)
-                for item in payload["verification_list"]
-            ],
+            blocker_key_list=_text_list_parse(payload["blocker_key_list"], label="Task blockers", empty_allowed=True),
+            resource_list=[ResourceDeclaration.from_payload(item) for item in payload["resource_list"]],
+            verification_list=[VerificationStep.from_payload(item) for item in payload["verification_list"]],
             human_decision_boundary=payload["human_decision_boundary"],
-            source_section_list=_text_list_parse(
-                payload["source_section_list"], label="Source sections"
-            ),
+            source_section_list=_text_list_parse(payload["source_section_list"], label="Source sections"),
         )
 
 
@@ -801,17 +689,12 @@ class TaskGraph:
 
         from task_graph.topology import exist_ordered_role_path, exist_path
 
-        if (
-            not isinstance(self.team_id, str)
-            or _UUID_PATTERN.fullmatch(self.team_id) is None
-        ):
+        if not isinstance(self.team_id, str) or _UUID_PATTERN.fullmatch(self.team_id) is None:
             raise TaskGraphError("Graph team_id must be one lowercase Linear UUID")
         _text_validate(self.project_name, label="Linear Project name")
         if not isinstance(self.source, SourceIdentity):
             raise TaskGraphError("Task graph source has another shape")
-        if not isinstance(self.node_list, list) or any(
-            not isinstance(item, TaskNode) for item in self.node_list
-        ):
+        if not isinstance(self.node_list, list) or any(not isinstance(item, TaskNode) for item in self.node_list):
             raise TaskGraphError("Task graph node list must contain only task nodes")
         if not self.node_list:
             raise TaskGraphError("Task graph must contain at least one node")
@@ -821,77 +704,43 @@ class TaskGraph:
         for node in self.node_list:
             unknown_blocker_key_set = set(node.blocker_key_list) - set(node_by_key_map)
             if unknown_blocker_key_set:
-                raise TaskGraphError(
-                    f"Task {node.node_key} has unknown blockers: {sorted(unknown_blocker_key_set)}"
-                )
+                raise TaskGraphError(f"Task {node.node_key} has unknown blockers: {sorted(unknown_blocker_key_set)}")
             for resource in node.resource_list:
-                unknown_consumer_set = set(resource.consumer_node_key_list) - set(
-                    node_by_key_map
-                )
+                unknown_consumer_set = set(resource.consumer_node_key_list) - set(node_by_key_map)
                 if unknown_consumer_set:
                     raise TaskGraphError(
                         f"Resource {resource.key} has unknown consumers: {sorted(unknown_consumer_set)}"
                     )
                 if node.node_key in resource.consumer_node_key_list:
-                    raise TaskGraphError(
-                        f"Resource {resource.key} repeats its implicit owner as a consumer"
-                    )
+                    raise TaskGraphError(f"Resource {resource.key} repeats its implicit owner as a consumer")
         _acyclic_require(node_by_key_map)
         review_list = [node for node in self.node_list if node.role is TaskRole.REVIEW]
-        acceptance_list = [
-            node for node in self.node_list if node.role is TaskRole.ACCEPTANCE
-        ]
-        cleanup_list = [
-            node for node in self.node_list if node.role is TaskRole.CLEANUP
-        ]
+        acceptance_list = [node for node in self.node_list if node.role is TaskRole.ACCEPTANCE]
+        cleanup_list = [node for node in self.node_list if node.role is TaskRole.CLEANUP]
         if not review_list or not acceptance_list or len(cleanup_list) != 1:
-            raise TaskGraphError(
-                "Graph requires review, acceptance and exactly one cleanup task"
-            )
-        implementation_key_set = {
-            node.node_key
-            for node in self.node_list
-            if node.role is TaskRole.IMPLEMENTATION
-        }
+            raise TaskGraphError("Graph requires review, acceptance and exactly one cleanup task")
+        implementation_key_set = {node.node_key for node in self.node_list if node.role is TaskRole.IMPLEMENTATION}
         if not implementation_key_set:
-            raise TaskGraphError(
-                "Graph requires at least one implementation or evidence-probe task"
-            )
-        resource_key_list = [
-            resource.key for node in self.node_list for resource in node.resource_list
-        ]
+            raise TaskGraphError("Graph requires at least one implementation or evidence-probe task")
+        resource_key_list = [resource.key for node in self.node_list for resource in node.resource_list]
         if len(resource_key_list) != len(set(resource_key_list)):
-            raise TaskGraphError(
-                "Task graph repeats one resource key across issue owners"
-            )
+            raise TaskGraphError("Task graph repeats one resource key across issue owners")
         for review in review_list:
             if not set(review.blocker_key_list) & implementation_key_set:
-                raise TaskGraphError(
-                    "Each review task must be blocked by implementation work"
-                )
+                raise TaskGraphError("Each review task must be blocked by implementation work")
         review_key_set = {node.node_key for node in review_list}
         for acceptance in acceptance_list:
             if not set(acceptance.blocker_key_list) & review_key_set:
-                raise TaskGraphError(
-                    "Each acceptance task must be blocked by a review task"
-                )
+                raise TaskGraphError("Each acceptance task must be blocked by a review task")
         acceptance_key_set = {node.node_key for node in acceptance_list}
         if not acceptance_key_set <= set(cleanup_list[0].blocker_key_list):
-            raise TaskGraphError(
-                "Final cleanup must be blocked by every acceptance task"
-            )
+            raise TaskGraphError("Final cleanup must be blocked by every acceptance task")
         object.__setattr__(self, "node_list", list(self.node_list))
-        downstream_node_key_set_by_blocker_key_map = {
-            node_key: set() for node_key in node_by_key_map
-        }
+        downstream_node_key_set_by_blocker_key_map = {node_key: set() for node_key in node_by_key_map}
         for node in self.node_list:
             for blocker_key in node.blocker_key_list:
-                downstream_node_key_set_by_blocker_key_map[blocker_key].add(
-                    node.node_key
-                )
-        role_by_node_key_map = {
-            node_key: node.role for node_key, node in node_by_key_map.items()
-        }
+                downstream_node_key_set_by_blocker_key_map[blocker_key].add(node.node_key)
+        role_by_node_key_map = {node_key: node.role for node_key, node in node_by_key_map.items()}
         for node in self.node_list:
             expected_role_list = {
                 TaskRole.IMPLEMENTATION: [
@@ -911,9 +760,7 @@ class TaskGraph:
                 role_by_node_key_map=role_by_node_key_map,
             ):
                 expected_path = " -> ".join(item.value for item in expected_role_list)
-                raise TaskGraphError(
-                    f"Task {node.node_key} does not retain downstream path {expected_path}"
-                )
+                raise TaskGraphError(f"Task {node.node_key} does not retain downstream path {expected_path}")
             for resource in node.resource_list:
                 if any(
                     not exist_path(
@@ -923,9 +770,7 @@ class TaskGraph:
                     )
                     for consumer_key in resource.consumer_node_key_list
                 ):
-                    raise TaskGraphError(
-                        f"Resource {resource.key} consumer must be downstream from its owning task"
-                    )
+                    raise TaskGraphError(f"Resource {resource.key} consumer must be downstream from its owning task")
 
     def source_fingerprint(self) -> str:
         """Return the exact immutable source fingerprint.
@@ -972,10 +817,7 @@ class TaskGraph:
                 "revision": self.source.revision,
             },
             "team_id": self.team_id,
-            "node_list": [
-                node.payload()
-                for node in sorted(self.node_list, key=lambda item: item.node_key)
-            ],
+            "node_list": [node.payload() for node in sorted(self.node_list, key=lambda item: item.node_key)],
         }
 
     @classmethod
@@ -998,22 +840,16 @@ class TaskGraph:
         }:
             raise TaskGraphError("Task graph payload has another shape")
         if payload["schema_version"] != 1 or not isinstance(payload["node_list"], list):
-            raise TaskGraphError(
-                "Task graph schema version or node list is unsupported"
-            )
+            raise TaskGraphError("Task graph schema version or node list is unsupported")
         try:
             return cls(
                 team_id=payload["team_id"],
                 project_name=payload["project_name"],
                 source=SourceIdentity.from_payload(payload["source"]),
-                node_list=[
-                    TaskNode.from_payload(item) for item in payload["node_list"]
-                ],
+                node_list=[TaskNode.from_payload(item) for item in payload["node_list"]],
             )
         except (TypeError, ValueError) as error:
-            raise TaskGraphError(
-                "Task graph contains an unsupported enum or field value"
-            ) from error
+            raise TaskGraphError("Task graph contains an unsupported enum or field value") from error
 
 
 def _acyclic_require(node_by_key_map: dict[str, TaskNode]) -> None:
@@ -1051,7 +887,5 @@ def canonical_sha256(payload: object) -> str:
         Lowercase SHA-256 identity.
     """
 
-    encoded = json.dumps(
-        payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True
-    ).encode("utf-8")
+    encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()

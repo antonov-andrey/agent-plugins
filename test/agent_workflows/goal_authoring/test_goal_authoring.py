@@ -76,9 +76,7 @@ def _repository_fixture_create(workspace: Path) -> RepositoryFixture:
         check=True,
         capture_output=True,
     )
-    subprocess.run(
-        ["git", "clone", str(remote), str(root)], check=True, capture_output=True
-    )
+    subprocess.run(["git", "clone", str(remote), str(root)], check=True, capture_output=True)
     _git(root, "config", "user.email", "test@example.com")
     _git(root, "config", "user.name", "Test User")
     (root / "DESIGN.md").write_text("# Project Goals\n", encoding="utf-8")
@@ -88,9 +86,7 @@ def _repository_fixture_create(workspace: Path) -> RepositoryFixture:
     return RepositoryFixture(main_root=root, remote_root=remote)
 
 
-def _source_input_fixture_create(
-    workspace: Path, *, suffix: str = "one"
-) -> SourceInputFixture:
+def _source_input_fixture_create(workspace: Path, *, suffix: str = "one") -> SourceInputFixture:
     """Create one complete pair of source input files.
 
     Args:
@@ -127,12 +123,8 @@ def test_write_and_revision_publish_only_complete_pair(tmp_path: Path) -> None:
         "goal.md",
         "spec.md",
     ]
-    assert (
-        repository.main_root / PREFIX / "goal.md"
-    ).read_bytes() == source_one.goal_path.read_bytes()
-    assert (
-        repository.main_root / PREFIX / "spec.md"
-    ).read_bytes() == source_one.specification_path.read_bytes()
+    assert (repository.main_root / PREFIX / "goal.md").read_bytes() == source_one.goal_path.read_bytes()
+    assert (repository.main_root / PREFIX / "spec.md").read_bytes() == source_one.specification_path.read_bytes()
 
     source_two = _source_input_fixture_create(tmp_path, suffix="two")
     second = workflow.write(
@@ -142,9 +134,7 @@ def test_write_and_revision_publish_only_complete_pair(tmp_path: Path) -> None:
     )
 
     assert second.commit != first.commit
-    changed_path_list = _git(
-        repository.main_root, "diff", "--name-only", first.commit, second.commit
-    ).splitlines()
+    changed_path_list = _git(repository.main_root, "diff", "--name-only", first.commit, second.commit).splitlines()
     assert changed_path_list == [f"{PREFIX}/goal.md", f"{PREFIX}/spec.md"]
     assert workflow.validate(common_prefix=PREFIX) == second
 
@@ -180,9 +170,7 @@ def test_private_authoring_symlink_is_rejected_before_git_mutation(
     source = _source_input_fixture_create(tmp_path)
     outside = tmp_path / "outside"
     outside.mkdir()
-    (repository.main_root / ".git" / "agent-workflows").symlink_to(
-        outside, target_is_directory=True
-    )
+    (repository.main_root / ".git" / "agent-workflows").symlink_to(outside, target_is_directory=True)
     baseline = _git(repository.main_root, "rev-parse", "HEAD")
 
     with pytest.raises(GoalAuthoringError, match="user-owned and physical"):
@@ -251,9 +239,7 @@ def test_successful_remote_push_is_recovered_after_local_interruption(
     remote_commit = _git(repository.remote_root, "rev-parse", "refs/heads/main")
     assert _git(repository.main_root, "rev-parse", "HEAD") != remote_commit
 
-    recovered = GoalSourceTransaction(
-        ProjectGoalsRepository(repository.main_root)
-    ).publish(source)
+    recovered = GoalSourceTransaction(ProjectGoalsRepository(repository.main_root)).publish(source)
 
     assert recovered == remote_commit
     assert _git(repository.main_root, "rev-parse", "HEAD") == remote_commit
@@ -294,9 +280,7 @@ def test_recovery_rejects_ambiguous_private_journal(
     )
 
     with pytest.raises(GoalAuthoringError, match="journal is malformed"):
-        GoalSourceTransaction(ProjectGoalsRepository(repository.main_root)).publish(
-            source
-        )
+        GoalSourceTransaction(ProjectGoalsRepository(repository.main_root)).publish(source)
 
 
 def test_cli_emits_machine_readable_snapshot(tmp_path: Path) -> None:

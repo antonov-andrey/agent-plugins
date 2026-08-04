@@ -23,9 +23,7 @@ from linear_boundary.task.workflow import TaskTransition
 def _parser_get() -> argparse.ArgumentParser:
     """Build the one-input task-state parser."""
 
-    parser = argparse.ArgumentParser(
-        description="Validate one Linear task dispatch or transition boundary."
-    )
+    parser = argparse.ArgumentParser(description="Validate one Linear task dispatch or transition boundary.")
     parser.add_argument("operation", choices=("dispatch", "transition"))
     parser.add_argument("--input", required=True, type=Path)
     return parser
@@ -55,11 +53,7 @@ def _transition_validate(payload: object) -> None:
         "dispatchable",
         "proof",
     }
-    if (
-        not isinstance(payload, dict)
-        or set(payload) != expected
-        or payload["schema_version"] != 1
-    ):
+    if not isinstance(payload, dict) or set(payload) != expected or payload["schema_version"] != 1:
         raise LinearContractError("Task transition input has another shape")
     proof_payload = payload["proof"]
     proof_field_set = set(TransitionProof.__dataclass_fields__)
@@ -76,9 +70,7 @@ def _transition_validate(payload: object) -> None:
             dispatchable=payload["dispatchable"],
         ).require()
     except (TypeError, ValueError) as error:
-        raise LinearContractError(
-            "Task transition input contains an unsupported value"
-        ) from error
+        raise LinearContractError("Task transition input contains an unsupported value") from error
 
 
 def main(argv: list[str] | None = None) -> int:

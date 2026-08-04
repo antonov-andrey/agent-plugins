@@ -76,26 +76,16 @@ class WorkflowConfigurationReconciler:
 
         current_label_list_by_casefold_name_map: dict[str, list[LinearLabel]] = {}
         for label in current_label_list:
-            current_label_list_by_casefold_name_map.setdefault(
-                label.name.casefold(), []
-            ).append(label)
+            current_label_list_by_casefold_name_map.setdefault(label.name.casefold(), []).append(label)
         for desired_label in self._label_desired_list:
-            matching_label_list = current_label_list_by_casefold_name_map.get(
-                desired_label.name.casefold(), []
-            )
+            matching_label_list = current_label_list_by_casefold_name_map.get(desired_label.name.casefold(), [])
             if not matching_label_list:
                 label_create_list.append(desired_label)
             elif len(matching_label_list) > 1:
-                conflict_list.append(
-                    ConfigurationConflict(
-                        "label", desired_label.name, "ambiguous duplicate name"
-                    )
-                )
+                conflict_list.append(ConfigurationConflict("label", desired_label.name, "ambiguous duplicate name"))
             elif matching_label_list[0].name != desired_label.name:
                 conflict_list.append(
-                    ConfigurationConflict(
-                        "label", desired_label.name, "same name uses different casing"
-                    )
+                    ConfigurationConflict("label", desired_label.name, "same name uses different casing")
                 )
             elif (
                 matching_label_list[0].description != desired_label.description
@@ -119,32 +109,20 @@ class WorkflowConfigurationReconciler:
         """Append missing statuses and exact conflicts to one plan under construction."""
 
         desired_status_list = (
-            self._issue_status_desired_list
-            if kind == "issue-status"
-            else self._project_status_desired_list
+            self._issue_status_desired_list if kind == "issue-status" else self._project_status_desired_list
         )
         current_status_list_by_casefold_name_map: dict[str, list[StatusDefinition]] = {}
         for status in current_status_list:
-            current_status_list_by_casefold_name_map.setdefault(
-                status.name.casefold(), []
-            ).append(status)
+            current_status_list_by_casefold_name_map.setdefault(status.name.casefold(), []).append(status)
         for desired_status in desired_status_list:
-            matching_status_list = current_status_list_by_casefold_name_map.get(
-                desired_status.name.casefold(), []
-            )
+            matching_status_list = current_status_list_by_casefold_name_map.get(desired_status.name.casefold(), [])
             if not matching_status_list:
                 status_create_list.append(desired_status)
             elif len(matching_status_list) > 1:
-                conflict_list.append(
-                    ConfigurationConflict(
-                        kind, desired_status.name, "ambiguous duplicate name"
-                    )
-                )
+                conflict_list.append(ConfigurationConflict(kind, desired_status.name, "ambiguous duplicate name"))
             elif matching_status_list[0].name != desired_status.name:
                 conflict_list.append(
-                    ConfigurationConflict(
-                        kind, desired_status.name, "same name uses different casing"
-                    )
+                    ConfigurationConflict(kind, desired_status.name, "same name uses different casing")
                 )
             elif matching_status_list[0].category != desired_status.category:
                 conflict_list.append(

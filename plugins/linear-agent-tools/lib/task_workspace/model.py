@@ -27,9 +27,7 @@ def issue_identifier_validate(value: str) -> str:
     """
 
     if not isinstance(value, str) or _ISSUE_IDENTIFIER_PATTERN.fullmatch(value) is None:
-        raise TaskWorkspaceError(
-            "Linear issue identifier must use the canonical TEAM-123 form"
-        )
+        raise TaskWorkspaceError("Linear issue identifier must use the canonical TEAM-123 form")
     return value
 
 
@@ -44,11 +42,7 @@ def _single_line(value: str, *, label: str) -> str:
         The validated value.
     """
 
-    if (
-        not isinstance(value, str)
-        or not value
-        or any(character in value for character in ("\x00", "\n", "\r"))
-    ):
+    if not isinstance(value, str) or not value or any(character in value for character in ("\x00", "\n", "\r")):
         raise TaskWorkspaceError(f"{label} must be non-empty single-line text")
     return value
 
@@ -63,24 +57,16 @@ class WorkspaceConfig:
         """Validate one existing absolute directory without searching ancestors."""
 
         if not self.root.is_absolute():
-            raise TaskWorkspaceError(
-                "LINEAR_AGENT_WORKSPACE_ROOT must be an absolute path"
-            )
+            raise TaskWorkspaceError("LINEAR_AGENT_WORKSPACE_ROOT must be an absolute path")
         try:
             resolved = self.root.resolve(strict=True)
         except OSError as error:
-            raise TaskWorkspaceError(
-                "LINEAR_AGENT_WORKSPACE_ROOT is unavailable"
-            ) from error
+            raise TaskWorkspaceError("LINEAR_AGENT_WORKSPACE_ROOT is unavailable") from error
         if not resolved.is_dir() or resolved != self.root:
-            raise TaskWorkspaceError(
-                "LINEAR_AGENT_WORKSPACE_ROOT must be a normalized existing directory"
-            )
+            raise TaskWorkspaceError("LINEAR_AGENT_WORKSPACE_ROOT must be a normalized existing directory")
 
     @classmethod
-    def from_environment(
-        cls, environment: dict[str, str] | None = None
-    ) -> "WorkspaceConfig":
+    def from_environment(cls, environment: dict[str, str] | None = None) -> "WorkspaceConfig":
         """Read the one intentional external workspace-root configuration key.
 
         Args:
@@ -118,13 +104,8 @@ class RepositoryRequest:
             or any(character.isspace() for character in self.base_branch)
         ):
             raise TaskWorkspaceError("Repository base branch is unsafe")
-        if (
-            self.expected_baseline_commit
-            and _COMMIT_PATTERN.fullmatch(self.expected_baseline_commit) is None
-        ):
-            raise TaskWorkspaceError(
-                "Expected workspace baseline must be one full Git commit or empty"
-            )
+        if self.expected_baseline_commit and _COMMIT_PATTERN.fullmatch(self.expected_baseline_commit) is None:
+            raise TaskWorkspaceError("Expected workspace baseline must be one full Git commit or empty")
 
     @classmethod
     def from_payload(cls, payload: object) -> "RepositoryRequest":
@@ -186,13 +167,9 @@ class WorkspaceRequest:
         if not isinstance(self.repository_list, list) or any(
             not isinstance(item, RepositoryRequest) for item in self.repository_list
         ):
-            raise TaskWorkspaceError(
-                "Workspace repository list must contain only repository requests"
-            )
+            raise TaskWorkspaceError("Workspace repository list must contain only repository requests")
         if not self.repository_list:
-            raise TaskWorkspaceError(
-                "Code-mutating task requires at least one repository"
-            )
+            raise TaskWorkspaceError("Code-mutating task requires at least one repository")
         origin_url_list = [item.origin_url for item in self.repository_list]
         if len(origin_url_list) != len(set(origin_url_list)):
             raise TaskWorkspaceError("Workspace request repeats one repository origin")
@@ -317,33 +294,23 @@ class RepositoryWorkspaceState:
         expected_branch = f"linear/{self.issue_identifier.lower()}"
         if self.branch_name != expected_branch:
             raise TaskWorkspaceError("Workspace branch differs from its issue identity")
-        expected_task_root = (
-            Path(self.main_root) / ".worktree" / self.issue_identifier.lower()
-        )
+        expected_task_root = Path(self.main_root) / ".worktree" / self.issue_identifier.lower()
         if Path(self.task_root) != expected_task_root:
             raise TaskWorkspaceError("Workspace path differs from its issue identity")
         if not isinstance(self.resource_list, list) or any(
             not isinstance(item, BootstrapResourceState) for item in self.resource_list
         ):
-            raise TaskWorkspaceError(
-                "Workspace resource list must contain only bootstrap resource states"
-            )
+            raise TaskWorkspaceError("Workspace resource list must contain only bootstrap resource states")
         resource_path_list = [item.relative_path for item in self.resource_list]
         if len(resource_path_list) != len(set(resource_path_list)):
             raise TaskWorkspaceError("Workspace state repeats one bootstrap resource")
         if not isinstance(self.cleanup_argument_list, list) or any(
-            not isinstance(item, str)
-            or not item
-            or any(character in item for character in ("\x00", "\n", "\r"))
+            not isinstance(item, str) or not item or any(character in item for character in ("\x00", "\n", "\r"))
             for item in self.cleanup_argument_list
         ):
-            raise TaskWorkspaceError(
-                "Workspace cleanup binding must use direct non-empty argv"
-            )
+            raise TaskWorkspaceError("Workspace cleanup binding must use direct non-empty argv")
         if not isinstance(self.cleaned_resource_fingerprint_by_resource_key_map, dict):
-            raise TaskWorkspaceError(
-                "Cleaned resource declaration identities must be a mapping"
-            )
+            raise TaskWorkspaceError("Cleaned resource declaration identities must be a mapping")
         if any(
             not isinstance(resource_key, str)
             or not resource_key
@@ -351,9 +318,7 @@ class RepositoryWorkspaceState:
             or _SHA256_PATTERN.fullmatch(fingerprint) is None
             for resource_key, fingerprint in self.cleaned_resource_fingerprint_by_resource_key_map.items()
         ):
-            raise TaskWorkspaceError(
-                "Cleaned resource declaration identities must bind text keys to SHA-256"
-            )
+            raise TaskWorkspaceError("Cleaned resource declaration identities must bind text keys to SHA-256")
         boolean_by_field_name_map = {
             "cleanup_binding_completed": self.cleanup_binding_completed,
             "cleanup_branch_snapshot_ready": self.cleanup_branch_snapshot_ready,
@@ -369,42 +334,24 @@ class RepositoryWorkspaceState:
             ("cleanup local branch commit", self.cleanup_local_branch_commit),
             ("cleanup remote branch commit", self.cleanup_remote_branch_commit),
         ):
-            if not isinstance(value, str) or (
-                value and _COMMIT_PATTERN.fullmatch(value) is None
-            ):
-                raise TaskWorkspaceError(
-                    f"Workspace {label} must be empty or one full Git commit"
-                )
+            if not isinstance(value, str) or (value and _COMMIT_PATTERN.fullmatch(value) is None):
+                raise TaskWorkspaceError(f"Workspace {label} must be empty or one full Git commit")
         if self.cleanup_branch_snapshot_ready and not self.cleanup_local_branch_commit:
-            raise TaskWorkspaceError(
-                "Cleanup branch snapshot must retain the exact local task head"
-            )
+            raise TaskWorkspaceError("Cleanup branch snapshot must retain the exact local task head")
         if not self.cleanup_branch_snapshot_ready and (
             self.cleanup_local_branch_commit or self.cleanup_remote_branch_commit
         ):
-            raise TaskWorkspaceError(
-                "Cleanup branch commits require a durable snapshot marker"
-            )
-        if (
-            self.worktree_removed
-            or self.remote_branch_removed
-            or self.local_branch_removed
-        ) and not (self.cleanup_branch_snapshot_ready):
-            raise TaskWorkspaceError(
-                "Destructive cleanup state requires a durable branch snapshot"
-            )
+            raise TaskWorkspaceError("Cleanup branch commits require a durable snapshot marker")
+        if (self.worktree_removed or self.remote_branch_removed or self.local_branch_removed) and not (
+            self.cleanup_branch_snapshot_ready
+        ):
+            raise TaskWorkspaceError("Destructive cleanup state requires a durable branch snapshot")
         if self.worktree_removed and not self.cleanup_worktree_removal_ready:
-            raise TaskWorkspaceError(
-                "Removed worktree requires a durable removal-ready marker"
-            )
+            raise TaskWorkspaceError("Removed worktree requires a durable removal-ready marker")
         if self.worktree_removed and not self.cleanup_binding_completed:
-            raise TaskWorkspaceError(
-                "Worktree cannot be removed before its cleanup binding completes"
-            )
+            raise TaskWorkspaceError("Worktree cannot be removed before its cleanup binding completes")
         object.__setattr__(self, "resource_list", list(self.resource_list))
-        object.__setattr__(
-            self, "cleanup_argument_list", list(self.cleanup_argument_list)
-        )
+        object.__setattr__(self, "cleanup_argument_list", list(self.cleanup_argument_list))
         object.__setattr__(
             self,
             "cleaned_resource_fingerprint_by_resource_key_map",
@@ -456,9 +403,7 @@ class RepositoryWorkspaceState:
 
         issue_identifier_validate(issue_identifier)
         if issue_identifier != self.issue_identifier:
-            raise TaskWorkspaceError(
-                "Cleanup placeholder issue differs from workspace ownership"
-            )
+            raise TaskWorkspaceError("Cleanup placeholder issue differs from workspace ownership")
         return {
             "linear_issue_identifier": issue_identifier,
             "task_branch": self.branch_name,
@@ -500,18 +445,12 @@ class RepositoryWorkspaceState:
             "task_root",
             "worktree_removed",
         }
-        if (
-            not isinstance(payload, dict)
-            or set(payload) != expected
-            or payload["schema_version"] != 1
-        ):
+        if not isinstance(payload, dict) or set(payload) != expected or payload["schema_version"] != 1:
             raise TaskWorkspaceError("Workspace state has another shape")
         if (
             not isinstance(payload["resource_list"], list)
             or not isinstance(payload["cleanup_argument_list"], list)
-            or not isinstance(
-                payload["cleaned_resource_fingerprint_by_resource_key_map"], dict
-            )
+            or not isinstance(payload["cleaned_resource_fingerprint_by_resource_key_map"], dict)
         ):
             raise TaskWorkspaceError("Workspace state collections have another shape")
         return cls(
@@ -524,10 +463,7 @@ class RepositoryWorkspaceState:
             task_root=payload["task_root"],
             manifest_sha256=payload["manifest_sha256"],
             phase=payload["phase"],
-            resource_list=[
-                BootstrapResourceState.from_payload(item)
-                for item in payload["resource_list"]
-            ],
+            resource_list=[BootstrapResourceState.from_payload(item) for item in payload["resource_list"]],
             cleanup_argument_list=list(payload["cleanup_argument_list"]),
             cleaned_resource_fingerprint_by_resource_key_map=dict(
                 payload["cleaned_resource_fingerprint_by_resource_key_map"]

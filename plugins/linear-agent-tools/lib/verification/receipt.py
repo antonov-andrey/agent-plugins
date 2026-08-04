@@ -29,9 +29,7 @@ class VerificationCommentCodec:
             or not self.label
             or any(character in self.label for character in "\x00\r\n")
         ):
-            raise VerificationReceiptError(
-                "Verification comment codec has another shape"
-            )
+            raise VerificationReceiptError("Verification comment codec has another shape")
 
     def payload_parse(self, value: str) -> object:
         """Decode one exact provider-owned comment payload.
@@ -43,19 +41,13 @@ class VerificationCommentCodec:
             Decoded JSON payload.
         """
 
-        if (
-            not isinstance(value, str)
-            or not value.startswith(self.prefix)
-            or not value.endswith(_COMMENT_SUFFIX)
-        ):
+        if not isinstance(value, str) or not value.startswith(self.prefix) or not value.endswith(_COMMENT_SUFFIX):
             raise VerificationReceiptError(f"{self.label} comment has another shape")
         encoded = value[len(self.prefix) : -len(_COMMENT_SUFFIX)]
         try:
             return json_load_strict(encoded)
         except JsonContractError as error:
-            raise VerificationReceiptError(
-                f"{self.label} comment contains malformed JSON"
-            ) from error
+            raise VerificationReceiptError(f"{self.label} comment contains malformed JSON") from error
 
     def render(self, payload: dict[str, object]) -> str:
         """Render one canonical JSON payload as a marked Linear comment.
@@ -67,11 +59,7 @@ class VerificationCommentCodec:
             Markdown comment body.
         """
 
-        return (
-            self.prefix
-            + json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
-            + _COMMENT_SUFFIX
-        )
+        return self.prefix + json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + _COMMENT_SUFFIX
 
 
 ATTEMPT_COMMENT_CODEC = VerificationCommentCodec(

@@ -22,9 +22,7 @@ class GitHubPullRequestBoundary:
 
     def __init__(
         self,
-        runner: (
-            Callable[[Sequence[str]], subprocess.CompletedProcess[str]] | None
-        ) = None,
+        runner: Callable[[Sequence[str]], subprocess.CompletedProcess[str]] | None = None,
     ) -> None:
         """Initialize one authenticated gh command dependency.
 
@@ -63,14 +61,8 @@ class GitHubPullRequestBoundary:
         _branch_require(base_branch, label="base")
         _branch_require(head_branch, label="head")
         if head_branch != expected_head:
-            raise GitHubContractError(
-                "Pull request head branch omits the exact Linear issue identity"
-            )
-        if (
-            body_file.is_symlink()
-            or not body_file.is_file()
-            or body_file.stat().st_nlink != 1
-        ):
+            raise GitHubContractError("Pull request head branch omits the exact Linear issue identity")
+        if body_file.is_symlink() or not body_file.is_file() or body_file.stat().st_nlink != 1:
             raise GitHubContractError("Pull request body must be one ordinary file")
         existing_number_list = self.matching_number_list(
             repository=repository,
@@ -78,19 +70,13 @@ class GitHubPullRequestBoundary:
             head_branch=head_branch,
         )
         if len(existing_number_list) > 1:
-            raise GitHubContractError(
-                "More than one pull request matches the exact task branch and base"
-            )
+            raise GitHubContractError("More than one pull request matches the exact task branch and base")
         if existing_number_list:
-            snapshot = self.inspect(
-                repository=repository, number=existing_number_list[0]
-            )
+            snapshot = self.inspect(repository=repository, number=existing_number_list[0])
             snapshot.integration_identity_require(issue_identifier)
             snapshot.target_require(base_branch=base_branch, head_branch=head_branch)
             if snapshot.state != "OPEN":
-                raise GitHubContractError(
-                    "Existing exact task pull request cannot be adopted in its current state"
-                )
+                raise GitHubContractError("Existing exact task pull request cannot be adopted in its current state")
             return snapshot
         output = self._checked(
             (
@@ -133,9 +119,7 @@ class GitHubPullRequestBoundary:
         """
 
         if not isinstance(repository, RepositoryIdentity):
-            raise GitHubContractError(
-                "Pull-request lookup repository identity is unsupported"
-            )
+            raise GitHubContractError("Pull-request lookup repository identity is unsupported")
         _branch_require(base_branch, label="base")
         _branch_require(head_branch, label="head")
         owner, _name = repository.value.split("/", 1)
@@ -160,15 +144,9 @@ class GitHubPullRequestBoundary:
         try:
             payload = json_load_strict(completed_process.stdout)
         except JsonContractError as error:
-            raise GitHubContractError(
-                "GitHub pull-request lookup response is malformed"
-            ) from error
-        if not isinstance(payload, list) or any(
-            not isinstance(page, list) for page in payload
-        ):
-            raise GitHubContractError(
-                "GitHub pull-request lookup response has another shape"
-            )
+            raise GitHubContractError("GitHub pull-request lookup response is malformed") from error
+        if not isinstance(payload, list) or any(not isinstance(page, list) for page in payload):
+            raise GitHubContractError("GitHub pull-request lookup response has another shape")
         number_list: list[int] = []
         for page in payload:
             for item in page:
@@ -182,19 +160,13 @@ class GitHubPullRequestBoundary:
                     or item["base"].get("ref") != base_branch
                     or item["head"].get("ref") != head_branch
                 ):
-                    raise GitHubContractError(
-                        "GitHub pull-request lookup response has another shape"
-                    )
+                    raise GitHubContractError("GitHub pull-request lookup response has another shape")
                 number_list.append(item["number"])
         if len(number_list) != len(set(number_list)):
-            raise GitHubContractError(
-                "GitHub pull-request lookup repeated one pull request"
-            )
+            raise GitHubContractError("GitHub pull-request lookup repeated one pull request")
         return sorted(number_list)
 
-    def inspect(
-        self, *, repository: RepositoryIdentity, number: int
-    ) -> PullRequestSnapshot:
+    def inspect(self, *, repository: RepositoryIdentity, number: int) -> PullRequestSnapshot:
         """Read one exact PR and its required checks.
 
         Args:
@@ -222,9 +194,7 @@ class GitHubPullRequestBoundary:
             payload = json_load_strict(completed_process.stdout)
         except JsonContractError as error:
             raise GitHubContractError("GitHub PR response is malformed") from error
-        required_check_list = self._required_check_list_get(
-            repository=repository, number=number
-        )
+        required_check_list = self._required_check_list_get(repository=repository, number=number)
         snapshot = PullRequestSnapshot.from_gh_payload(
             repository,
             payload,
@@ -232,9 +202,7 @@ class GitHubPullRequestBoundary:
         )
         expected_url = f"https://github.com/{repository.value}/pull/{number}"
         if snapshot.number != number or snapshot.url.rstrip("/") != expected_url:
-            raise GitHubContractError(
-                "GitHub pull-request response differs from the exact requested identity"
-            )
+            raise GitHubContractError("GitHub pull-request response differs from the exact requested identity")
         return snapshot
 
     def merge(
@@ -321,14 +289,10 @@ class GitHubPullRequestBoundary:
             snapshot.integration_identity_require(issue_identifier)
             snapshot.target_require(base_branch=base_branch, head_branch=head_branch)
         if snapshot.state not in {"CLOSED", "MERGED"}:
-            raise GitHubContractError(
-                "Canceled-task pull request did not reach a terminal state"
-            )
+            raise GitHubContractError("Canceled-task pull request did not reach a terminal state")
         return snapshot
 
-    def _required_check_list_get(
-        self, *, repository: RepositoryIdentity, number: int
-    ) -> list[RequiredCheck]:
+    def _required_check_list_get(self, *, repository: RepositoryIdentity, number: int) -> list[RequiredCheck]:
         """Read branch-protection-required check results only.
 
         Args:
@@ -357,31 +321,17 @@ class GitHubPullRequestBoundary:
         try:
             payload = json_load_strict(completed_process.stdout or "[]")
         except JsonContractError as error:
-            raise GitHubContractError(
-                "GitHub required-check response is malformed"
-            ) from error
-        if not isinstance(payload, list) or any(
-            not isinstance(item, dict) for item in payload
-        ):
-            raise GitHubContractError(
-                "GitHub required-check response has another shape"
-            )
+            raise GitHubContractError("GitHub required-check response is malformed") from error
+        if not isinstance(payload, list) or any(not isinstance(item, dict) for item in payload):
+            raise GitHubContractError("GitHub required-check response has another shape")
         required_check_list: list[RequiredCheck] = []
         for item in payload:
             if set(item) != {"name", "bucket", "link"}:
-                raise GitHubContractError(
-                    "GitHub required-check item has another shape"
-                )
-            required_check_list.append(
-                RequiredCheck(
-                    name=item["name"], bucket=item["bucket"], link=item["link"] or ""
-                )
-            )
+                raise GitHubContractError("GitHub required-check item has another shape")
+            required_check_list.append(RequiredCheck(name=item["name"], bucket=item["bucket"], link=item["link"] or ""))
         return sorted(required_check_list, key=lambda item: item.name)
 
-    def _checked(
-        self, argument_list: Sequence[str]
-    ) -> subprocess.CompletedProcess[str]:
+    def _checked(self, argument_list: Sequence[str]) -> subprocess.CompletedProcess[str]:
         """Run one checked gh domain command without exposing raw provider output.
 
         Args:
@@ -393,9 +343,7 @@ class GitHubPullRequestBoundary:
 
         completed_process = self._runner(["gh", *argument_list])
         if completed_process.returncode != 0:
-            raise GitHubContractError(
-                "Authenticated GitHub pull-request operation failed"
-            )
+            raise GitHubContractError("Authenticated GitHub pull-request operation failed")
         return completed_process
 
 
@@ -445,11 +393,6 @@ def _branch_require(value: str, *, label: str) -> None:
         or ".." in value
         or "//" in value
         or "@{" in value
-        or any(
-            character in forbidden_character_set or ord(character) < 32
-            for character in value
-        )
+        or any(character in forbidden_character_set or ord(character) < 32 for character in value)
     ):
-        raise GitHubContractError(
-            f"Pull request {label} branch has an unsafe ref shape"
-        )
+        raise GitHubContractError(f"Pull request {label} branch has an unsafe ref shape")

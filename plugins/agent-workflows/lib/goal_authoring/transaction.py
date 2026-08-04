@@ -45,10 +45,7 @@ def _atomic_json_write(path: Path, payload: Mapping[str, object]) -> None:
     """
 
     temporary_path = path.parent / f".{path.name}.{secrets.token_hex(12)}.tmp"
-    encoded = (
-        json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
-        + "\n"
-    ).encode()
+    encoded = (json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True) + "\n").encode()
     descriptor = os.open(temporary_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
         with os.fdopen(descriptor, "wb", closefd=True) as handle:
@@ -99,15 +96,11 @@ class ExclusiveFileLock(AbstractContextManager["ExclusiveFileLock"]):
                 or metadata.st_nlink != 1
                 or stat.S_IMODE(metadata.st_mode) & 0o077
             ):
-                raise GoalAuthoringError(
-                    "Authoring lock must be one private user-owned ordinary file"
-                )
+                raise GoalAuthoringError("Authoring lock must be one private user-owned ordinary file")
             fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as error:
             os.close(descriptor)
-            raise GoalAuthoringError(
-                "Another project-goals authoring transaction is active"
-            ) from error
+            raise GoalAuthoringError("Another project-goals authoring transaction is active") from error
         except BaseException:
             os.close(descriptor)
             raise
@@ -154,17 +147,10 @@ class GoalSourceTransaction:
         """
 
         payload_by_path = source.relative_payload_by_path()
-        digest_by_path = {
-            path: hashlib.sha256(payload).hexdigest()
-            for path, payload in payload_by_path.items()
-        }
-        lock_path = (
-            self._repository.private_directory_require("lock") / "direct-main.lock"
-        )
+        digest_by_path = {path: hashlib.sha256(payload).hexdigest() for path, payload in payload_by_path.items()}
+        lock_path = self._repository.private_directory_require("lock") / "direct-main.lock"
         with ExclusiveFileLock(lock_path):
-            recovered = self._recover(
-                source.common_prefix, expected_digest_by_path=digest_by_path
-            )
+            recovered = self._recover(source.common_prefix, expected_digest_by_path=digest_by_path)
             if recovered is not None:
                 return recovered
             base_commit = self._repository.synchronize_require()
@@ -185,9 +171,7 @@ class GoalSourceTransaction:
                         "phase": "commit-built",
                     },
                 )
-                push = self._git.run(
-                    ("push", "origin", f"{commit}:refs/heads/main"), check=False
-                )
+                push = self._git.run(("push", "origin", f"{commit}:refs/heads/main"), check=False)
                 if push.returncode == 0:
                     self._finish_local(commit, journal_path=journal_path)
                     return commit
@@ -198,20 +182,14 @@ class GoalSourceTransaction:
                     remote_commit,
                     label="Concurrent project-goals main update",
                 )
-                if self._have_path_change(
-                    base_commit, remote_commit, sorted(payload_by_path)
-                ):
-                    raise GoalAuthoringError(
-                        "Concurrent project-goals update overlaps this source pair"
-                    )
+                if self._have_path_change(base_commit, remote_commit, sorted(payload_by_path)):
+                    raise GoalAuthoringError("Concurrent project-goals update overlaps this source pair")
                 self._git.run(("merge", "--ff-only", remote_commit))
                 self._git.clean_require()
                 journal_path.unlink(missing_ok=True)
                 _directory_sync(journal_path.parent)
                 base_commit = remote_commit
-            raise GoalAuthoringError(
-                "Source publication exceeded bounded disjoint-update retries"
-            )
+            raise GoalAuthoringError("Source publication exceeded bounded disjoint-update retries")
 
     def _existing_directory_shape_require(self, common_prefix: str) -> None:
         """Reject reuse of a historical or foreign-shaped source directory.
@@ -236,21 +214,12 @@ class GoalSourceTransaction:
             The new commit, or the base when content is unchanged.
         """
 
-        index_path = (
-            self._repository.private_directory_require("staging")
-            / f"index-{secrets.token_hex(16)}"
-        )
+        index_path = self._repository.private_directory_require("staging") / f"index-{secrets.token_hex(16)}"
         environment = {"GIT_INDEX_FILE": str(index_path)}
         try:
             self._git.run(("read-tree", base_commit), extra_environment=environment)
-            for relative_path, payload in sorted(
-                source.relative_payload_by_path().items()
-            ):
-                blob = (
-                    self._git.run(("hash-object", "-w", "--stdin"), input_bytes=payload)
-                    .stdout.decode()
-                    .strip()
-                )
+            for relative_path, payload in sorted(source.relative_payload_by_path().items()):
+                blob = self._git.run(("hash-object", "-w", "--stdin"), input_bytes=payload).stdout.decode().strip()
                 self._git.run(
                     (
                         "update-index",
@@ -260,20 +229,14 @@ class GoalSourceTransaction:
                     ),
                     extra_environment=environment,
                 )
-            tree = (
-                self._git.run(("write-tree",), extra_environment=environment)
-                .stdout.decode()
-                .strip()
-            )
+            tree = self._git.run(("write-tree",), extra_environment=environment).stdout.decode().strip()
             base_tree = self._git.output(("show", "-s", "--format=%T", base_commit))
             if tree == base_tree:
                 return base_commit
             commit = (
                 self._git.run(
                     ("commit-tree", tree, "-p", base_commit, "-F", "-"),
-                    input_bytes=(
-                        f"Publish {source.common_prefix} source contracts\n"
-                    ).encode(),
+                    input_bytes=(f"Publish {source.common_prefix} source contracts\n").encode(),
                 )
                 .stdout.decode()
                 .strip()
@@ -282,9 +245,7 @@ class GoalSourceTransaction:
         finally:
             index_path.unlink(missing_ok=True)
 
-    def _recover(
-        self, common_prefix: str, *, expected_digest_by_path: Mapping[str, str]
-    ) -> str | None:
+    def _recover(self, common_prefix: str, *, expected_digest_by_path: Mapping[str, str]) -> str | None:
         """Recover one interrupted exact transaction or reject ambiguity.
 
         Args:
@@ -299,9 +260,7 @@ class GoalSourceTransaction:
         if not journal_path.exists():
             return None
         try:
-            descriptor = os.open(
-                journal_path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW
-            )
+            descriptor = os.open(journal_path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
             with os.fdopen(descriptor, "rb", closefd=True) as handle:
                 metadata = os.fstat(handle.fileno())
                 if (
@@ -310,16 +269,12 @@ class GoalSourceTransaction:
                     or metadata.st_nlink != 1
                     or stat.S_IMODE(metadata.st_mode) & 0o077
                 ):
-                    raise GoalAuthoringError(
-                        "Source publication journal must be one private ordinary file"
-                    )
+                    raise GoalAuthoringError("Source publication journal must be one private ordinary file")
                 payload = json_load_strict(handle.read())
         except GoalAuthoringError:
             raise
         except (OSError, JsonContractError) as error:
-            raise GoalAuthoringError(
-                "Source publication journal is malformed"
-            ) from error
+            raise GoalAuthoringError("Source publication journal is malformed") from error
         expected_field_set = {
             "schema_version",
             "base_commit",
@@ -331,15 +286,11 @@ class GoalSourceTransaction:
             raise GoalAuthoringError("Source publication journal has another shape")
         if payload["schema_version"] != 1 or payload["phase"] != "commit-built":
             raise GoalAuthoringError("Source publication journal has unsupported state")
-        base_commit = commit_validate(
-            payload["base_commit"], label="Journal base commit"
-        )
+        base_commit = commit_validate(payload["base_commit"], label="Journal base commit")
         commit = commit_validate(payload["commit"], label="Journal pending commit")
         digest_by_path = payload["path_sha256_by_name"]
         if digest_by_path != dict(expected_digest_by_path):
-            raise GoalAuthoringError(
-                "Interrupted transaction belongs to different source bytes"
-            )
+            raise GoalAuthoringError("Interrupted transaction belongs to different source bytes")
         expected_path_set = {
             f"{common_prefix_validate(common_prefix)}/goal.md",
             f"{common_prefix}/spec.md",
@@ -348,22 +299,16 @@ class GoalSourceTransaction:
             raise GoalAuthoringError("Source publication journal path set is malformed")
         parent_list = self._git.output(("show", "-s", "--format=%P", commit)).split()
         if parent_list != [base_commit]:
-            raise GoalAuthoringError(
-                "Source publication pending commit has another parent"
-            )
+            raise GoalAuthoringError("Source publication pending commit has another parent")
         if not self._match_tree_payload(commit, digest_by_path):
-            raise GoalAuthoringError(
-                "Source publication pending commit differs from its journal"
-            )
+            raise GoalAuthoringError("Source publication pending commit differs from its journal")
         self._repository.checkout_shape_require()
         self._git.run(("fetch", "--prune", "origin"))
         local_commit = self._git.commit()
         remote_commit = self._git.commit("refs/remotes/origin/main")
         if self._is_ancestor(commit, remote_commit):
             if not self._match_tree_payload(remote_commit, digest_by_path):
-                raise GoalAuthoringError(
-                    "Published source bytes were replaced by a conflicting update"
-                )
+                raise GoalAuthoringError("Published source bytes were replaced by a conflicting update")
             if local_commit != remote_commit:
                 self._git.run(("merge", "--ff-only", remote_commit))
             journal_path.unlink()
@@ -371,9 +316,7 @@ class GoalSourceTransaction:
             self._repository.source_shape_require(common_prefix)
             return commit
         if local_commit == base_commit and remote_commit == base_commit:
-            push = self._git.run(
-                ("push", "origin", f"{commit}:refs/heads/main"), check=False
-            )
+            push = self._git.run(("push", "origin", f"{commit}:refs/heads/main"), check=False)
             if push.returncode == 0:
                 self._finish_local(commit, journal_path=journal_path)
                 return commit
@@ -385,9 +328,7 @@ class GoalSourceTransaction:
             journal_path.unlink()
             _directory_sync(journal_path.parent)
             return None
-        raise GoalAuthoringError(
-            "Interrupted source publication cannot be resumed without ambiguity"
-        )
+        raise GoalAuthoringError("Interrupted source publication cannot be resumed without ambiguity")
 
     def _finish_local(self, commit: str, *, journal_path: Path) -> None:
         """Fast-forward local main and retire one completed journal.
@@ -400,9 +341,7 @@ class GoalSourceTransaction:
         self._git.run(("merge", "--ff-only", commit))
         self._git.clean_require()
         if self._git.commit() != commit:
-            raise GoalAuthoringError(
-                "Local project-goals main did not reach the published commit"
-            )
+            raise GoalAuthoringError("Local project-goals main did not reach the published commit")
         journal_path.unlink(missing_ok=True)
         _directory_sync(journal_path.parent)
 
@@ -416,10 +355,7 @@ class GoalSourceTransaction:
             The journal path.
         """
 
-        return (
-            self._repository.private_directory_require("journal")
-            / f"{common_prefix_validate(common_prefix)}.json"
-        )
+        return self._repository.private_directory_require("journal") / f"{common_prefix_validate(common_prefix)}.json"
 
     def _match_tree_payload(self, ref: str, digest_by_path: Mapping[str, str]) -> bool:
         """Return whether one tree retains every recorded source payload.
@@ -434,10 +370,7 @@ class GoalSourceTransaction:
 
         for relative_path, expected_digest in digest_by_path.items():
             blob = self._git.run(("show", f"{ref}:{relative_path}"), check=False)
-            if (
-                blob.returncode != 0
-                or hashlib.sha256(blob.stdout).hexdigest() != expected_digest
-            ):
+            if blob.returncode != 0 or hashlib.sha256(blob.stdout).hexdigest() != expected_digest:
                 return False
         return True
 
@@ -453,12 +386,7 @@ class GoalSourceTransaction:
             Whether a path changed.
         """
 
-        return (
-            self._git.run(
-                ("diff", "--quiet", old, new, "--", *path_list), check=False
-            ).returncode
-            != 0
-        )
+        return self._git.run(("diff", "--quiet", old, new, "--", *path_list), check=False).returncode != 0
 
     def _is_ancestor(self, ancestor: str, descendant: str) -> bool:
         """Return whether one commit is an ancestor of another.
@@ -471,12 +399,7 @@ class GoalSourceTransaction:
             The ancestry result.
         """
 
-        return (
-            self._git.run(
-                ("merge-base", "--is-ancestor", ancestor, descendant), check=False
-            ).returncode
-            == 0
-        )
+        return self._git.run(("merge-base", "--is-ancestor", ancestor, descendant), check=False).returncode == 0
 
     def _ancestor_require(self, ancestor: str, descendant: str, *, label: str) -> None:
         """Require one commit to be an ancestor of another.
@@ -488,6 +411,4 @@ class GoalSourceTransaction:
         """
 
         if not self._is_ancestor(ancestor, descendant):
-            raise GoalAuthoringError(
-                f"{label}: {ancestor} is not an ancestor of {descendant}"
-            )
+            raise GoalAuthoringError(f"{label}: {ancestor} is not an ancestor of {descendant}")

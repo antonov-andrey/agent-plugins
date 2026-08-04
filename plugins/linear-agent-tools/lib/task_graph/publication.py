@@ -79,9 +79,7 @@ class IssuePublication:
             *[f"- {item}" for item in node.scope_list],
         ]
         if node.non_goal_list:
-            section_list.extend(
-                ("", "## Non-goals", "", *[f"- {item}" for item in node.non_goal_list])
-            )
+            section_list.extend(("", "## Non-goals", "", *[f"- {item}" for item in node.non_goal_list]))
         if node.repository_list:
             repository_heading = (
                 "## Ordered Merge Plan And Partial Recovery"
@@ -100,9 +98,7 @@ class IssuePublication:
                 )
             )
             if node.partial_merge_recovery:
-                section_list.extend(
-                    ("", "Partial-merge recovery:", "", node.partial_merge_recovery)
-                )
+                section_list.extend(("", "Partial-merge recovery:", "", node.partial_merge_recovery))
         section_list.extend(
             (
                 "",
@@ -212,9 +208,7 @@ class GraphPublicationView:
 
         source_fingerprint = graph.source_fingerprint()
         graph_fingerprint = graph.graph_fingerprint()
-        project_description = project_description_build(
-            project_key=graph.project_key(), source=graph.source
-        )
+        project_description = project_description_build(project_key=graph.project_key(), source=graph.source)
         normalized_json = json.dumps(
             graph.normalized_payload(),
             ensure_ascii=False,
@@ -252,9 +246,7 @@ class GraphPublicationView:
         ]
         blocker_edge_list = sorted(
             [
-                TaskBlockerEdge(
-                    blocker_node_key=blocker_key, blocked_node_key=node.node_key
-                )
+                TaskBlockerEdge(blocker_node_key=blocker_key, blocked_node_key=node.node_key)
                 for node in graph.node_list
                 for blocker_key in node.blocker_key_list
             ],

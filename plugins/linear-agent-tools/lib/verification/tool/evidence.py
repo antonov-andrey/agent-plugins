@@ -35,9 +35,7 @@ def _args_parse(argv: list[str] | None = None) -> argparse.Namespace:
         Parsed arguments.
     """
 
-    parser = argparse.ArgumentParser(
-        description="Render exact Linear workflow evidence."
-    )
+    parser = argparse.ArgumentParser(description="Render exact Linear workflow evidence.")
     subparsers = parser.add_subparsers(dest="command", required=True)
     for command in ("candidate", "attempt", "baseline", "workspace-baseline"):
         operation = subparsers.add_parser(command)
@@ -90,23 +88,11 @@ def main(argv: list[str] | None = None) -> int:
                 )
             )
         elif args.command == "attempt":
-            print(
-                ATTEMPT_COMMENT_CODEC.render(
-                    AttemptSummary.from_payload(payload).payload()
-                )
-            )
+            print(ATTEMPT_COMMENT_CODEC.render(AttemptSummary.from_payload(payload).payload()))
         elif args.command == "baseline":
-            print(
-                LOCAL_PHASE_BASELINE_COMMENT_CODEC.render(
-                    LocalPhaseBaseline.from_payload(payload).payload()
-                )
-            )
+            print(LOCAL_PHASE_BASELINE_COMMENT_CODEC.render(LocalPhaseBaseline.from_payload(payload).payload()))
         else:
-            print(
-                TASK_WORKSPACE_BASELINE_COMMENT_CODEC.render(
-                    TaskWorkspaceBaseline.from_payload(payload).payload()
-                )
-            )
+            print(TASK_WORKSPACE_BASELINE_COMMENT_CODEC.render(TaskWorkspaceBaseline.from_payload(payload).payload()))
         return 0
     except VerificationReceiptError as error:
         print(str(error), file=sys.stderr)

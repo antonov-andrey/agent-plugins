@@ -33,10 +33,7 @@ def task_delivery_validate(*, role_label: str, delivery_kind: str) -> None:
         delivery_kind: Code, evidence, cleanup or human.
     """
 
-    if (
-        role_label not in _ROLE_LABEL_SET
-        or delivery_kind not in _DELIVERY_KIND_SET_BY_ROLE_MAP[role_label]
-    ):
+    if role_label not in _ROLE_LABEL_SET or delivery_kind not in _DELIVERY_KIND_SET_BY_ROLE_MAP[role_label]:
         raise LinearContractError("Task role and delivery kind are incompatible")
 
 
@@ -58,44 +55,30 @@ class TaskExecutionSnapshot:
     def __post_init__(self) -> None:
         """Validate one complete status decision input."""
 
-        if not isinstance(self.issue_status, IssueStatusName) or not isinstance(
-            self.project_status, ProjectStatusName
-        ):
+        if not isinstance(self.issue_status, IssueStatusName) or not isinstance(self.project_status, ProjectStatusName):
             raise LinearContractError("Task execution statuses are unsupported")
-        task_delivery_validate(
-            role_label=self.role_label, delivery_kind=self.delivery_kind
-        )
+        task_delivery_validate(role_label=self.role_label, delivery_kind=self.delivery_kind)
         if (
             not isinstance(self.label_name_list, list)
             or len(self.label_name_list) != len(set(self.label_name_list))
             or any(
-                not isinstance(item, str)
-                or not item
-                or any(character in item for character in "\x00\r\n")
+                not isinstance(item, str) or not item or any(character in item for character in "\x00\r\n")
                 for item in self.label_name_list
             )
         ):
-            raise LinearContractError(
-                "Task execution labels must be a duplicate-free single-line list"
-            )
+            raise LinearContractError("Task execution labels must be a duplicate-free single-line list")
         actual_role_set = set(self.label_name_list) & _ROLE_LABEL_SET
         if actual_role_set != {self.role_label}:
-            raise LinearContractError(
-                "Task execution role must match the exact single Linear role label"
-            )
+            raise LinearContractError("Task execution role must match the exact single Linear role label")
         if (
             isinstance(self.unresolved_blocker_count, bool)
             or not isinstance(self.unresolved_blocker_count, int)
             or self.unresolved_blocker_count < 0
         ):
-            raise LinearContractError(
-                "Task unresolved blocker count must be non-negative"
-            )
+            raise LinearContractError("Task unresolved blocker count must be non-negative")
         if not isinstance(self.issue_contract_complete, bool):
             raise LinearContractError("Task contract completeness must be boolean")
-        assignment_id_list = [
-            value for value in (self.assignee_id, self.delegate_id) if value
-        ]
+        assignment_id_list = [value for value in (self.assignee_id, self.delegate_id) if value]
         if len(assignment_id_list) != 1:
             raise LinearContractError("Task must have exactly one assignee or delegate")
         uuid_validate(assignment_id_list[0], label="Task execution assignment ID")
@@ -135,11 +118,7 @@ class TaskExecutionSnapshot:
             "unresolved_blocker_count",
             "issue_contract_complete",
         }
-        if (
-            not isinstance(payload, dict)
-            or set(payload) != expected
-            or payload["schema_version"] != 1
-        ):
+        if not isinstance(payload, dict) or set(payload) != expected or payload["schema_version"] != 1:
             raise LinearContractError("Task dispatch snapshot has another shape")
         if not isinstance(payload["label_name_list"], list):
             raise LinearContractError("Task dispatch labels must be a list")
@@ -157,9 +136,7 @@ class TaskExecutionSnapshot:
                 issue_contract_complete=payload["issue_contract_complete"],
             )
         except (TypeError, ValueError) as error:
-            raise LinearContractError(
-                "Task dispatch snapshot contains an unsupported value"
-            ) from error
+            raise LinearContractError("Task dispatch snapshot contains an unsupported value") from error
 
     def dispatch_blocker_list(self) -> list[str]:
         """Return concise deterministic reasons why a new attempt cannot run."""
@@ -235,8 +212,6 @@ class TransitionProof:
         }
         for field_name, value in boolean_by_field_name_map.items():
             if not isinstance(value, bool):
-                raise LinearContractError(
-                    f"Transition proof {field_name} must be boolean"
-                )
+                raise LinearContractError(f"Transition proof {field_name} must be boolean")
         if self.candidate_unchanged and self.candidate_mutated:
             raise LinearContractError("Candidate cannot be both unchanged and mutated")

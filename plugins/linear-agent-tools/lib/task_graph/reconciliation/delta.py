@@ -45,38 +45,25 @@ class TaskGraphDeltaReconciler:
         """Return only the next safe mutation phase for the approved delta."""
 
         self._project_identity_require(remote)
-        accepted_resource_key_set = TransactionDocumentReader(
-            remote.document_list
-        ).accepted_resource_key_set_get(excluded_title=self._view.import_document_title)
-        new_resource_key_set = {
-            resource.key
-            for node in self._delta.node_list
-            for resource in node.resource_list
-        }
+        accepted_resource_key_set = TransactionDocumentReader(remote.document_list).accepted_resource_key_set_get(
+            excluded_title=self._view.import_document_title
+        )
+        new_resource_key_set = {resource.key for node in self._delta.node_list for resource in node.resource_list}
         conflicting_resource_key_set = accepted_resource_key_set & new_resource_key_set
         if conflicting_resource_key_set:
             raise TaskGraphError(
-                "Graph delta repeats accepted resource keys: "
-                + ", ".join(sorted(conflicting_resource_key_set))
+                "Graph delta repeats accepted resource keys: " + ", ".join(sorted(conflicting_resource_key_set))
             )
         remote_issue_by_node_key_map = remote.issue_by_node_key_map()
-        missing_existing_key_set = set(self._delta.existing_node_key_list) - set(
-            remote_issue_by_node_key_map
-        )
+        missing_existing_key_set = set(self._delta.existing_node_key_list) - set(remote_issue_by_node_key_map)
         if missing_existing_key_set:
-            raise TaskGraphError(
-                f"Graph delta references absent existing nodes: {sorted(missing_existing_key_set)}"
-            )
+            raise TaskGraphError(f"Graph delta references absent existing nodes: {sorted(missing_existing_key_set)}")
         self._relation_scope_require(remote_issue_by_node_key_map)
         matching_document_list = [
-            item
-            for item in remote.document_list
-            if item.title == self._view.import_document_title
+            item for item in remote.document_list if item.title == self._view.import_document_title
         ]
         if len(matching_document_list) > 1:
-            raise TaskGraphError(
-                "Active Project contains duplicate receipts for the exact approved delta"
-            )
+            raise TaskGraphError("Active Project contains duplicate receipts for the exact approved delta")
         if not matching_document_list:
             return ReconciliationPlan(
                 PublicationPhase.DELTA_DOCUMENT,
@@ -94,19 +81,13 @@ class TaskGraphDeltaReconciler:
                 activation_ready=False,
             )
         if matching_document_list[0].content != self._view.import_document_content:
-            raise TaskGraphError(
-                "Active Project delta receipt differs from its exact approved content"
-            )
-        desired_issue_by_node_key_map = {
-            item.node_key: item for item in self._view.issue_list
-        }
+            raise TaskGraphError("Active Project delta receipt differs from its exact approved content")
+        desired_issue_by_node_key_map = {item.node_key: item for item in self._view.issue_list}
         issue_action_list: list[PublicationAction] = []
         for node_key, desired in desired_issue_by_node_key_map.items():
             current = remote_issue_by_node_key_map.get(node_key)
             if current is None:
-                issue_action_list.append(
-                    PublicationAction.from_issue_create(desired, project_id=remote.id)
-                )
+                issue_action_list.append(PublicationAction.from_issue_create(desired, project_id=remote.id))
             else:
                 current.delta_owned_fields_require(desired)
         if issue_action_list:
@@ -124,8 +105,7 @@ class TaskGraphDeltaReconciler:
                 active_new_endpoint_list = [
                     key
                     for key in [edge.blocker_node_key, edge.blocked_node_key]
-                    if key in new_key_set
-                    and remote_issue_by_node_key_map[key].status_name != "Backlog"
+                    if key in new_key_set and remote_issue_by_node_key_map[key].status_name != "Backlog"
                 ]
                 if active_new_endpoint_list:
                     raise TaskGraphError(
@@ -138,9 +118,7 @@ class TaskGraphDeltaReconciler:
                         stable_key=f"{edge.blocker_node_key}->{edge.blocked_node_key}",
                         payload={
                             "blocked_issue_id": blocked.id,
-                            "blocker_issue_id": remote_issue_by_node_key_map[
-                                edge.blocker_node_key
-                            ].id,
+                            "blocker_issue_id": remote_issue_by_node_key_map[edge.blocker_node_key].id,
                         },
                     )
                 )
@@ -157,8 +135,7 @@ class TaskGraphDeltaReconciler:
         existing_target_key_set = {
             edge.blocked_node_key
             for edge in self._delta.blocker_edge_list
-            if edge.blocker_node_key in new_node_key_set
-            and edge.blocked_node_key in existing_node_key_set
+            if edge.blocker_node_key in new_node_key_set and edge.blocked_node_key in existing_node_key_set
         }
         for node_key in sorted(existing_target_key_set):
             current = remote_issue_by_node_key_map[node_key]
@@ -169,10 +146,7 @@ class TaskGraphDeltaReconciler:
                 )
             if current.status_name == "Todo":
                 continue
-            if (
-                current.status_name == "In Progress"
-                and node_key in reverification_key_set
-            ):
+            if current.status_name == "In Progress" and node_key in reverification_key_set:
                 reverification_action_list.append(
                     PublicationAction(
                         kind="issue-status-update",
@@ -185,9 +159,7 @@ class TaskGraphDeltaReconciler:
                 f"Delta target {node_key} must already be Todo or explicitly return from In Progress to Todo"
             )
         if reverification_key_set - existing_target_key_set:
-            raise TaskGraphError(
-                "Graph delta reverification node has no new incoming blocker"
-            )
+            raise TaskGraphError("Graph delta reverification node has no new incoming blocker")
         if reverification_action_list:
             return ReconciliationPlan(
                 PublicationPhase.DELTA_REVERIFICATION,
@@ -204,31 +176,23 @@ class TaskGraphDeltaReconciler:
                 required_label_set.add("agent:codex")
             current_role_set = set(current.label_name_list) & _ROLE_VALUE_SET
             if current_role_set - {node.role.value}:
-                raise TaskGraphError(
-                    f"Delta issue {node_key} has a conflicting task role label"
-                )
+                raise TaskGraphError(f"Delta issue {node_key} has a conflicting task role label")
             if node.role is TaskRole.HUMAN and "agent:codex" in current.label_name_list:
-                raise TaskGraphError(
-                    f"Human delta issue {node_key} has the forbidden dispatch label"
-                )
+                raise TaskGraphError(f"Human delta issue {node_key} has the forbidden dispatch label")
             unexpected_label_set = set(current.label_name_list) - required_label_set
             if unexpected_label_set:
                 raise TaskGraphError(
                     f"Delta issue {node_key} contains labels outside its approved activation metadata: "
                     f"{sorted(unexpected_label_set)}"
                 )
-            missing_label_list = sorted(
-                required_label_set - set(current.label_name_list)
-            )
+            missing_label_list = sorted(required_label_set - set(current.label_name_list))
             if (
                 missing_label_list
                 or current.assignee_id != desired.assignee_id
                 or current.delegate_id != desired.delegate_id
             ):
                 if current.status_name != "Backlog":
-                    raise TaskGraphError(
-                        f"Activated delta issue {node_key} has incomplete activation metadata"
-                    )
+                    raise TaskGraphError(f"Activated delta issue {node_key} has incomplete activation metadata")
                 metadata_action_list.append(
                     PublicationAction(
                         kind="issue-activation-metadata-update",
@@ -259,9 +223,7 @@ class TaskGraphDeltaReconciler:
                     )
                 )
             elif current.status_name not in _KNOWN_ISSUE_STATUS_SET - {"Backlog"}:
-                raise TaskGraphError(
-                    f"Delta issue {node_key} has an unsupported lifecycle status"
-                )
+                raise TaskGraphError(f"Delta issue {node_key} has an unsupported lifecycle status")
         if activation_action_list:
             return ReconciliationPlan(
                 PublicationPhase.DELTA_ACTIVATION,
@@ -270,9 +232,7 @@ class TaskGraphDeltaReconciler:
             )
         return ReconciliationPlan(PublicationPhase.COMPLETE, [], activation_ready=True)
 
-    def _acyclic_require(
-        self, downstream_node_key_set_by_blocker_key_map: dict[str, set[str]]
-    ) -> None:
+    def _acyclic_require(self, downstream_node_key_set_by_blocker_key_map: dict[str, set[str]]) -> None:
         """Reject cycles in the exact relevant active-Project slice."""
 
         visiting_node_key_set: set[str] = set()
@@ -300,28 +260,18 @@ class TaskGraphDeltaReconciler:
             or remote.team_id != self._delta.team_id
             or remote.project_key != self._delta.project_key
         ):
-            raise TaskGraphError(
-                "Graph delta destination differs from its approved Project identity"
-            )
+            raise TaskGraphError("Graph delta destination differs from its approved Project identity")
         if remote.description != project_description_build(
             project_key=self._delta.project_key,
             source=self._delta.source,
         ):
-            raise TaskGraphError(
-                "Graph delta destination lost its immutable provider description"
-            )
+            raise TaskGraphError("Graph delta destination lost its immutable provider description")
         if remote.status_name != "In Progress":
-            raise TaskGraphError(
-                "Graph deltas apply only to an active In Progress Project"
-            )
+            raise TaskGraphError("Graph deltas apply only to an active In Progress Project")
         title = f"Linear task graph import {self._delta.source.fingerprint()}"
-        matching_document_list = [
-            item for item in remote.document_list if item.title == title
-        ]
+        matching_document_list = [item for item in remote.document_list if item.title == title]
         if len(matching_document_list) != 1:
-            raise TaskGraphError(
-                "Graph delta destination has no unique immutable import receipt"
-            )
+            raise TaskGraphError("Graph delta destination has no unique immutable import receipt")
         content = matching_document_list[0].content
         required_fragment_list = [
             "# Linear Agent Tools Import Plan\n",
@@ -333,13 +283,9 @@ class TaskGraphDeltaReconciler:
         if not content.startswith(required_fragment_list[0]) or any(
             fragment not in content for fragment in required_fragment_list[1:]
         ):
-            raise TaskGraphError(
-                "Graph delta destination import receipt lost its immutable source identity"
-            )
+            raise TaskGraphError("Graph delta destination import receipt lost its immutable source identity")
 
-    def _relation_scope_require(
-        self, remote_issue_by_node_key_map: dict[str, RemoteIssue]
-    ) -> None:
+    def _relation_scope_require(self, remote_issue_by_node_key_map: dict[str, RemoteIssue]) -> None:
         """Reject current relations involving a new node that the delta did not approve."""
 
         approved_edge_set = set(self._delta.blocker_edge_list)
@@ -349,9 +295,7 @@ class TaskGraphDeltaReconciler:
             if current is not None:
                 for blocker_key in current.blocker_key_list:
                     if (
-                        TaskBlockerEdge(
-                            blocker_node_key=blocker_key, blocked_node_key=node_key
-                        )
+                        TaskBlockerEdge(blocker_node_key=blocker_key, blocked_node_key=node_key)
                         not in approved_edge_set
                     ):
                         raise TaskGraphError(
@@ -360,55 +304,32 @@ class TaskGraphDeltaReconciler:
         for blocked in remote_issue_by_node_key_map.values():
             for blocker_key in set(blocked.blocker_key_list) & new_key_set:
                 if (
-                    TaskBlockerEdge(
-                        blocker_node_key=blocker_key, blocked_node_key=blocked.node_key
-                    )
+                    TaskBlockerEdge(blocker_node_key=blocker_key, blocked_node_key=blocked.node_key)
                     not in approved_edge_set
                 ):
                     raise TaskGraphError(
                         f"Delta node {blocker_key} has an unapproved current blocked relation to {blocked.node_key}"
                     )
 
-    def _topology_require(
-        self, remote_issue_by_node_key_map: dict[str, RemoteIssue]
-    ) -> None:
+    def _topology_require(self, remote_issue_by_node_key_map: dict[str, RemoteIssue]) -> None:
         """Prove additive edges retain review, acceptance and final cleanup gates."""
 
         new_node_by_key_map = {item.node_key: item for item in self._delta.node_list}
-        relevant_key_set = set(self._delta.existing_node_key_list) | set(
-            new_node_by_key_map
-        )
+        relevant_key_set = set(self._delta.existing_node_key_list) | set(new_node_by_key_map)
         role_by_node_key_map = {
-            key: remote_issue_by_node_key_map[key].role_get()
-            for key in self._delta.existing_node_key_list
+            key: remote_issue_by_node_key_map[key].role_get() for key in self._delta.existing_node_key_list
         }
-        role_by_node_key_map.update(
-            {key: node.role for key, node in new_node_by_key_map.items()}
-        )
-        cleanup_key_list = [
-            key
-            for key, role in role_by_node_key_map.items()
-            if role is TaskRole.CLEANUP
-        ]
+        role_by_node_key_map.update({key: node.role for key, node in new_node_by_key_map.items()})
+        cleanup_key_list = [key for key, role in role_by_node_key_map.items() if role is TaskRole.CLEANUP]
         if len(cleanup_key_list) != 1:
-            raise TaskGraphError(
-                "Graph delta must reference the one existing final cleanup node"
-            )
-        downstream_node_key_set_by_blocker_key_map = {
-            key: set() for key in relevant_key_set
-        }
+            raise TaskGraphError("Graph delta must reference the one existing final cleanup node")
+        downstream_node_key_set_by_blocker_key_map = {key: set() for key in relevant_key_set}
         for blocked_key in self._delta.existing_node_key_list:
-            for blocker_key in remote_issue_by_node_key_map[
-                blocked_key
-            ].blocker_key_list:
+            for blocker_key in remote_issue_by_node_key_map[blocked_key].blocker_key_list:
                 if blocker_key in relevant_key_set:
-                    downstream_node_key_set_by_blocker_key_map[blocker_key].add(
-                        blocked_key
-                    )
+                    downstream_node_key_set_by_blocker_key_map[blocker_key].add(blocked_key)
         for edge in self._delta.blocker_edge_list:
-            downstream_node_key_set_by_blocker_key_map[edge.blocker_node_key].add(
-                edge.blocked_node_key
-            )
+            downstream_node_key_set_by_blocker_key_map[edge.blocker_node_key].add(edge.blocked_node_key)
         self._acyclic_require(downstream_node_key_set_by_blocker_key_map)
         for node in self._delta.node_list:
             expected_role_list = {
@@ -428,28 +349,16 @@ class TaskGraphDeltaReconciler:
                 role_by_node_key_map=role_by_node_key_map,
             ):
                 expected = " -> ".join(item.value for item in expected_role_list)
-                raise TaskGraphError(
-                    f"Delta node {node.node_key} does not retain downstream path {expected}"
-                )
+                raise TaskGraphError(f"Delta node {node.node_key} does not retain downstream path {expected}")
             blocker_role_set = {
                 role_by_node_key_map[blocker_key]
                 for blocker_key in node.blocker_key_list
                 if blocker_key in role_by_node_key_map
             }
-            if (
-                node.role is TaskRole.REVIEW
-                and TaskRole.IMPLEMENTATION not in blocker_role_set
-            ):
-                raise TaskGraphError(
-                    f"Delta review {node.node_key} must be blocked by implementation work"
-                )
-            if (
-                node.role is TaskRole.ACCEPTANCE
-                and TaskRole.REVIEW not in blocker_role_set
-            ):
-                raise TaskGraphError(
-                    f"Delta acceptance {node.node_key} must be blocked by review work"
-                )
+            if node.role is TaskRole.REVIEW and TaskRole.IMPLEMENTATION not in blocker_role_set:
+                raise TaskGraphError(f"Delta review {node.node_key} must be blocked by implementation work")
+            if node.role is TaskRole.ACCEPTANCE and TaskRole.REVIEW not in blocker_role_set:
+                raise TaskGraphError(f"Delta acceptance {node.node_key} must be blocked by review work")
             for resource in node.resource_list:
                 if any(
                     not exist_path(

@@ -29,9 +29,7 @@ def _parser_get() -> argparse.ArgumentParser:
         The argument parser.
     """
 
-    parser = argparse.ArgumentParser(
-        description="Validate and plan one Linear Project task graph import."
-    )
+    parser = argparse.ArgumentParser(description="Validate and plan one Linear Project task graph import.")
     subparsers = parser.add_subparsers(dest="command", required=True)
     for command in (
         "validate",
@@ -100,9 +98,7 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser_get().parse_args(argv)
     try:
         if args.command.startswith("delta-"):
-            delta = TaskGraphDelta.from_payload(
-                _json_load(args.delta_input, label="Delta input")
-            )
+            delta = TaskGraphDelta.from_payload(_json_load(args.delta_input, label="Delta input"))
             if args.command == "delta-validate":
                 payload: dict[str, object] = {
                     "schema_version": 1,
@@ -115,14 +111,10 @@ def main(argv: list[str] | None = None) -> int:
             elif args.command == "delta-render":
                 payload = DeltaPublicationView.from_delta(delta).payload()
             else:
-                remote = RemoteProject.from_payload(
-                    _json_load(args.snapshot_input, label="Project snapshot")
-                )
+                remote = RemoteProject.from_payload(_json_load(args.snapshot_input, label="Project snapshot"))
                 payload = TaskGraphDeltaReconciler(delta).plan(remote).payload()
         else:
-            graph = TaskGraph.from_payload(
-                _json_load(args.graph_input, label="Graph input")
-            )
+            graph = TaskGraph.from_payload(_json_load(args.graph_input, label="Graph input"))
             if args.command == "validate":
                 payload = {
                     "schema_version": 1,
@@ -135,26 +127,16 @@ def main(argv: list[str] | None = None) -> int:
                 payload = GraphPublicationView.from_graph(graph).payload()
             elif args.command == "reconcile":
                 remote = (
-                    RemoteProject.from_payload(
-                        _json_load(args.snapshot_input, label="Project snapshot")
-                    )
+                    RemoteProject.from_payload(_json_load(args.snapshot_input, label="Project snapshot"))
                     if args.snapshot_input is not None
                     else None
                 )
                 payload = TaskGraphReconciler(graph).plan(remote).payload()
             elif args.command == "activation-confirm":
-                remote = RemoteProject.from_payload(
-                    _json_load(args.snapshot_input, label="Project snapshot")
-                )
-                payload = (
-                    TaskGraphReconciler(graph)
-                    .activation_readback_require(remote)
-                    .payload()
-                )
+                remote = RemoteProject.from_payload(_json_load(args.snapshot_input, label="Project snapshot"))
+                payload = TaskGraphReconciler(graph).activation_readback_require(remote).payload()
             else:
-                remote = RemoteProject.from_payload(
-                    _json_load(args.snapshot_input, label="Project snapshot")
-                )
+                remote = RemoteProject.from_payload(_json_load(args.snapshot_input, label="Project snapshot"))
                 payload = (
                     TaskGraphReconciler(graph)
                     .cancellation_plan(
@@ -166,9 +148,7 @@ def main(argv: list[str] | None = None) -> int:
     except (TaskGraphError, ValueError, TypeError) as error:
         print(str(error), file=sys.stderr)
         return 2
-    print(
-        json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
-    )
+    print(json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True))
     return 0
 
 
