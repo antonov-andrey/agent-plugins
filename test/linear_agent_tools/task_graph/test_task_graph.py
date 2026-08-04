@@ -163,6 +163,20 @@ def test_project_goals_source_requires_exact_commit_pinned_task_directory(
         TaskGraph.from_payload(payload)
 
 
+def test_publication_uses_linear_canonical_markdown_for_exact_readback() -> None:
+    """Provider content must already match the Markdown returned by Linear writes."""
+
+    graph = TaskGraph.from_payload(_graph_payload())
+    view = GraphPublicationView.from_graph(graph)
+
+    assert "\n\n* Project key:" in view.project_description
+    assert f"[{graph.source.canonical_url}](<{graph.source.canonical_url}>)" in view.project_description
+    assert "\n* Provider: `linear-agent-tools/v1`" in view.import_document_content
+    assert "\n* Node key: `implementation`" in next(
+        item.description for item in view.issue_list if item.node_key == "implementation"
+    )
+
+
 def _delta_payload(graph: TaskGraph) -> dict[str, object]:
     """Return one approved remediation delta payload.
 
@@ -312,7 +326,7 @@ def test_graph_validates_roles_and_renders_one_shared_issue_contract() -> None:
     assert len(view.issue_list) == 4
     assert view.project_key.endswith(graph.source_fingerprint())
     for issue in view.issue_list:
-        assert f"- Node key: `{issue.node_key}`" in issue.description
+        assert f"* Node key: `{issue.node_key}`" in issue.description
         assert "## Human Decision Boundary" in issue.description
         assert "## Evidence And Links" in issue.description
     assert '"node_list"' in view.import_document_content
@@ -332,7 +346,7 @@ def test_graph_supports_exact_delegate_assignment_without_null() -> None:
 
     assert issue.assignee_id == ""
     assert issue.delegate_id == ASSIGNEE_ID
-    assert f"- Execution assignment: `delegate` `{ASSIGNEE_ID}`" in issue.description
+    assert f"* Execution assignment: `delegate` `{ASSIGNEE_ID}`" in issue.description
 
     payload["node_list"][0]["assignee_id"] = ASSIGNEE_ID
     with pytest.raises(TaskGraphError, match="exactly one"):
@@ -688,8 +702,8 @@ def test_import_document_recovery_rejects_duplicates_and_foreign_collision() -> 
             (
                 "# Linear Agent Tools Import Plan",
                 "",
-                f"- Project key: `{view.project_key}`",
-                "- Interrupted provider publication",
+                f"* Project key: `{view.project_key}`",
+                "* Interrupted provider publication",
             )
         ),
     )

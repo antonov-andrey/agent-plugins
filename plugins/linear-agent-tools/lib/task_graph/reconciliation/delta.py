@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from task_graph.delta import TaskGraphDelta
 from task_graph.model import TaskBlockerEdge, TaskGraphError, TaskRole
-from task_graph.publication import DeltaPublicationView, IssuePublication, project_description_build
+from task_graph.publication import (
+    DeltaPublicationView,
+    IssuePublication,
+    linear_markdown_link,
+    project_description_build,
+)
 from task_graph.reconciliation.model import (
     PublicationAction,
     PublicationPhase,
@@ -349,10 +354,10 @@ class TaskGraphDeltaReconciler:
         content = matching_document_list[0].content
         required_fragment_list = [
             "# Linear Agent Tools Import Plan\n",
-            f"- Project key: `{self._delta.project_key}`",
-            f"- Source fingerprint: `{self._delta.source.fingerprint()}`",
-            f"- Source: {self._delta.source.canonical_url}",
-            f"- Revision: `{self._delta.source.revision}`",
+            f"* Project key: `{self._delta.project_key}`",
+            f"* Source fingerprint: `{self._delta.source.fingerprint()}`",
+            f"* Source: {linear_markdown_link(self._delta.source.canonical_url)}",
+            f"* Revision: `{self._delta.source.revision}`",
         ]
         if not content.startswith(required_fragment_list[0]) or any(
             fragment not in content for fragment in required_fragment_list[1:]

@@ -4,9 +4,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+from urllib.parse import urlsplit
 
 from task_graph.delta import TaskGraphDelta
 from task_graph.model import SourceIdentity, TaskBlockerEdge, TaskGraph, TaskNode
+
+
+def linear_markdown_link(value: str) -> str:
+    """Render one URL in the canonical Markdown form returned by Linear."""
+
+    parsed = urlsplit(value)
+    if parsed.scheme in {"http", "https"} and parsed.netloc:
+        return f"[{value}](<{value}>)"
+    return value
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,13 +64,13 @@ class IssuePublication:
             "",
             "## Provider Identity",
             "",
-            "- Provider: `linear-agent-tools/v1`",
-            f"- Source fingerprint: `{source_fingerprint}`",
-            f"- Node key: `{node.node_key}`",
-            f"- Full source key: `{source_fingerprint}:{node.node_key}`",
-            f"- Role: `{node.role}`",
-            f"- Delivery kind: `{node.delivery_kind}`",
-            f"- Execution assignment: `{assignment_kind}` `{assignment_id}`",
+            "* Provider: `linear-agent-tools/v1`",
+            f"* Source fingerprint: `{source_fingerprint}`",
+            f"* Node key: `{node.node_key}`",
+            f"* Full source key: `{source_fingerprint}:{node.node_key}`",
+            f"* Role: `{node.role}`",
+            f"* Delivery kind: `{node.delivery_kind}`",
+            f"* Execution assignment: `{assignment_kind}` `{assignment_id}`",
             *provider_identity_detail_list,
             "",
             "## Outcome",
@@ -69,17 +79,17 @@ class IssuePublication:
             "",
             "## Source",
             "",
-            f"- Canonical source: {source.canonical_url}",
-            f"- Revision: `{source.revision}`",
-            "- Relevant sections:",
-            *[f"  - {item}" for item in node.source_section_list],
+            f"* Canonical source: {linear_markdown_link(source.canonical_url)}",
+            f"* Revision: `{source.revision}`",
+            "* Relevant sections:",
+            *[f"  * {item}" for item in node.source_section_list],
             "",
             "## Scope",
             "",
-            *[f"- {item}" for item in node.scope_list],
+            *[f"* {item}" for item in node.scope_list],
         ]
         if node.non_goal_list:
-            section_list.extend(("", "## Non-goals", "", *[f"- {item}" for item in node.non_goal_list]))
+            section_list.extend(("", "## Non-goals", "", *[f"* {item}" for item in node.non_goal_list]))
         if node.repository_list:
             repository_heading = (
                 "## Ordered Merge Plan And Partial Recovery"
@@ -92,7 +102,7 @@ class IssuePublication:
                     repository_heading,
                     "",
                     *[
-                        f"- {index}. `{item.origin_url}` at `{item.base_branch}` using `{item.merge_method}`"
+                        f"* {index}. `{item.origin_url}` at `{item.base_branch}` using `{item.merge_method}`"
                         for index, item in enumerate(node.repository_list, 1)
                     ],
                 )
@@ -104,19 +114,19 @@ class IssuePublication:
                 "",
                 "## Required Contracts And Skills",
                 "",
-                *[f"- Contract: {item}" for item in node.required_contract_list],
-                *[f"- Skill: `{item}`" for item in node.required_skill_list],
+                *[f"* Contract: {linear_markdown_link(item)}" for item in node.required_contract_list],
+                *[f"* Skill: `{item}`" for item in node.required_skill_list],
                 "",
                 "## Blockers",
                 "",
-                *([f"- `{item}`" for item in node.blocker_key_list] or ["- None"]),
+                *([f"* `{item}`" for item in node.blocker_key_list] or ["* None"]),
             )
         )
         if node.resource_list:
             section_list.extend(("", "## Resource Ownership And Lifetime", ""))
             for resource in node.resource_list:
                 section_list.append(
-                    f"- `{resource.key}`: owner `{resource.owner_identity}`, lifetime `{resource.lifetime}`, "
+                    f"* `{resource.key}`: owner `{resource.owner_identity}`, lifetime `{resource.lifetime}`, "
                     f"repository `{resource.repository_url}`, "
                     f"cleanup argv `{json.dumps(resource.cleanup_argument_list, ensure_ascii=False)}`, "
                     f"downstream consumers `{json.dumps(resource.consumer_node_key_list, ensure_ascii=False)}`, "
@@ -125,7 +135,7 @@ class IssuePublication:
         section_list.extend(("", "## Verification Plan", ""))
         for verification in node.verification_list:
             section_list.append(
-                f"- `{verification.key}` ({verification.kind}): "
+                f"* `{verification.key}` ({verification.kind}): "
                 f"repository `{verification.repository_url}`, working directory `{verification.working_directory}`, "
                 f"`{json.dumps(verification.command_argument_list, ensure_ascii=False)}`; "
                 f"dependencies `{json.dumps(verification.dependency_path_list, ensure_ascii=False)}`; "
@@ -222,12 +232,12 @@ class GraphPublicationView:
                 "This visible document is the transaction envelope for the initial graph import.",
                 "Linear issues and blocker relations are the operational graph after activation.",
                 "",
-                "- Provider: `linear-agent-tools/v1`",
-                f"- Project key: `{graph.project_key()}`",
-                f"- Source fingerprint: `{source_fingerprint}`",
-                f"- Graph fingerprint: `{graph_fingerprint}`",
-                f"- Source: {graph.source.canonical_url}",
-                f"- Revision: `{graph.source.revision}`",
+                "* Provider: `linear-agent-tools/v1`",
+                f"* Project key: `{graph.project_key()}`",
+                f"* Source fingerprint: `{source_fingerprint}`",
+                f"* Graph fingerprint: `{graph_fingerprint}`",
+                f"* Source: {linear_markdown_link(graph.source.canonical_url)}",
+                f"* Revision: `{graph.source.revision}`",
                 "",
                 "```json",
                 normalized_json,
@@ -340,13 +350,13 @@ class DeltaPublicationView:
                 "This immutable document is the transaction receipt for one approved active-Project delta.",
                 "Linear issues and blocker relations remain the operational graph.",
                 "",
-                "- Provider: `linear-agent-tools/v1`",
-                f"- Project key: `{delta.project_key}`",
-                f"- Source fingerprint: `{source_fingerprint}`",
-                f"- Delta fingerprint: `{delta_fingerprint}`",
-                f"- Delta provenance kind: `{delta.provenance.kind}`",
-                f"- Delta provenance: {delta.provenance.canonical_url}",
-                f"- Delta revision: `{delta.provenance.revision}`",
+                "* Provider: `linear-agent-tools/v1`",
+                f"* Project key: `{delta.project_key}`",
+                f"* Source fingerprint: `{source_fingerprint}`",
+                f"* Delta fingerprint: `{delta_fingerprint}`",
+                f"* Delta provenance kind: `{delta.provenance.kind}`",
+                f"* Delta provenance: {linear_markdown_link(delta.provenance.canonical_url)}",
+                f"* Delta revision: `{delta.provenance.revision}`",
                 "",
                 "```json",
                 normalized_json,
@@ -355,11 +365,11 @@ class DeltaPublicationView:
             )
         )
         provider_identity_detail_list = [
-            f"- Delta fingerprint: `{delta_fingerprint}`",
-            f"- Delta provenance kind: `{delta.provenance.kind}`",
-            f"- Delta provenance: {delta.provenance.canonical_url}",
-            f"- Delta revision: `{delta.provenance.revision}`",
-            f"- Approved decision: {delta.provenance.decision}",
+            f"* Delta fingerprint: `{delta_fingerprint}`",
+            f"* Delta provenance kind: `{delta.provenance.kind}`",
+            f"* Delta provenance: {linear_markdown_link(delta.provenance.canonical_url)}",
+            f"* Delta revision: `{delta.provenance.revision}`",
+            f"* Approved decision: {delta.provenance.decision}",
         ]
         return cls(
             project_id=delta.project_id,
@@ -413,9 +423,10 @@ def project_description_build(*, project_key: str, source: SourceIdentity) -> st
             "<!-- linear-agent-tools-project:v1 -->",
             "",
             "This Project is owned by one source-independent Linear task graph.",
-            f"- Project key: `{project_key}`",
-            f"- Source fingerprint: `{source.fingerprint()}`",
-            f"- Canonical source: {source.canonical_url}",
-            f"- Source revision: `{source.revision}`",
+            "",
+            f"* Project key: `{project_key}`",
+            f"* Source fingerprint: `{source.fingerprint()}`",
+            f"* Canonical source: {linear_markdown_link(source.canonical_url)}",
+            f"* Source revision: `{source.revision}`",
         )
     )

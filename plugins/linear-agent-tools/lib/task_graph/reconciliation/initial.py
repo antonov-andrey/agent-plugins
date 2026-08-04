@@ -196,7 +196,7 @@ class TaskGraphReconciler:
         current_document = matching_document_list[0]
         if current_document.content != self._view.import_document_content:
             provider_marker = "# Linear Agent Tools Import Plan\n"
-            project_key_marker = f"- Project key: `{self._view.project_key}`"
+            project_key_marker = f"* Project key: `{self._view.project_key}`"
             if (
                 not current_document.content.startswith(provider_marker)
                 or project_key_marker not in current_document.content
