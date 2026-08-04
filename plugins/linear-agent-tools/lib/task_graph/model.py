@@ -10,7 +10,7 @@ import json
 import re
 from urllib.parse import unquote, urlsplit
 
-from task_graph.topology import exist_ordered_role_path, exist_path
+from task_graph.topology import cycle_node_key_get, exist_ordered_role_path, exist_path
 
 _KEY_PATTERN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 _UUID_PATTERN = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
@@ -713,7 +713,12 @@ class TaskGraph:
                     )
                 if node.node_key in resource.consumer_node_key_list:
                     raise TaskGraphError(f"Resource {resource.key} repeats its implicit owner as a consumer")
-        self._acyclic_require(node_by_key_map)
+        blocker_node_key_set_by_node_key_map = {
+            node_key: set(node.blocker_key_list) for node_key, node in node_by_key_map.items()
+        }
+        cycle_node_key = cycle_node_key_get(blocker_node_key_set_by_node_key_map)
+        if cycle_node_key:
+            raise TaskGraphError(f"Task graph contains a blocker cycle at {cycle_node_key}")
         review_list = [node for node in self.node_list if node.role is TaskRole.REVIEW]
         acceptance_list = [node for node in self.node_list if node.role is TaskRole.ACCEPTANCE]
         cleanup_list = [node for node in self.node_list if node.role is TaskRole.CLEANUP]
@@ -771,26 +776,6 @@ class TaskGraph:
                     for consumer_key in resource.consumer_node_key_list
                 ):
                     raise TaskGraphError(f"Resource {resource.key} consumer must be downstream from its owning task")
-
-    def _acyclic_require(self, node_by_key_map: dict[str, TaskNode]) -> None:
-        """Reject a dependency cycle in this exact graph."""
-
-        visiting_node_key_set: set[str] = set()
-        visited_node_key_set: set[str] = set()
-
-        def visit(key: str) -> None:
-            if key in visiting_node_key_set:
-                raise TaskGraphError(f"Task graph contains a blocker cycle at {key}")
-            if key in visited_node_key_set:
-                return
-            visiting_node_key_set.add(key)
-            for blocker in node_by_key_map[key].blocker_key_list:
-                visit(blocker)
-            visiting_node_key_set.remove(key)
-            visited_node_key_set.add(key)
-
-        for node in sorted(self.node_list, key=lambda item: item.node_key):
-            visit(node.node_key)
 
     def source_fingerprint(self) -> str:
         """Return the exact immutable source fingerprint.

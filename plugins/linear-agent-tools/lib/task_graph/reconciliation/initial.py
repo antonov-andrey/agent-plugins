@@ -122,7 +122,6 @@ class TaskGraphReconciler:
         remote_issue_by_node_key_map = remote.issue_by_node_key_map()
         issue_plan = self._issue_reconciliation_plan(
             remote,
-            desired_issue_by_node_key_map=desired_issue_by_node_key_map,
             remote_issue_by_node_key_map=remote_issue_by_node_key_map,
         )
         if issue_plan is not None:
@@ -143,7 +142,6 @@ class TaskGraphReconciler:
             return metadata_plan
 
         activation_plan = self._node_activation_plan(
-            desired_issue_by_node_key_map=desired_issue_by_node_key_map,
             remote_issue_by_node_key_map=remote_issue_by_node_key_map,
         )
         if activation_plan is not None:
@@ -226,11 +224,11 @@ class TaskGraphReconciler:
         self,
         remote: RemoteProject,
         *,
-        desired_issue_by_node_key_map: dict[str, IssuePublication],
         remote_issue_by_node_key_map: dict[str, RemoteIssue],
     ) -> ReconciliationPlan | None:
         """Create every missing staged issue and reject foreign issue keys."""
 
+        desired_issue_by_node_key_map = {item.node_key: item for item in self._view.issue_list}
         unknown_key_set = set(remote_issue_by_node_key_map) - set(desired_issue_by_node_key_map)
         if unknown_key_set:
             raise TaskGraphError(f"Planned Project contains unknown issue keys: {sorted(unknown_key_set)}")
@@ -346,11 +344,11 @@ class TaskGraphReconciler:
     def _node_activation_plan(
         self,
         *,
-        desired_issue_by_node_key_map: dict[str, IssuePublication],
         remote_issue_by_node_key_map: dict[str, RemoteIssue],
     ) -> ReconciliationPlan | None:
         """Move fully wired nodes from Backlog to the dispatchable Todo state."""
 
+        desired_issue_by_node_key_map = {item.node_key: item for item in self._view.issue_list}
         activation_action_list: list[PublicationAction] = []
         for desired in desired_issue_by_node_key_map.values():
             current = remote_issue_by_node_key_map[desired.node_key]

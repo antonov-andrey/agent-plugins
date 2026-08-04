@@ -22,7 +22,7 @@ from task_cleanup.model import (
     CleanupRequest,
     TaskCleanupError,
 )
-from task_cleanup.reconciliation import TaskCleanupReconciler
+from task_cleanup.reconciliation import CleanupState, TaskCleanupReconciler
 from task_cleanup.resource import ResourceCleaner
 from task_graph.model import ResourceDeclaration, ResourceLifetime
 from task_workspace.lock import IssueAttemptLock, IssueWorkspaceLock
@@ -1229,8 +1229,12 @@ def test_cleanup_requires_complete_exact_pull_request_set(tmp_path: Path) -> Non
             WorkspaceConfig(tmp_path.resolve()),
             github=GitHub(),  # type: ignore[arg-type]
         )._pull_request_contract_require(
-            request,
-            [Repository()],  # type: ignore[list-item]
+            CleanupState(
+                request=request,
+                repository_by_origin_url_map={
+                    request.repository_list[0].origin_url: Repository(),  # type: ignore[dict-item]
+                },
+            )
         )
 
 

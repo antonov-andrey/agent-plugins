@@ -63,6 +63,37 @@ class LinearHttpResponse:
     headers: Message
 
 
+def _data_extract(
+    payload: object,
+    *,
+    headers: Message,
+    repeat_safe: bool,
+    attempt_index: int,
+) -> dict[str, object]:
+    """Extract one complete GraphQL data object or classify its errors."""
+
+    if not isinstance(payload, dict):
+        raise LinearResponseError("Linear GraphQL response root must be an object")
+    error_list = payload.get("errors", [])
+    if error_list:
+        if not isinstance(error_list, list) or any(not isinstance(item, dict) for item in error_list):
+            raise LinearResponseError("Linear GraphQL errors have another shape")
+        code_set = {
+            item.get("extensions", {}).get("code") for item in error_list if isinstance(item.get("extensions"), dict)
+        }
+        if code_set & {"AUTHENTICATION_ERROR", "FORBIDDEN", "UNAUTHENTICATED"}:
+            raise LinearAuthenticationError("Linear rejected the supplied credential or scope")
+        if code_set & {"RATELIMITED", "RATE_LIMITED"} and repeat_safe:
+            raise TransientLinearFailure(rate_limited=True, headers=headers)
+        raise LinearResponseError(
+            f"Linear GraphQL rejected operation at attempt {attempt_index + 1} with typed provider errors"
+        )
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        raise LinearResponseError("Linear GraphQL response has no data object")
+    return data
+
+
 class LinearGraphQLTransport:
     """Execute exact typed operations against the official Linear endpoint."""
 
@@ -150,7 +181,7 @@ class LinearGraphQLTransport:
         for attempt_index in range(attempt_limit):
             try:
                 response = self._request(encoded)
-                return self._data_extract(
+                return _data_extract(
                     response.payload,
                     headers=response.headers,
                     repeat_safe=repeat_safe,
@@ -208,49 +239,6 @@ class LinearGraphQLTransport:
             return LinearHttpResponse(payload=json_load_strict(raw), headers=headers)
         except JsonContractError:
             raise LinearResponseError("Linear GraphQL returned malformed JSON") from None
-
-    def _data_extract(
-        self,
-        payload: object,
-        *,
-        headers: Message,
-        repeat_safe: bool,
-        attempt_index: int,
-    ) -> dict[str, object]:
-        """Extract a complete GraphQL data object or classify its errors.
-
-        Args:
-            payload: Decoded GraphQL response.
-            headers: Response headers containing optional provider retry guidance.
-            repeat_safe: Whether the operation may repeat.
-            attempt_index: Zero-based attempt index.
-
-        Returns:
-            The GraphQL data object.
-        """
-
-        if not isinstance(payload, dict):
-            raise LinearResponseError("Linear GraphQL response root must be an object")
-        error_list = payload.get("errors", [])
-        if error_list:
-            if not isinstance(error_list, list) or any(not isinstance(item, dict) for item in error_list):
-                raise LinearResponseError("Linear GraphQL errors have another shape")
-            code_set = {
-                item.get("extensions", {}).get("code")
-                for item in error_list
-                if isinstance(item.get("extensions"), dict)
-            }
-            if code_set & {"AUTHENTICATION_ERROR", "FORBIDDEN", "UNAUTHENTICATED"}:
-                raise LinearAuthenticationError("Linear rejected the supplied credential or scope")
-            if code_set & {"RATELIMITED", "RATE_LIMITED"} and repeat_safe:
-                raise TransientLinearFailure(rate_limited=True, headers=headers)
-            raise LinearResponseError(
-                f"Linear GraphQL rejected operation at attempt {attempt_index + 1} with typed provider errors"
-            )
-        data = payload.get("data")
-        if not isinstance(data, dict):
-            raise LinearResponseError("Linear GraphQL response has no data object")
-        return data
 
     def _delay_get(self, attempt_index: int, *, headers: Message) -> float:
         """Return one bounded retry delay using provider guidance when valid.

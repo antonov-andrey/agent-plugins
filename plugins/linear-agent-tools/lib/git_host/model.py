@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import re
+from urllib.parse import urlsplit
 
 _REPOSITORY_PATTERN = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 _COMMIT_PATTERN = re.compile(r"[0-9a-f]{40,64}")
@@ -43,6 +44,25 @@ class RepositoryIdentity:
 
         if _REPOSITORY_PATTERN.fullmatch(self.value) is None:
             raise GitHubContractError("GitHub repository must use exact owner/name form")
+
+    @classmethod
+    def from_origin_identity(cls, origin_identity: str) -> "RepositoryIdentity | None":
+        """Parse one canonical Git origin when it belongs to GitHub.
+
+        Args:
+            origin_identity: Canonical comparison identity of a Git remote.
+
+        Returns:
+            Exact GitHub repository identity, or absence for another host.
+        """
+
+        parsed = urlsplit(origin_identity)
+        if parsed.hostname != "github.com":
+            return None
+        path_part_list = [item for item in parsed.path.split("/") if item]
+        if len(path_part_list) != 2:
+            raise GitHubContractError("GitHub origin does not identify exact owner/repository")
+        return cls("/".join(path_part_list))
 
 
 @dataclass(frozen=True, slots=True)

@@ -153,6 +153,44 @@ class StatusDefinition:
             status_list.append(cls(**item))
         return status_list
 
+    @classmethod
+    def list_from_graphql_connection(cls, connection: dict[str, object]) -> list["StatusDefinition"]:
+        """Parse one strict Linear status connection page.
+
+        Args:
+            connection: GraphQL connection object.
+
+        Returns:
+            Typed status definitions.
+        """
+
+        node_list = connection.get("nodes")
+        if not isinstance(node_list, list) or any(not isinstance(item, dict) for item in node_list):
+            raise LinearContractError("Linear status connection nodes have another shape")
+        status_list: list[StatusDefinition] = []
+        for item in node_list:
+            required_text_by_name_map: dict[str, str] = {}
+            for name in ("id", "name", "type", "color"):
+                value = item.get(name)
+                if not isinstance(value, str) or not value:
+                    raise LinearContractError(f"Linear field {name} must be non-empty text")
+                required_text_by_name_map[name] = value
+            description = item.get("description")
+            position = item.get("position")
+            status_list.append(
+                cls(
+                    id=required_text_by_name_map["id"],
+                    name=required_text_by_name_map["name"],
+                    category=required_text_by_name_map["type"],
+                    color=required_text_by_name_map["color"],
+                    description=description if isinstance(description, str) else "",
+                    position=(
+                        position if isinstance(position, (int, float)) and not isinstance(position, bool) else 0.0
+                    ),
+                )
+            )
+        return status_list
+
 
 @dataclass(frozen=True, slots=True)
 class LinearLabel:

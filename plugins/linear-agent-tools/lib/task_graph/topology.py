@@ -16,6 +16,33 @@ class RolePathState:
     role_index: int
 
 
+def cycle_node_key_get(downstream_node_key_set_by_blocker_key_map: dict[str, set[str]]) -> str:
+    """Return one deterministic node participating in a directed cycle, or empty."""
+
+    visiting_node_key_set: set[str] = set()
+    visited_node_key_set: set[str] = set()
+
+    def visit(node_key: str) -> str:
+        if node_key in visiting_node_key_set:
+            return node_key
+        if node_key in visited_node_key_set:
+            return ""
+        visiting_node_key_set.add(node_key)
+        for downstream_node_key in sorted(downstream_node_key_set_by_blocker_key_map[node_key]):
+            cycle_node_key = visit(downstream_node_key)
+            if cycle_node_key:
+                return cycle_node_key
+        visiting_node_key_set.remove(node_key)
+        visited_node_key_set.add(node_key)
+        return ""
+
+    for node_key in sorted(downstream_node_key_set_by_blocker_key_map):
+        cycle_node_key = visit(node_key)
+        if cycle_node_key:
+            return cycle_node_key
+    return ""
+
+
 def exist_ordered_role_path(
     start_node_key: str,
     expected_role_list: list[RoleValue],

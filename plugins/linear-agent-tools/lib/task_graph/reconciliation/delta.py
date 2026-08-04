@@ -13,7 +13,7 @@ from task_graph.reconciliation.model import (
     RemoteProject,
 )
 from task_graph.transaction_document import TransactionDocumentReader
-from task_graph.topology import exist_ordered_role_path, exist_path
+from task_graph.topology import cycle_node_key_get, exist_ordered_role_path, exist_path
 
 _KNOWN_ISSUE_STATUS_SET = frozenset(
     {
@@ -57,7 +57,6 @@ class TaskGraphDeltaReconciler:
         desired_issue_by_node_key_map = {item.node_key: item for item in self._view.issue_list}
         issue_plan = self._issue_reconciliation_plan(
             remote,
-            desired_issue_by_node_key_map=desired_issue_by_node_key_map,
             remote_issue_by_node_key_map=remote_issue_by_node_key_map,
         )
         if issue_plan is not None:
@@ -80,7 +79,6 @@ class TaskGraphDeltaReconciler:
             return metadata_plan
 
         activation_plan = self._activation_plan(
-            desired_issue_by_node_key_map=desired_issue_by_node_key_map,
             remote_issue_by_node_key_map=remote_issue_by_node_key_map,
         )
         if activation_plan is not None:
@@ -139,11 +137,11 @@ class TaskGraphDeltaReconciler:
         self,
         remote: RemoteProject,
         *,
-        desired_issue_by_node_key_map: dict[str, IssuePublication],
         remote_issue_by_node_key_map: dict[str, RemoteIssue],
     ) -> ReconciliationPlan | None:
         """Create missing Backlog issues and reject stable-key collisions."""
 
+        desired_issue_by_node_key_map = {item.node_key: item for item in self._view.issue_list}
         issue_action_list: list[PublicationAction] = []
         for node_key, desired in desired_issue_by_node_key_map.items():
             current = remote_issue_by_node_key_map.get(node_key)
@@ -302,11 +300,11 @@ class TaskGraphDeltaReconciler:
     def _activation_plan(
         self,
         *,
-        desired_issue_by_node_key_map: dict[str, IssuePublication],
         remote_issue_by_node_key_map: dict[str, RemoteIssue],
     ) -> ReconciliationPlan | None:
         """Move fully wired new issues to Todo without altering progressed nodes."""
 
+        desired_issue_by_node_key_map = {item.node_key: item for item in self._view.issue_list}
         activation_action_list: list[PublicationAction] = []
         for node_key in sorted(desired_issue_by_node_key_map):
             current = remote_issue_by_node_key_map[node_key]
@@ -327,26 +325,6 @@ class TaskGraphDeltaReconciler:
                 activation_ready=True,
             )
         return None
-
-    def _acyclic_require(self, downstream_node_key_set_by_blocker_key_map: dict[str, set[str]]) -> None:
-        """Reject cycles in the exact relevant active-Project slice."""
-
-        visiting_node_key_set: set[str] = set()
-        visited_node_key_set: set[str] = set()
-
-        def visit(key: str) -> None:
-            if key in visiting_node_key_set:
-                raise TaskGraphError(f"Graph delta creates a blocker cycle at {key}")
-            if key in visited_node_key_set:
-                return
-            visiting_node_key_set.add(key)
-            for downstream_node_key in downstream_node_key_set_by_blocker_key_map[key]:
-                visit(downstream_node_key)
-            visiting_node_key_set.remove(key)
-            visited_node_key_set.add(key)
-
-        for node_key in sorted(downstream_node_key_set_by_blocker_key_map):
-            visit(node_key)
 
     def _project_identity_require(self, remote: RemoteProject) -> None:
         """Require one exact active destination and immutable source identity."""
@@ -426,7 +404,9 @@ class TaskGraphDeltaReconciler:
                     downstream_node_key_set_by_blocker_key_map[blocker_key].add(blocked_key)
         for edge in self._delta.blocker_edge_list:
             downstream_node_key_set_by_blocker_key_map[edge.blocker_node_key].add(edge.blocked_node_key)
-        self._acyclic_require(downstream_node_key_set_by_blocker_key_map)
+        cycle_node_key = cycle_node_key_get(downstream_node_key_set_by_blocker_key_map)
+        if cycle_node_key:
+            raise TaskGraphError(f"Graph delta creates a blocker cycle at {cycle_node_key}")
         for node in self._delta.node_list:
             expected_role_list = {
                 TaskRole.IMPLEMENTATION: [

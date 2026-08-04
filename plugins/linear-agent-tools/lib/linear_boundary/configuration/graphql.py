@@ -167,7 +167,7 @@ class LinearWorkflowConfigurationGraphQL:
                 raise LinearContractError("Linear destination changed while workflow configuration was read")
             destination = current_destination
             connection = _object_get(team, "states")
-            workflow_status_list.extend(self._status_list_get(connection))
+            workflow_status_list.extend(StatusDefinition.list_from_graphql_connection(connection))
             after = _next_cursor_get(connection)
             if after is None:
                 break
@@ -186,7 +186,7 @@ class LinearWorkflowConfigurationGraphQL:
             if workspace_id != destination.workspace_id:
                 raise LinearContractError("Linear workspace changed while Project statuses were read")
             connection = _object_get(data, "projectStatuses")
-            project_status_list.extend(self._status_list_get(connection))
+            project_status_list.extend(StatusDefinition.list_from_graphql_connection(connection))
             after = _next_cursor_get(connection)
             if after is None:
                 break
@@ -367,37 +367,6 @@ class LinearWorkflowConfigurationGraphQL:
         result = _object_get(data, result_key)
         if result.get("success") is not True:
             raise LinearTransportError("Linear mutation did not confirm success")
-
-    def _status_list_get(self, connection: dict[str, object]) -> list[StatusDefinition]:
-        """Parse one status connection page.
-
-        Args:
-            connection: GraphQL connection object.
-
-        Returns:
-            Parsed status definitions.
-        """
-
-        node_list = connection.get("nodes")
-        if not isinstance(node_list, list) or any(not isinstance(item, dict) for item in node_list):
-            raise LinearContractError("Linear status connection nodes have another shape")
-        result: list[StatusDefinition] = []
-        for item in node_list:
-            description = item.get("description")
-            position = item.get("position")
-            result.append(
-                StatusDefinition(
-                    id=_text_get(item, "id"),
-                    name=_text_get(item, "name"),
-                    category=_text_get(item, "type"),
-                    color=_text_get(item, "color"),
-                    description=description if isinstance(description, str) else "",
-                    position=(
-                        position if isinstance(position, (int, float)) and not isinstance(position, bool) else 0.0
-                    ),
-                )
-            )
-        return result
 
 
 def _object_get(payload: dict[str, object], name: str) -> dict[str, object]:

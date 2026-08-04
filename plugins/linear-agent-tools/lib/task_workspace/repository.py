@@ -587,6 +587,25 @@ class WorkspaceRepository:
         if container.resolve(strict=True) != container:
             raise TaskWorkspaceError("Task worktree container resolves outside its canonical repository path")
 
+    def task_absence_require(self, issue_identifier: str) -> None:
+        """Treat complete task absence as success and reject orphaned state.
+
+        Args:
+            issue_identifier: Exact Linear issue identifier.
+        """
+
+        issue_identifier = issue_identifier_validate(issue_identifier)
+        branch_name = f"linear/{issue_identifier.lower()}"
+        self.task_container_require(create=False)
+        task_root = self.main_root / ".worktree" / issue_identifier.lower()
+        if (
+            task_root.exists()
+            or self.worktree_branch_get(task_root) is not None
+            or self.exist_local_branch(branch_name)
+            or self.exist_remote_branch(branch_name)
+        ):
+            raise TaskWorkspaceError("Task resources exist without private ownership proof")
+
     def _branch_name_by_worktree_path_map_get(self) -> dict[Path, str]:
         """Return registered branch by worktree path.
 
