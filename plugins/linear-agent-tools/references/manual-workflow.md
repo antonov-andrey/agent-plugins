@@ -48,7 +48,7 @@ Project statuses are `Planned`, `In Progress`, `Completed` and `Canceled`. `Plan
 - The first read-only configuration plan may discover the workspace UUID from the authenticated destination. Its approved fingerprint binds workspace, viewer and team; every apply requires those same exact IDs.
 - The plan allocates Linear-required UUID v4 identities for every missing issue or Project status before approval. Apply and recovery reuse those exact plan identities; a fresh provider read may reduce the remaining delta but never replaces its create IDs.
 - Configuration apply proves and creates the credential-gated status delta before the official MCP creates approved missing labels. An absent admin credential therefore cannot leave a labels-only partial configuration; any later provider failure is resumed by the same destination-bound reconciliation plan.
-- Review and acceptance never hide Product fixes. Findings create remediation implementation blockers and force a fresh complete pass after correction.
+- Review and acceptance never hide Product fixes. They own the finding and no-fix boundary; `task-graph-create` owns the approved active-Project delta that creates remediation implementation blockers and forces a fresh complete pass after correction.
 
 Before every status mutation, save a complete transient task snapshot and run `lib/linear_boundary/tool/task.py dispatch` or `transition`. Exit `0` proves the requested boundary, exit `1` means a well-formed task is currently non-dispatchable, and exit `2` means the input contract is malformed. Delete the transient input after the provider read-back.
 

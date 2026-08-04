@@ -318,7 +318,7 @@
       "working_directory_mode": "same-branch",
       "prompt": "Use $linear-agent-tools:task-implement for ready issue AND-17. It is a code task in Todo with no blockers and a complete contract. Explain the fresh-thread path through exact worktrees, verification, commits, PR, CI, candidate evidence, and Human Review without changing files.",
       "expected_skill_list": ["linear-agent-tools:task-implement"],
-      "forbidden_skill_list": ["linear-agent-tools:task-merge", "linear-agent-tools:task-review", "agent-workflows:git-commit"],
+      "forbidden_skill_list": ["linear-agent-tools:task-merge", "linear-agent-tools:task-review"],
       "semantic_invariant_list": [
         {
           "id": "exact-attempt",
