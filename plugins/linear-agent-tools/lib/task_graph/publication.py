@@ -6,10 +6,10 @@ from dataclasses import dataclass
 import json
 
 from task_graph.delta import TaskGraphDelta
-from task_graph.model import SourceIdentity, TaskGraph, TaskNode
+from task_graph.model import SourceIdentity, TaskBlockerEdge, TaskGraph, TaskNode
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class IssuePublication:
     """Contain the exact provider-owned fields for one staged Linear issue."""
 
@@ -17,12 +17,17 @@ class IssuePublication:
     title: str
     description: str
     status_name: str
-    label_name_list: tuple[str, ...]
+    label_name_list: list[str]
     assignee_id: str
     delegate_id: str
 
+    def __post_init__(self) -> None:
+        """Detach the provider-owned label list from caller mutation."""
 
-@dataclass(frozen=True, slots=True)
+        self.label_name_list = list(self.label_name_list)
+
+
+@dataclass(slots=True)
 class GraphPublicationView:
     """Contain complete visible content for one Project import transaction."""
 
@@ -35,8 +40,14 @@ class GraphPublicationView:
     graph_fingerprint: str
     import_document_title: str
     import_document_content: str
-    issue_list: tuple[IssuePublication, ...]
-    blocker_edge_list: tuple[tuple[str, str], ...]
+    issue_list: list[IssuePublication]
+    blocker_edge_list: list[TaskBlockerEdge]
+
+    def __post_init__(self) -> None:
+        """Detach rendered collections from caller mutation."""
+
+        self.issue_list = list(self.issue_list)
+        self.blocker_edge_list = list(self.blocker_edge_list)
 
     def payload(self) -> dict[str, object]:
         """Return one canonical JSON-ready rendered view.
@@ -47,7 +58,7 @@ class GraphPublicationView:
 
         return {
             "schema_version": 1,
-            "blocker_edge_list": [list(item) for item in self.blocker_edge_list],
+            "blocker_edge_list": [item.payload() for item in self.blocker_edge_list],
             "graph_fingerprint": self.graph_fingerprint,
             "import_document_content": self.import_document_content,
             "import_document_title": self.import_document_title,
@@ -61,7 +72,7 @@ class GraphPublicationView:
         }
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class DeltaPublicationView:
     """Contain provider-owned fields for one approved active-Project delta."""
 
@@ -71,9 +82,16 @@ class DeltaPublicationView:
     delta_fingerprint: str
     import_document_title: str
     import_document_content: str
-    issue_list: tuple[IssuePublication, ...]
-    blocker_edge_list: tuple[tuple[str, str], ...]
-    reverification_node_key_list: tuple[str, ...]
+    issue_list: list[IssuePublication]
+    blocker_edge_list: list[TaskBlockerEdge]
+    reverification_node_key_list: list[str]
+
+    def __post_init__(self) -> None:
+        """Detach rendered collections from caller mutation."""
+
+        self.issue_list = list(self.issue_list)
+        self.blocker_edge_list = list(self.blocker_edge_list)
+        self.reverification_node_key_list = list(self.reverification_node_key_list)
 
     def payload(self) -> dict[str, object]:
         """Return one canonical JSON-ready rendered delta.
@@ -84,7 +102,7 @@ class DeltaPublicationView:
 
         return {
             "schema_version": 1,
-            "blocker_edge_list": [list(item) for item in self.blocker_edge_list],
+            "blocker_edge_list": [item.payload() for item in self.blocker_edge_list],
             "delta_fingerprint": self.delta_fingerprint,
             "import_document_content": self.import_document_content,
             "import_document_title": self.import_document_title,
@@ -135,7 +153,7 @@ def graph_publication_view_build(graph: TaskGraph) -> GraphPublicationView:
             "",
         )
     )
-    issue_list = tuple(
+    issue_list = [
         IssuePublication(
             node_key=node.node_key,
             title=node.title,
@@ -143,16 +161,22 @@ def graph_publication_view_build(graph: TaskGraph) -> GraphPublicationView:
                 source=graph.source,
                 source_fingerprint=source_fingerprint,
                 node=node,
+                provider_identity_detail_list=[],
             ),
             status_name="Backlog",
-            label_name_list=(node.role,),
+            label_name_list=[node.role],
             assignee_id=node.assignee_id,
             delegate_id=node.delegate_id,
         )
         for node in sorted(graph.node_list, key=lambda item: item.node_key)
-    )
-    edge_list = tuple(
-        sorted((blocker_key, node.node_key) for node in graph.node_list for blocker_key in node.blocker_key_list)
+    ]
+    blocker_edge_list = sorted(
+        [
+            TaskBlockerEdge(blocker_node_key=blocker_key, blocked_node_key=node.node_key)
+            for node in graph.node_list
+            for blocker_key in node.blocker_key_list
+        ],
+        key=lambda item: (item.blocker_node_key, item.blocked_node_key),
     )
     return GraphPublicationView(
         project_key=graph.project_key(),
@@ -165,7 +189,7 @@ def graph_publication_view_build(graph: TaskGraph) -> GraphPublicationView:
         import_document_title=f"Linear task graph import {source_fingerprint}",
         import_document_content=document,
         issue_list=issue_list,
-        blocker_edge_list=edge_list,
+        blocker_edge_list=blocker_edge_list,
     )
 
 
@@ -224,13 +248,13 @@ def delta_publication_view_build(delta: TaskGraphDelta) -> DeltaPublicationView:
             "",
         )
     )
-    detail_list = (
+    provider_identity_detail_list = [
         f"- Delta fingerprint: `{delta_fingerprint}`",
         f"- Delta provenance kind: `{delta.provenance.kind}`",
         f"- Delta provenance: {delta.provenance.canonical_url}",
         f"- Delta revision: `{delta.provenance.revision}`",
         f"- Approved decision: {delta.provenance.decision}",
-    )
+    ]
     return DeltaPublicationView(
         project_id=delta.project_id,
         project_key=delta.project_key,
@@ -238,7 +262,7 @@ def delta_publication_view_build(delta: TaskGraphDelta) -> DeltaPublicationView:
         delta_fingerprint=delta_fingerprint,
         import_document_title=f"Linear task graph delta {delta_fingerprint}",
         import_document_content=document,
-        issue_list=tuple(
+        issue_list=[
             IssuePublication(
                 node_key=node.node_key,
                 title=node.title,
@@ -246,17 +270,20 @@ def delta_publication_view_build(delta: TaskGraphDelta) -> DeltaPublicationView:
                     source=delta.source,
                     source_fingerprint=source_fingerprint,
                     node=node,
-                    provider_identity_detail_list=detail_list,
+                    provider_identity_detail_list=provider_identity_detail_list,
                 ),
                 status_name="Backlog",
-                label_name_list=(node.role,),
+                label_name_list=[node.role],
                 assignee_id=node.assignee_id,
                 delegate_id=node.delegate_id,
             )
             for node in sorted(delta.node_list, key=lambda item: item.node_key)
+        ],
+        blocker_edge_list=sorted(
+            delta.blocker_edge_list,
+            key=lambda item: (item.blocker_node_key, item.blocked_node_key),
         ),
-        blocker_edge_list=tuple(sorted(delta.blocker_edge_list)),
-        reverification_node_key_list=tuple(sorted(delta.reverification_node_key_list)),
+        reverification_node_key_list=sorted(delta.reverification_node_key_list),
     )
 
 
@@ -265,7 +292,7 @@ def issue_description_build(
     source: SourceIdentity,
     source_fingerprint: str,
     node: TaskNode,
-    provider_identity_detail_list: tuple[str, ...] = (),
+    provider_identity_detail_list: list[str],
 ) -> str:
     """Render one issue from the shared role-conditional template.
 

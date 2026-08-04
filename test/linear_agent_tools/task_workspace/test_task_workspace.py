@@ -313,8 +313,8 @@ def test_direct_workspace_and_cleanup_models_require_immutable_typed_collections
         lifetime=ResourceLifetime.ISSUE,
         owner_identity="AND-121:environment",
         repository_url=str(remote),
-        cleanup_argument_list=("python", "manage.py", "destroy"),
-        consumer_node_key_list=(),
+        cleanup_argument_list=["python", "manage.py", "destroy"],
+        consumer_node_key_list=[],
     )
     with pytest.raises(TaskCleanupError, match="independently approved declaration fingerprint"):
         CleanupRequest(
@@ -330,8 +330,8 @@ def test_direct_workspace_and_cleanup_models_require_immutable_typed_collections
         lifetime=ResourceLifetime.ISSUE,
         owner_identity="AND-121:review-environment",
         repository_url=str(remote),
-        cleanup_argument_list=("python", "manage.py", "destroy"),
-        consumer_node_key_list=("review",),
+        cleanup_argument_list=["python", "manage.py", "destroy"],
+        consumer_node_key_list=["review"],
     )
     with pytest.raises(TaskCleanupError, match="consumer terminal"):
         CleanupRequest(
@@ -964,8 +964,8 @@ def test_cleanup_rejects_changed_resource_declaration_after_durable_success(
         lifetime=ResourceLifetime.ISSUE,
         owner_identity="AND-120:environment",
         repository_url=str(remote),
-        cleanup_argument_list=("python", "manage.py", "destroy", "--issue", "AND-120"),
-        consumer_node_key_list=(),
+        cleanup_argument_list=["python", "manage.py", "destroy", "--issue", "AND-120"],
+        consumer_node_key_list=[],
     )
     cleanup_request = CleanupRequest(
         issue_identifier="AND-120",
@@ -1001,8 +1001,8 @@ def test_cleanup_rejects_changed_resource_declaration_after_durable_success(
         lifetime=resource.lifetime,
         owner_identity="AND-120:another-environment",
         repository_url=resource.repository_url,
-        cleanup_argument_list=("python", "manage.py", "destroy", "--issue", "another"),
-        consumer_node_key_list=(),
+        cleanup_argument_list=["python", "manage.py", "destroy", "--issue", "another"],
+        consumer_node_key_list=[],
     )
     with pytest.raises(TaskCleanupError, match="declaration changed"):
         TaskCleanupReconciler(config, resources=ResourceCleaner(runner)).cleanup(
@@ -1046,8 +1046,8 @@ def test_cleanup_never_executes_project_command_through_replaced_worktree_symlin
         lifetime=ResourceLifetime.ISSUE,
         owner_identity="AND-121:environment",
         repository_url=str(remote),
-        cleanup_argument_list=("python", "manage.py", "destroy"),
-        consumer_node_key_list=(),
+        cleanup_argument_list=["python", "manage.py", "destroy"],
+        consumer_node_key_list=[],
     )
     cleanup_request = CleanupRequest(
         issue_identifier="AND-121",
@@ -1125,7 +1125,7 @@ def test_project_final_cleanup_requires_acceptance_other_terminal_nodes_and_no_r
         lifetime=ResourceLifetime.PROJECT,
         owner_identity="AND-project:environment",
         repository_url=str(remote),
-        cleanup_argument_list=(
+        cleanup_argument_list=[
             "python",
             "manage.py",
             "destroy",
@@ -1135,8 +1135,8 @@ def test_project_final_cleanup_requires_acceptance_other_terminal_nodes_and_no_r
             "{task_branch}",
             "--task-root",
             "{task_root}",
-        ),
-        consumer_node_key_list=(),
+        ],
+        consumer_node_key_list=[],
     )
     authority = CleanupAuthority(
         scope="project-final",
@@ -1285,14 +1285,14 @@ def test_attempt_cleanup_repeats_idempotent_resource_without_removing_workspace(
         lifetime=ResourceLifetime.ATTEMPT,
         owner_identity="AND-114:attempt-one",
         repository_url=str(remote),
-        cleanup_argument_list=(
+        cleanup_argument_list=[
             "python",
             "manage.py",
             "destroy",
             "--attempt",
             "attempt-one",
-        ),
-        consumer_node_key_list=(),
+        ],
+        consumer_node_key_list=[],
     )
     cleanup_request = CleanupRequest(
         issue_identifier="AND-114",
@@ -1335,14 +1335,14 @@ def test_resource_cleaner_executes_direct_argv_without_shell() -> None:
         lifetime=ResourceLifetime.ISSUE,
         owner_identity="AND-108:environment",
         repository_url="git@github.com:antonov-andrey/example.git",
-        cleanup_argument_list=(
+        cleanup_argument_list=[
             "python",
             "manage.py",
             "destroy",
             "--task",
             "{linear_issue_identifier}",
-        ),
-        consumer_node_key_list=(),
+        ],
+        consumer_node_key_list=[],
     )
     ResourceCleaner(runner).cleanup(
         resource,
