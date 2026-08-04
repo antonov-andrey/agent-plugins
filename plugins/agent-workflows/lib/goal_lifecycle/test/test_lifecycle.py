@@ -23,9 +23,6 @@ import goal_lifecycle.task.state as task_state_module
 import goal_lifecycle.resource as resource_module
 from goal_lifecycle.checkpoint.model import CheckpointDocument
 from goal_lifecycle.checkpoint.publisher import GoalCheckpointPublisher
-from goal_lifecycle.bootstrap_exception import (
-    coordination_bootstrap_exception_path_get,
-)
 from goal_lifecycle.cleanup_manifest import (
     bootstrap_manifest_load,
     cleanup_binding_receipt_path_get,
@@ -1779,8 +1776,6 @@ def test_merge_acceptance_resumes_after_durable_accepted_phase(
         "worktrees",
         "remote-refs",
         "local-refs",
-        "bootstrap-carriers",
-        "coordination-bootstrap-retire",
         "registry-update",
         "complete",
     ],
@@ -2819,92 +2814,3 @@ def test_coordination_replays_disjoint_remote_update_and_rejects_same_path_confl
             message="Conflicting tested task",
             relative_payload_by_path_map={f"{PREFIX}/goal.md": b"tested goal\n"},
         )
-
-
-def test_self_hosting_bootstrap_exception_is_removed_with_carriers_only_by_goal_delete(
-    tmp_path: Path,
-) -> None:
-    """Verify that self hosting bootstrap exception is removed with carriers only by goal delete.
-
-    Args:
-        tmp_path: Temporary directory path.
-    """
-
-    goals, _ = _repository_create(tmp_path, "project-goals")
-    product, _ = _repository_create(tmp_path, "product-one")
-    worktree_container = goals / ".worktree"
-    bootstrap_task_root = worktree_container / PREFIX
-    exclude_path = Path(_git(goals, "rev-parse", "--path-format=absolute", "--git-common-dir")) / "info" / "exclude"
-    exclude_path.write_text(exclude_path.read_text(encoding="utf-8") + "\n/.worktree/\n", encoding="utf-8")
-    _git(goals, "worktree", "add", "-b", PREFIX, str(bootstrap_task_root), "main")
-
-    carrier_root = tmp_path / "legacy-owner" / ".spec"
-    carrier_root.mkdir(parents=True)
-    specification_carrier = carrier_root / f"{PREFIX}-spec.md"
-    goal_carrier = carrier_root / f"{PREFIX}-goal.md"
-    specification_carrier.write_text("# Bootstrap spec\n", encoding="utf-8")
-    goal_carrier.write_text("# Bootstrap goal\n", encoding="utf-8")
-    (bootstrap_task_root / "AGENTS.md").write_text("# Goals instructions\n", encoding="utf-8")
-    (bootstrap_task_root / "DESIGN.md").write_text("# Goals design\n", encoding="utf-8")
-    task_directory = bootstrap_task_root / PREFIX
-    task_directory.mkdir()
-    (task_directory / "spec.md").write_bytes(specification_carrier.read_bytes())
-    (task_directory / "goal.md").write_bytes(goal_carrier.read_bytes())
-    (task_directory / "checkpoint.yaml").write_text(
-        "schema_version: 2\naccepted_checkpoint_id: ''\ntask_resource_state: retained\ncheckpoint_list: []\n",
-        encoding="utf-8",
-    )
-    _git(bootstrap_task_root, "add", "AGENTS.md", "DESIGN.md", PREFIX)
-    _git(bootstrap_task_root, "commit", "-m", "Bootstrap project goals")
-    _git(bootstrap_task_root, "push", "-u", "origin", PREFIX)
-    bootstrap_commit = _git(bootstrap_task_root, "rev-parse", "HEAD")
-    _git(goals, "push", "origin", f"{bootstrap_commit}:refs/heads/main")
-    _git(goals, "merge", "--ff-only", bootstrap_commit)
-    bootstrap_marker_path = coordination_bootstrap_exception_path_get(goals)
-    bootstrap_marker_path.parent.mkdir(parents=True, exist_ok=True)
-    bootstrap_marker_path.write_text(
-        json.dumps(
-            {
-                "schema_version": 2,
-                "common_prefix": PREFIX,
-                "goal_carrier_path": str(goal_carrier),
-                "specification_carrier_path": str(specification_carrier),
-            },
-            separators=(",", ":"),
-            sort_keys=True,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-
-    workflow = GoalWorktreeWorkflow(goals)
-    prepared = workflow.prepare(common_prefix=PREFIX, repository_root_list=[product])
-    task_root = Path(prepared["task_root_list"][0])
-    workflow.contracts_authored(common_prefix=PREFIX)
-    workflow.seal(common_prefix=PREFIX)
-    workflow.activate(common_prefix=PREFIX)
-    _task_commit_push(task_root)
-    checkpoint_id, _ = GoalCheckpointPublisher(goals).publish(
-        common_prefix=PREFIX,
-        project_root_list=[task_root],
-    )
-    merge = GoalMergeWorkflow(goals)
-    merge.merge(common_prefix=PREFIX, checkpoint_id=checkpoint_id)
-    merge.accept(common_prefix=PREFIX, checkpoint_id=checkpoint_id)
-
-    _git(goals, "worktree", "remove", "--force", "--force", str(bootstrap_task_root))
-    _git(goals, "push", "origin", f":refs/heads/{PREFIX}")
-    _git(goals, "branch", "-D", PREFIX)
-
-    result = GoalDeletionWorkflow(goals).delete(common_prefix=PREFIX)
-
-    assert result["phase"] == "complete"
-    assert not specification_carrier.exists()
-    assert not goal_carrier.exists()
-    assert not bootstrap_task_root.exists()
-    assert not worktree_container.exists()
-    assert not coordination_bootstrap_exception_path_get(goals).exists()
-    document = CheckpointDocument.from_payload(yaml_document_load(goals / PREFIX / "checkpoint.yaml"))
-    assert document.task_resource_state == "deleted"
-    assert _git_returncode(goals, "show-ref", "--verify", f"refs/heads/{PREFIX}") != 0
-    assert "/.worktree/" not in exclude_path.read_text(encoding="utf-8").splitlines()

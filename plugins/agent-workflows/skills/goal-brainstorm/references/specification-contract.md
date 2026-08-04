@@ -37,7 +37,7 @@ If user intent conflicts with a current owner, change that owner after approval 
 
 ## Coordination Repository
 
-The canonical coordination repository is `project-goals`. The caller supplies its exact local root, the skill shows that root before authoring, and the provider binds its Git common directory and origin identity; it must not select a nearby repository by name or directory scan. Project repositories create no new `.spec/`, task-artifact link, or task-artifact copy. Pre-cutover ignored `.spec` files are inert historical artifacts: this workflow neither reads nor deletes them without the separate explicit authorization owned by their legacy task lifecycle.
+The canonical coordination repository is `project-goals`. The caller supplies its exact local root, the skill shows that root before authoring, and the provider binds its Git common directory and origin identity; it must not select a nearby repository by name or directory scan. Project repositories create no `.spec/`, task-artifact link, or task-artifact copy.
 
 The `project-goals` repository uses only its canonical `main` checkout. It has no task branch, linked worktree, or bootstrap manifest. After each approved task-contract authoring phase, the applicable command commits and pushes only the exact task-directory delta through one workspace-global serialized direct-main transaction. The transaction starts from clean synchronized `main`, uses compare-and-swap fast-forward publication, and returns the checkout to clean synchronized state before releasing its lock. No approved revision may remain only in a working tree or side branch.
 

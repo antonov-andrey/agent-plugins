@@ -24,7 +24,7 @@ This reference is the canonical reusable owner of task identity, central coordin
 
 `project-goals/DESIGN.md` owns tracked task-directory, checkpoint, merge, and deletion semantics. `agent-workflows:goal-checkpoint`, `agent-workflows:goal-merge`, and `agent-workflows:goal-delete` own those operations. `goal-brainstorm` must not expose a cleanup, checkpoint, or merge command and must not infer authorization for them.
 
-Applicable project `AGENTS.md` files own concrete project paths. Each participating implementation repository binds `.worktree/` and root `worktree-bootstrap.yaml` to this contract without copying reusable semantics. The `project-goals` repository uses only canonical `main` and has neither path. The current workflow creates no project-local `.spec/` or task-artifact link and ignores inert pre-cutover files instead of treating them as identity or deleting them.
+Applicable project `AGENTS.md` files own concrete project paths. Each participating implementation repository binds `.worktree/` and root `worktree-bootstrap.yaml` to this contract without copying reusable semantics. The `project-goals` repository uses only canonical `main` and has neither path. Project-local `.spec/` and task-artifact links are forbidden.
 
 The workflow may commit and push only its exact approved coordination path set directly to `project-goals/main`. A task-artifact operation owns only its exact task directory; an approved `project-goals` stable-owner operation owns only its explicitly declared stable paths. The workflow never commits, pushes, merges, or deletes implementation-project source.
 

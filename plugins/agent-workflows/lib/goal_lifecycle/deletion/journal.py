@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from goal_lifecycle.bootstrap_exception import CoordinationBootstrapException
 from goal_lifecycle.error import GoalLifecycleError
 from goal_lifecycle.task.model import TaskState
 
@@ -14,8 +13,6 @@ DELETION_PHASE_SET = frozenset(
         "worktrees",
         "remote-refs",
         "local-refs",
-        "bootstrap-carriers",
-        "coordination-bootstrap-retire",
         "registry-update",
         "complete",
     }
@@ -37,14 +34,13 @@ def deletion_journal_validate(journal: dict[str, object], *, state: TaskState) -
             "common_prefix",
             "operation_identity",
             "phase",
-            "coordination_bootstrap_exception",
             "project_list",
             "repository_index",
             "submodule_list",
             "task_resource_state",
             "task_state",
         }
-        or journal.get("schema_version") != 3
+        or journal.get("schema_version") != 4
         or journal.get("common_prefix") != state.common_prefix
         or journal.get("task_resource_state") not in {"deleted", "retained"}
     ):
@@ -112,22 +108,3 @@ def deletion_journal_validate(journal: dict[str, object], *, state: TaskState) -
         raise GoalLifecycleError("Goal deletion journal task-owned submodule snapshot is malformed")
     if TaskState.from_payload(journal.get("task_state")) != state:
         raise GoalLifecycleError("Goal deletion journal task-state snapshot differs")
-    bootstrap_exception = deletion_bootstrap_exception_get(journal)
-    if bootstrap_exception is not None and bootstrap_exception.common_prefix != state.common_prefix:
-        raise GoalLifecycleError("Goal deletion bootstrap exception belongs to another task")
-
-
-def deletion_bootstrap_exception_get(
-    journal: dict[str, object],
-) -> CoordinationBootstrapException | None:
-    """Return the optional bootstrap exception bound into one deletion journal.
-
-    Args:
-        journal: Journal.
-
-    Returns:
-        The optional bootstrap exception bound into one deletion journal.
-    """
-
-    payload = journal.get("coordination_bootstrap_exception")
-    return None if payload is None else CoordinationBootstrapException.from_payload(payload)

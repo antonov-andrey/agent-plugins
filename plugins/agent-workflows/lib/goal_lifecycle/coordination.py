@@ -10,10 +10,6 @@ from pathlib import Path, PurePosixPath
 import secrets
 from typing import Mapping
 
-from goal_lifecycle.bootstrap_exception import (
-    coordination_bootstrap_exception_optional_get,
-    coordination_bootstrap_exception_validate,
-)
 from goal_lifecycle.error import GoalLifecycleError
 from goal_lifecycle.git import Git
 from goal_lifecycle.io import atomic_json_write, directory_sync, json_object_load
@@ -129,14 +125,10 @@ class CoordinationRepository:
             for item in worktree_payload.split(b"\0")
             if item.startswith(b"worktree ")
         }
-        bootstrap_exception = coordination_bootstrap_exception_optional_get(self.root, git=self._git)
-        if bootstrap_exception is None:
-            if worktree_root_set != {self.root}:
-                raise GoalLifecycleError("project-goals must have exactly one canonical main worktree")
-            if (self.root / ".worktree").exists():
-                raise GoalLifecycleError("project-goals may not contain a worktree container")
-        else:
-            coordination_bootstrap_exception_validate(self.root, bootstrap_exception, git=self._git)
+        if worktree_root_set != {self.root}:
+            raise GoalLifecycleError("project-goals must have exactly one canonical main worktree")
+        if (self.root / ".worktree").exists():
+            raise GoalLifecycleError("project-goals may not contain a worktree container")
         if (self.root / "worktree-bootstrap.yaml").exists() or (self.root / "worktree-bootstrap.toml").exists():
             raise GoalLifecycleError("project-goals may not contain a bootstrap manifest")
         self._git.clean_require(self.root)

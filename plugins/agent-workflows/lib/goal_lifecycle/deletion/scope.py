@@ -4,11 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from goal_lifecycle.bootstrap_exception import (
-    CoordinationBootstrapException,
-    coordination_bootstrap_exception_optional_get,
-    coordination_bootstrap_exception_validate,
-)
 from goal_lifecycle.coordination import CoordinationRepository
 from goal_lifecycle.error import GoalLifecycleError
 from goal_lifecycle.git import Git
@@ -28,40 +23,6 @@ class GoalDeletionScopeResolver:
 
         self._coordination = coordination
         self._git = git
-
-    def bootstrap_exception_payload_get(self, state: TaskState) -> dict[str, object] | None:
-        """Return the optional task-owned self-hosting cleanup marker.
-
-        Args:
-            state: Exact runtime state.
-
-        Returns:
-            The optional marker payload.
-        """
-
-        exception = self.bootstrap_exception_get(state.common_prefix)
-        return None if exception is None else exception.payload_get()
-
-    def bootstrap_exception_get(
-        self,
-        common_prefix: str,
-    ) -> CoordinationBootstrapException | None:
-        """Return the exact task's optional self-hosting marker.
-
-        Args:
-            common_prefix: Exact task common prefix.
-
-        Returns:
-            Matching marker or none.
-        """
-
-        exception = coordination_bootstrap_exception_optional_get(self._coordination.root, git=self._git)
-        if exception is None:
-            return None
-        if exception.common_prefix != common_prefix:
-            return None
-        coordination_bootstrap_exception_validate(self._coordination.root, exception, git=self._git)
-        return exception
 
     def project_list_get(self, state: TaskState) -> list[dict[str, str]]:
         """Return every exact top-level task repository identity.

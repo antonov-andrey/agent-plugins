@@ -6,12 +6,8 @@ from pathlib import Path
 import secrets
 
 from goal_lifecycle.coordination import CoordinationRepository
-from goal_lifecycle.deletion.bootstrap import CoordinationBootstrapRetirer
 from goal_lifecycle.deletion.external import GoalExternalResourceCleanup
-from goal_lifecycle.deletion.journal import (
-    deletion_bootstrap_exception_get,
-    deletion_journal_validate,
-)
+from goal_lifecycle.deletion.journal import deletion_journal_validate
 from goal_lifecycle.deletion.repository import GoalTaskRepositoryRetirer
 from goal_lifecycle.deletion.registry import GoalDeletionRegistry
 from goal_lifecycle.deletion.scope import GoalDeletionScopeResolver
@@ -38,13 +34,8 @@ class GoalDeletionWorkflow:
         self._coordination = CoordinationRepository(goals_repository, git=self._git)
         self._scope = GoalDeletionScopeResolver(self._coordination, git=self._git)
         self._external_cleanup = GoalExternalResourceCleanup(git=self._git)
-        self._repository_retirer = GoalTaskRepositoryRetirer(self._coordination, git=self._git)
+        self._repository_retirer = GoalTaskRepositoryRetirer(git=self._git)
         self._registry = GoalDeletionRegistry(self._coordination, git=self._git)
-        self._bootstrap_retirer = CoordinationBootstrapRetirer(
-            self._coordination,
-            git=self._git,
-            repository_retirer=self._repository_retirer,
-        )
         self._private_state_retirer = GoalDeletionPrivateStateRetirer(self._coordination, git=self._git)
 
     def delete(self, *, common_prefix: str) -> dict[str, object]:
@@ -69,13 +60,10 @@ class GoalDeletionWorkflow:
                 if not state_path.exists():
                     document = self._registry.document_get(common_prefix)
                     if document.task_resource_state == "deleted":
-                        bootstrap_exception = self._scope.bootstrap_exception_get(common_prefix)
-                        self._bootstrap_retirer.carriers_retire(bootstrap_exception)
-                        self._bootstrap_retirer.exception_retire(bootstrap_exception)
                         self._private_state_retirer.merge_owner_retire(common_prefix)
                         self._private_state_retirer.coordination_task_state_retire(common_prefix)
                         return {
-                            "schema_version": 3,
+                            "schema_version": 4,
                             "common_prefix": common_prefix,
                             "phase": "complete",
                             "task_resource_state": "deleted",
@@ -83,11 +71,10 @@ class GoalDeletionWorkflow:
                     raise GoalLifecycleError("Task cleanup scope is unavailable")
                 state = TaskState.from_payload(json_object_load(state_path, label="task private state"))
                 journal = {
-                    "schema_version": 3,
+                    "schema_version": 4,
                     "common_prefix": common_prefix,
                     "operation_identity": secrets.token_hex(16),
                     "phase": "external-resources",
-                    "coordination_bootstrap_exception": self._scope.bootstrap_exception_payload_get(state),
                     "project_list": self._scope.project_list_get(state),
                     "submodule_list": self._scope.submodule_list_get(state),
                     "repository_index": 0,
@@ -108,19 +95,14 @@ class GoalDeletionWorkflow:
         """
 
         phase = journal["phase"]
-        bootstrap_exception = deletion_bootstrap_exception_get(journal)
         if phase == "external-resources":
             self._external_cleanup.resume(state=state, journal=journal, journal_path=journal_path)
             phase = _journal_phase_update(journal, journal_path=journal_path, phase="worktrees")
         if phase == "worktrees":
-            self._repository_retirer.worktrees_retire(
-                bootstrap_exception=bootstrap_exception,
-                journal=journal,
-            )
+            self._repository_retirer.worktrees_retire(journal=journal)
             phase = _journal_phase_update(journal, journal_path=journal_path, phase="remote-refs")
         if phase == "remote-refs":
             self._repository_retirer.remote_refs_retire(
-                bootstrap_exception=bootstrap_exception,
                 journal=journal,
                 journal_path=journal_path,
                 state=state,
@@ -128,21 +110,10 @@ class GoalDeletionWorkflow:
             phase = _journal_phase_update(journal, journal_path=journal_path, phase="local-refs")
         if phase == "local-refs":
             self._repository_retirer.local_refs_retire(
-                bootstrap_exception=bootstrap_exception,
                 journal=journal,
                 journal_path=journal_path,
                 state=state,
             )
-            phase = _journal_phase_update(journal, journal_path=journal_path, phase="bootstrap-carriers")
-        if phase == "bootstrap-carriers":
-            self._bootstrap_retirer.carriers_retire(bootstrap_exception)
-            phase = _journal_phase_update(
-                journal,
-                journal_path=journal_path,
-                phase="coordination-bootstrap-retire",
-            )
-        if phase == "coordination-bootstrap-retire":
-            self._bootstrap_retirer.exception_retire(bootstrap_exception)
             phase = _journal_phase_update(journal, journal_path=journal_path, phase="registry-update")
         if phase == "registry-update":
             self._registry.deleted_mark(state.common_prefix)
