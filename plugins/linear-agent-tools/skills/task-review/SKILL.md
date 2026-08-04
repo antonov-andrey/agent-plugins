@@ -7,6 +7,8 @@ description: Perform one independent fresh-thread semantic review issue after it
 
 Review one `task:review` / `evidence` issue in a fresh thread. Read `../../references/manual-workflow.md`, the entire issue graph slice, exact published source revision, current repository/PR/merged state and external evidence.
 
+Every preview and handoff MUST name the attempt boundary precisely: acquire the exact issue process-lifetime host-local guard before dispatch or any mutation, hold the same guard through nested attempt cleanup and final provider read-back so no second local attempt overlaps it, and release it only by process exit after that boundary.
+
 1. Set `LINEAR_AGENT_WORKSPACE_ROOT` to the explicit user workspace. Start `../../lib/task_workspace/tool/attempt.py hold --issue-identifier <exact-identifier>` as the exact issue process-lifetime host-local guard, require its initial `status=held` JSON, and keep that same process alive from before dispatch or mutation through nested attempt cleanup and final Linear provider read-back. A nonzero exit means another local attempt owns the issue; do not continue. Process exit after final read-back releases the kernel lock.
 2. Save a complete fresh Linear snapshot and run `../../lib/linear_boundary/tool/task.py dispatch`. Require exit `0`, Project `In Progress`, issue `Todo`, `In Progress` or `Rework`, exact `task:review` role and `evidence` delivery. Validate every requested status mutation with the same tool's `transition` operation and reread Linear.
 3. Use read-only candidate commits, PR refs, merged main commits and environment identities. Do not create a fake review branch.

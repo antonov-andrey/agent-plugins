@@ -21,4 +21,6 @@ Read `../../references/manual-workflow.md` and `../../lib/task_graph/issue-contr
 
 Every preview or handoff response MUST distinguish the fully paginated team issue statuses, workspace Project statuses and labels. State explicitly that the no-echo in-memory GraphQL transaction creates only still-missing approved status definitions before any other global mutation, and that supported label creation belongs to official Linear MCP operations performed afterward. Final success requires an exact destination read-back with no remaining delta.
 
+Also state explicitly that `workflow-configure` never creates or mutates a task Project or issue graph. It only configures the destination and proves GitHub integration; graph publication belongs to `task-graph-create`.
+
 The script's required `--labels-input` and apply-only `--approved-plan-input` are transient complete JSON artifacts produced during the current configuration transaction. They are not credentials or durable configuration files. Delete them after the final read-back.
