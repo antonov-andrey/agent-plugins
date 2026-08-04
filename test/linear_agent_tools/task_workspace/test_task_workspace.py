@@ -21,10 +21,7 @@ from task_cleanup.model import (
     CleanupRequest,
     TaskCleanupError,
 )
-from task_cleanup.reconciliation import (
-    TaskCleanupReconciler,
-    _pull_request_contract_require,
-)
+from task_cleanup.reconciliation import TaskCleanupReconciler
 from task_cleanup.resource import ResourceCleaner
 from task_graph.model import ResourceDeclaration, ResourceLifetime
 from task_workspace.lock import IssueAttemptLock, IssueWorkspaceLock
@@ -1273,7 +1270,7 @@ def test_cleanup_never_executes_project_command_through_replaced_worktree_symlin
     assert list(outside.iterdir()) == []
 
 
-def test_cleanup_requires_complete_exact_pull_request_set() -> None:
+def test_cleanup_requires_complete_exact_pull_request_set(tmp_path: Path) -> None:
     """An omitted exact task PR cannot be hidden by an empty cleanup request list."""
 
     class Repository:
@@ -1305,7 +1302,13 @@ def test_cleanup_requires_complete_exact_pull_request_set() -> None:
     )
 
     with pytest.raises(TaskCleanupError, match="omits or substitutes"):
-        _pull_request_contract_require(request, [Repository()], github=GitHub())
+        TaskCleanupReconciler(
+            WorkspaceConfig(tmp_path.resolve()),
+            github=GitHub(),  # type: ignore[arg-type]
+        )._pull_request_contract_require(
+            request,
+            [Repository()],  # type: ignore[list-item]
+        )
 
 
 def test_project_final_cleanup_requires_acceptance_other_terminal_nodes_and_no_remediation(
