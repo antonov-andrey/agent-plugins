@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from task_graph.model import TaskGraph, TaskGraphError, TaskRole
-from task_graph.publication import GraphPublicationView
+from task_graph.publication import GraphPublicationView, IssuePublication
 from task_graph.reconciliation.model import (
     PublicationAction,
     PublicationPhase,
     ReconciliationPlan,
+    RemoteIssue,
     RemoteProject,
 )
 
@@ -101,23 +102,7 @@ class TaskGraphReconciler:
         """Return the next safe activation-barrier phase after exact read-back."""
 
         if remote is None:
-            return ReconciliationPlan(
-                phase=PublicationPhase.PROJECT,
-                action_list=[
-                    PublicationAction(
-                        kind="project-create",
-                        stable_key=self._view.project_key,
-                        payload={
-                            "name": self._view.project_name,
-                            "description": self._view.project_description,
-                            "project_key": self._view.project_key,
-                            "status_name": "Planned",
-                            "team_id": self._graph.team_id,
-                        },
-                    )
-                ],
-                activation_ready=False,
-            )
+            return self._project_creation_plan()
         remote.initial_identity_require(self._view)
         if remote.status_name in {"In Progress", "Completed", "Canceled"}:
             remote.import_document_exact_require(self._view)
@@ -128,6 +113,67 @@ class TaskGraphReconciler:
             )
         if remote.status_name != "Planned":
             raise TaskGraphError("Graph import Project must remain Planned until its activation transition")
+
+        document_plan = self._document_reconciliation_plan(remote)
+        if document_plan is not None:
+            return document_plan
+
+        desired_issue_by_node_key_map = {item.node_key: item for item in self._view.issue_list}
+        remote_issue_by_node_key_map = remote.issue_by_node_key_map()
+        issue_plan = self._issue_reconciliation_plan(
+            remote,
+            desired_issue_by_node_key_map=desired_issue_by_node_key_map,
+            remote_issue_by_node_key_map=remote_issue_by_node_key_map,
+        )
+        if issue_plan is not None:
+            return issue_plan
+
+        relation_plan = self._relation_reconciliation_plan(
+            desired_issue_by_node_key_map=desired_issue_by_node_key_map,
+            remote_issue_by_node_key_map=remote_issue_by_node_key_map,
+        )
+        if relation_plan is not None:
+            return relation_plan
+
+        metadata_plan = self._metadata_reconciliation_plan(
+            desired_issue_by_node_key_map=desired_issue_by_node_key_map,
+            remote_issue_by_node_key_map=remote_issue_by_node_key_map,
+        )
+        if metadata_plan is not None:
+            return metadata_plan
+
+        activation_plan = self._node_activation_plan(
+            desired_issue_by_node_key_map=desired_issue_by_node_key_map,
+            remote_issue_by_node_key_map=remote_issue_by_node_key_map,
+        )
+        if activation_plan is not None:
+            return activation_plan
+        return self._project_activation_plan(remote)
+
+    def _project_creation_plan(self) -> ReconciliationPlan:
+        """Create the inert Project envelope before any child resources."""
+
+        return ReconciliationPlan(
+            phase=PublicationPhase.PROJECT,
+            action_list=[
+                PublicationAction(
+                    kind="project-create",
+                    stable_key=self._view.project_key,
+                    payload={
+                        "name": self._view.project_name,
+                        "description": self._view.project_description,
+                        "project_key": self._view.project_key,
+                        "status_name": "Planned",
+                        "team_id": self._graph.team_id,
+                    },
+                )
+            ],
+            activation_ready=False,
+        )
+
+    def _document_reconciliation_plan(self, remote: RemoteProject) -> ReconciliationPlan | None:
+        """Create or refresh the one exact graph transaction document."""
+
         matching_document_list = [
             item for item in remote.document_list if item.title == self._view.import_document_title
         ]
@@ -174,8 +220,17 @@ class TaskGraphReconciler:
                 ],
                 activation_ready=False,
             )
-        desired_issue_by_node_key_map = {item.node_key: item for item in self._view.issue_list}
-        remote_issue_by_node_key_map = remote.issue_by_node_key_map()
+        return None
+
+    def _issue_reconciliation_plan(
+        self,
+        remote: RemoteProject,
+        *,
+        desired_issue_by_node_key_map: dict[str, IssuePublication],
+        remote_issue_by_node_key_map: dict[str, RemoteIssue],
+    ) -> ReconciliationPlan | None:
+        """Create every missing staged issue and reject foreign issue keys."""
+
         unknown_key_set = set(remote_issue_by_node_key_map) - set(desired_issue_by_node_key_map)
         if unknown_key_set:
             raise TaskGraphError(f"Planned Project contains unknown issue keys: {sorted(unknown_key_set)}")
@@ -188,8 +243,18 @@ class TaskGraphReconciler:
                 current.staged_owned_fields_require(desired)
         if issue_action_list:
             return ReconciliationPlan(PublicationPhase.ISSUES, issue_action_list, activation_ready=False)
+        return None
+
+    def _relation_reconciliation_plan(
+        self,
+        *,
+        desired_issue_by_node_key_map: dict[str, IssuePublication],
+        remote_issue_by_node_key_map: dict[str, RemoteIssue],
+    ) -> ReconciliationPlan | None:
+        """Create approved blocker relations before any issue can dispatch."""
+
         relation_action_list: list[PublicationAction] = []
-        for desired in self._view.issue_list:
+        for desired in desired_issue_by_node_key_map.values():
             current = remote_issue_by_node_key_map[desired.node_key]
             desired_blocker_set = {
                 edge.blocker_node_key
@@ -216,9 +281,19 @@ class TaskGraphReconciler:
                 )
         if relation_action_list:
             return ReconciliationPlan(PublicationPhase.RELATIONS, relation_action_list, activation_ready=False)
+        return None
+
+    def _metadata_reconciliation_plan(
+        self,
+        *,
+        desired_issue_by_node_key_map: dict[str, IssuePublication],
+        remote_issue_by_node_key_map: dict[str, RemoteIssue],
+    ) -> ReconciliationPlan | None:
+        """Attach exact role and execution metadata while nodes remain inert."""
+
         metadata_action_list: list[PublicationAction] = []
         node_by_key_map = {item.node_key: item for item in self._graph.node_list}
-        for desired in self._view.issue_list:
+        for desired in desired_issue_by_node_key_map.values():
             current = remote_issue_by_node_key_map[desired.node_key]
             required_label_set = {node_by_key_map[desired.node_key].role}
             if node_by_key_map[desired.node_key].role is not TaskRole.HUMAN:
@@ -266,8 +341,18 @@ class TaskGraphReconciler:
                 metadata_action_list,
                 activation_ready=False,
             )
+        return None
+
+    def _node_activation_plan(
+        self,
+        *,
+        desired_issue_by_node_key_map: dict[str, IssuePublication],
+        remote_issue_by_node_key_map: dict[str, RemoteIssue],
+    ) -> ReconciliationPlan | None:
+        """Move fully wired nodes from Backlog to the dispatchable Todo state."""
+
         activation_action_list: list[PublicationAction] = []
-        for desired in self._view.issue_list:
+        for desired in desired_issue_by_node_key_map.values():
             current = remote_issue_by_node_key_map[desired.node_key]
             if current.status_name == "Backlog":
                 activation_action_list.append(
@@ -285,6 +370,11 @@ class TaskGraphReconciler:
                 activation_action_list,
                 activation_ready=False,
             )
+        return None
+
+    def _project_activation_plan(self, remote: RemoteProject) -> ReconciliationPlan:
+        """Publish the Project only after every child resource is dispatch-ready."""
+
         return ReconciliationPlan(
             PublicationPhase.PROJECT_ACTIVATION,
             [

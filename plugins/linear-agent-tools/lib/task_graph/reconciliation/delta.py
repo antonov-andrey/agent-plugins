@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from task_graph.delta import TaskGraphDelta
 from task_graph.model import TaskBlockerEdge, TaskGraphError, TaskRole
-from task_graph.publication import DeltaPublicationView, project_description_build
+from task_graph.publication import DeltaPublicationView, IssuePublication, project_description_build
 from task_graph.reconciliation.model import (
     PublicationAction,
     PublicationPhase,
@@ -45,6 +45,51 @@ class TaskGraphDeltaReconciler:
         """Return only the next safe mutation phase for the approved delta."""
 
         self._project_identity_require(remote)
+        self._accepted_resource_keys_require(remote)
+        remote_issue_by_node_key_map = remote.issue_by_node_key_map()
+        self._referenced_nodes_require(remote_issue_by_node_key_map)
+        self._relation_scope_require(remote_issue_by_node_key_map)
+
+        document_plan = self._transaction_document_plan(remote)
+        if document_plan is not None:
+            return document_plan
+
+        desired_issue_by_node_key_map = {item.node_key: item for item in self._view.issue_list}
+        issue_plan = self._issue_reconciliation_plan(
+            remote,
+            desired_issue_by_node_key_map=desired_issue_by_node_key_map,
+            remote_issue_by_node_key_map=remote_issue_by_node_key_map,
+        )
+        if issue_plan is not None:
+            return issue_plan
+
+        self._topology_require(remote_issue_by_node_key_map)
+        relation_plan = self._relation_reconciliation_plan(remote_issue_by_node_key_map)
+        if relation_plan is not None:
+            return relation_plan
+
+        reverification_plan = self._reverification_plan(remote_issue_by_node_key_map)
+        if reverification_plan is not None:
+            return reverification_plan
+
+        metadata_plan = self._metadata_reconciliation_plan(
+            desired_issue_by_node_key_map=desired_issue_by_node_key_map,
+            remote_issue_by_node_key_map=remote_issue_by_node_key_map,
+        )
+        if metadata_plan is not None:
+            return metadata_plan
+
+        activation_plan = self._activation_plan(
+            desired_issue_by_node_key_map=desired_issue_by_node_key_map,
+            remote_issue_by_node_key_map=remote_issue_by_node_key_map,
+        )
+        if activation_plan is not None:
+            return activation_plan
+        return ReconciliationPlan(PublicationPhase.COMPLETE, [], activation_ready=True)
+
+    def _accepted_resource_keys_require(self, remote: RemoteProject) -> None:
+        """Reject resources already accepted by an earlier graph transaction."""
+
         accepted_resource_key_set = TransactionDocumentReader(remote.document_list).accepted_resource_key_set_get(
             excluded_title=self._view.import_document_title
         )
@@ -54,11 +99,17 @@ class TaskGraphDeltaReconciler:
             raise TaskGraphError(
                 "Graph delta repeats accepted resource keys: " + ", ".join(sorted(conflicting_resource_key_set))
             )
-        remote_issue_by_node_key_map = remote.issue_by_node_key_map()
+
+    def _referenced_nodes_require(self, remote_issue_by_node_key_map: dict[str, RemoteIssue]) -> None:
+        """Require every existing node named by the approved delta."""
+
         missing_existing_key_set = set(self._delta.existing_node_key_list) - set(remote_issue_by_node_key_map)
         if missing_existing_key_set:
             raise TaskGraphError(f"Graph delta references absent existing nodes: {sorted(missing_existing_key_set)}")
-        self._relation_scope_require(remote_issue_by_node_key_map)
+
+    def _transaction_document_plan(self, remote: RemoteProject) -> ReconciliationPlan | None:
+        """Create or validate the immutable receipt for this exact delta."""
+
         matching_document_list = [
             item for item in remote.document_list if item.title == self._view.import_document_title
         ]
@@ -82,7 +133,17 @@ class TaskGraphDeltaReconciler:
             )
         if matching_document_list[0].content != self._view.import_document_content:
             raise TaskGraphError("Active Project delta receipt differs from its exact approved content")
-        desired_issue_by_node_key_map = {item.node_key: item for item in self._view.issue_list}
+        return None
+
+    def _issue_reconciliation_plan(
+        self,
+        remote: RemoteProject,
+        *,
+        desired_issue_by_node_key_map: dict[str, IssuePublication],
+        remote_issue_by_node_key_map: dict[str, RemoteIssue],
+    ) -> ReconciliationPlan | None:
+        """Create missing Backlog issues and reject stable-key collisions."""
+
         issue_action_list: list[PublicationAction] = []
         for node_key, desired in desired_issue_by_node_key_map.items():
             current = remote_issue_by_node_key_map.get(node_key)
@@ -96,7 +157,14 @@ class TaskGraphDeltaReconciler:
                 issue_action_list,
                 activation_ready=False,
             )
-        self._topology_require(remote_issue_by_node_key_map)
+        return None
+
+    def _relation_reconciliation_plan(
+        self,
+        remote_issue_by_node_key_map: dict[str, RemoteIssue],
+    ) -> ReconciliationPlan | None:
+        """Create approved blocker relations while every new endpoint is inert."""
+
         relation_action_list: list[PublicationAction] = []
         for edge in self._view.blocker_edge_list:
             blocked = remote_issue_by_node_key_map[edge.blocked_node_key]
@@ -128,6 +196,14 @@ class TaskGraphDeltaReconciler:
                 relation_action_list,
                 activation_ready=False,
             )
+        return None
+
+    def _reverification_plan(
+        self,
+        remote_issue_by_node_key_map: dict[str, RemoteIssue],
+    ) -> ReconciliationPlan | None:
+        """Return affected existing review gates to Todo before new work runs."""
+
         reverification_action_list: list[PublicationAction] = []
         reverification_key_set = set(self._delta.reverification_node_key_list)
         new_node_key_set = {item.node_key for item in self._delta.node_list}
@@ -166,6 +242,16 @@ class TaskGraphDeltaReconciler:
                 reverification_action_list,
                 activation_ready=False,
             )
+        return None
+
+    def _metadata_reconciliation_plan(
+        self,
+        *,
+        desired_issue_by_node_key_map: dict[str, IssuePublication],
+        remote_issue_by_node_key_map: dict[str, RemoteIssue],
+    ) -> ReconciliationPlan | None:
+        """Attach exact labels and execution identity before delta dispatch."""
+
         node_by_key_map = {item.node_key: item for item in self._delta.node_list}
         metadata_action_list: list[PublicationAction] = []
         for node_key, desired in desired_issue_by_node_key_map.items():
@@ -211,6 +297,16 @@ class TaskGraphDeltaReconciler:
                 metadata_action_list,
                 activation_ready=False,
             )
+        return None
+
+    def _activation_plan(
+        self,
+        *,
+        desired_issue_by_node_key_map: dict[str, IssuePublication],
+        remote_issue_by_node_key_map: dict[str, RemoteIssue],
+    ) -> ReconciliationPlan | None:
+        """Move fully wired new issues to Todo without altering progressed nodes."""
+
         activation_action_list: list[PublicationAction] = []
         for node_key in sorted(desired_issue_by_node_key_map):
             current = remote_issue_by_node_key_map[node_key]
@@ -230,7 +326,7 @@ class TaskGraphDeltaReconciler:
                 activation_action_list,
                 activation_ready=True,
             )
-        return ReconciliationPlan(PublicationPhase.COMPLETE, [], activation_ready=True)
+        return None
 
     def _acyclic_require(self, downstream_node_key_set_by_blocker_key_map: dict[str, set[str]]) -> None:
         """Reject cycles in the exact relevant active-Project slice."""

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -51,6 +51,20 @@ class CleanupResult:
         }
 
 
+@dataclass(slots=True)
+class CleanupState:
+    """Carry mutable counters and exact repository snapshots through one cleanup run."""
+
+    request: CleanupRequest
+    repository_by_origin_url_map: dict[str, WorkspaceRepository] = field(default_factory=dict)
+    workspace_state_by_origin_url_map: dict[str, RepositoryWorkspaceState | None] = field(default_factory=dict)
+    closed_pull_request_count: int = 0
+    cleaned_resource_count: int = 0
+    removed_worktree_count: int = 0
+    removed_local_branch_count: int = 0
+    removed_remote_branch_count: int = 0
+
+
 class TaskCleanupReconciler:
     """Delete only state whose exact Linear and Git ownership is proven."""
 
@@ -83,223 +97,300 @@ class TaskCleanupReconciler:
             Exact cleanup counters.
         """
 
+        state = CleanupState(request=request)
         with IssueWorkspaceLock(self._config, request.issue_identifier):
-            repository_by_origin_url_map = {
-                item.origin_url: WorkspaceRepository.from_config(self._config, item) for item in request.repository_list
-            }
-            for repository in repository_by_origin_url_map.values():
-                repository.fetch()
-            workspace_state_by_origin_url_map = {
-                origin_url: repository.state_read(request.issue_identifier)
-                for origin_url, repository in repository_by_origin_url_map.items()
-            }
-            for origin_url, state in workspace_state_by_origin_url_map.items():
-                if state is not None:
-                    repository_by_origin_url_map[origin_url].state_identity_require(request.issue_identifier, state)
-                else:
-                    self._absence_require(
-                        repository_by_origin_url_map[origin_url],
-                        request.issue_identifier,
-                    )
+            self._repository_state_load(state)
+            self._terminal_contract_prepare(state)
+            self._resource_scope_require(state)
+            self._pull_request_reconcile(state)
+            self._resource_reconcile(state)
             if request.authority.scope != "attempt":
-                self._pull_request_contract_require(
-                    request,
-                    list(repository_by_origin_url_map.values()),
-                )
-                for origin_url, state in workspace_state_by_origin_url_map.items():
-                    if state is None:
-                        continue
-                    state = self._cleanup_branch_snapshot_prepare(
-                        repository_by_origin_url_map[origin_url],
-                        state,
-                        successful=request.authority.issue_status == "Done",
-                        pull_request_list=request.pull_request_list,
-                    )
-                    repository_by_origin_url_map[origin_url].state_write(state)
-                    workspace_state_by_origin_url_map[origin_url] = state
-            for resource in request.resource_list:
-                if resource.repository_url not in repository_by_origin_url_map:
-                    raise TaskCleanupError(f"Resource {resource.key} has no exact participating repository")
-            closed_pull_request_count = 0
-            canceled = request.authority.issue_status == "Canceled" or request.authority.project_status == "Canceled"
-            for reference in request.pull_request_list:
-                before = self._github.inspect(repository=reference.repository, number=reference.number)
-                target = self._pull_request_target_get(
-                    reference.repository.value,
-                    request=request,
-                    repository_list=list(repository_by_origin_url_map.values()),
-                )
-                before.integration_identity_require(request.issue_identifier)
-                before.target_require(base_branch=target.base_branch, head_branch=target.head_branch)
-                if canceled:
-                    self._github.close_if_open(
-                        repository=reference.repository,
-                        number=reference.number,
-                        issue_identifier=request.issue_identifier,
-                        base_branch=target.base_branch,
-                        head_branch=target.head_branch,
-                    )
-                    if before.state == "OPEN":
-                        closed_pull_request_count += 1
-                elif before.state != "MERGED":
-                    raise TaskCleanupError("Successful task cleanup requires every linked pull request to be merged")
-            cleaned_resource_count = 0
-            for resource in request.resource_list:
-                repository = repository_by_origin_url_map[resource.repository_url]
-                state = workspace_state_by_origin_url_map[resource.repository_url]
-                if request.authority.scope != "attempt" and state is not None:
-                    cleaned_resource_fingerprint_by_resource_key_map = dict(
-                        state.cleaned_resource_fingerprint_by_resource_key_map
-                    )
-                    if resource.key in cleaned_resource_fingerprint_by_resource_key_map:
-                        if cleaned_resource_fingerprint_by_resource_key_map[resource.key] != resource.fingerprint():
-                            raise TaskCleanupError(
-                                f"Cleanup declaration changed after exact resource {resource.key} was reconciled"
-                            )
-                        continue
-                task_root = Path(state.task_root) if state is not None else None
-                if state is not None:
-                    self._task_root_require(repository, state)
-                working_directory = task_root if task_root is not None else repository.main_root
-                placeholder_by_name_map = (
-                    state.cleanup_placeholder_map(request.issue_identifier)
-                    if state is not None
-                    else {
-                        "linear_issue_identifier": request.issue_identifier,
-                        "main_root": str(repository.main_root),
-                        "task_branch": f"linear/{request.issue_identifier.lower()}",
-                        "task_root": str(repository.main_root / ".worktree" / request.issue_identifier.lower()),
-                    }
-                )
-                self._resources.cleanup(
-                    resource,
-                    working_directory=working_directory,
-                    placeholder_by_name_map=placeholder_by_name_map,
-                )
-                if state is not None and request.authority.scope != "attempt":
-                    cleaned_resource_fingerprint_by_resource_key_map[resource.key] = resource.fingerprint()
-                    state = replace(
-                        state,
-                        cleaned_resource_fingerprint_by_resource_key_map=dict(
-                            sorted(cleaned_resource_fingerprint_by_resource_key_map.items())
-                        ),
-                    )
-                    repository.state_write(state)
-                    workspace_state_by_origin_url_map[resource.repository_url] = state
-                cleaned_resource_count += 1
-            if request.authority.scope == "attempt":
-                return CleanupResult(
-                    closed_pull_request_count=0,
-                    cleaned_resource_count=cleaned_resource_count,
-                    removed_worktree_count=0,
-                    removed_local_branch_count=0,
-                    removed_remote_branch_count=0,
-                )
-            removed_worktree_count = 0
-            removed_local_branch_count = 0
-            removed_remote_branch_count = 0
-            for origin_url, repository in repository_by_origin_url_map.items():
-                state = workspace_state_by_origin_url_map[origin_url]
-                if state is None:
-                    self._absence_require(repository, request.issue_identifier)
-                    continue
-                task_root = Path(state.task_root)
-                if not state.cleanup_binding_completed:
-                    self._task_root_require(repository, state)
-                    cleanup_binding_run(
-                        state.cleanup_argument_list,
-                        working_directory=task_root,
-                        placeholder_by_name_map=state.cleanup_placeholder_map(request.issue_identifier),
-                    )
-                    state = replace(state, cleanup_binding_completed=True)
-                    repository.state_write(state)
-                registered_branch = repository.worktree_branch_get(task_root)
-                if state.worktree_removed and (task_root.exists() or registered_branch is not None):
-                    raise TaskCleanupError("Removed task worktree reappeared after durable cleanup")
-                if registered_branch is not None and registered_branch != state.branch_name:
-                    raise TaskCleanupError("Task worktree registration changed after durable cleanup snapshot")
-                state = self._cleanup_branch_snapshot_prepare(
-                    repository,
-                    state,
-                    successful=request.authority.issue_status == "Done",
-                    pull_request_list=request.pull_request_list,
-                )
-                if not state.cleanup_worktree_removal_ready:
-                    if request.authority.issue_status != "Canceled":
-                        if not task_root.is_dir():
-                            raise TaskCleanupError("Successful task worktree disappeared before dirty-state proof")
-                        dirty = git_command_run(
-                            task_root,
-                            (
-                                "status",
-                                "--porcelain=v1",
-                                "-z",
-                                "--ignore-submodules=none",
-                            ),
-                        ).stdout
-                        if dirty:
-                            raise TaskCleanupError("Successful task worktree contains uncommitted user work")
-                    state = replace(state, cleanup_worktree_removal_ready=True)
-                    repository.state_write(state)
-                if not state.worktree_removed and (task_root.exists() or registered_branch is not None):
-                    git_command_run(
-                        repository.main_root,
-                        ("worktree", "remove", "--force", str(task_root)),
-                    )
-                    removed_worktree_count += 1
-                if not state.worktree_removed:
-                    state = replace(state, worktree_removed=True)
-                    repository.state_write(state)
-                repository.fetch()
-                remote_exists = repository.exist_remote_branch(state.branch_name)
-                if state.remote_branch_removed and remote_exists:
-                    raise TaskCleanupError("Removed remote task branch reappeared after durable cleanup")
-                if not state.remote_branch_removed and remote_exists:
-                    if not state.cleanup_remote_branch_commit:
-                        raise TaskCleanupError("Remote task branch appeared after the durable cleanup snapshot")
-                    repository.remote_branch_delete_exact(
-                        state.branch_name,
-                        expected_commit=state.cleanup_remote_branch_commit,
-                    )
-                    removed_remote_branch_count += 1
-                if not state.remote_branch_removed:
-                    state = replace(state, remote_branch_removed=True)
-                    repository.state_write(state)
-                local_exists = repository.exist_local_branch(state.branch_name)
-                if state.local_branch_removed and local_exists:
-                    raise TaskCleanupError("Removed local task branch reappeared after durable cleanup")
-                if not state.local_branch_removed and local_exists:
-                    if repository.commit_get(state.branch_name) != state.cleanup_local_branch_commit:
-                        raise TaskCleanupError("Local task branch changed after the durable cleanup snapshot")
-                    git_command_run(repository.main_root, ("branch", "-D", state.branch_name))
-                    removed_local_branch_count += 1
-                if not state.local_branch_removed:
-                    state = replace(state, local_branch_removed=True)
-                    repository.state_write(state)
-                repository.fetch()
-                if (
-                    task_root.exists()
-                    or repository.worktree_branch_get(task_root) is not None
-                    or repository.exist_local_branch(state.branch_name)
-                    or repository.exist_remote_branch(state.branch_name)
-                ):
-                    raise TaskCleanupError("Task workspace or branch remained after cleanup")
-                repository.state_delete(request.issue_identifier)
-            if request.authority.scope == "project-final":
-                for repository in repository_by_origin_url_map.values():
-                    for issue_identifier in request.project_issue_identifier_list:
-                        if repository.state_read(issue_identifier) is not None:
-                            raise TaskCleanupError(
-                                f"Project issue {issue_identifier} retains private task-workspace state"
-                            )
-                        self._absence_require(repository, issue_identifier)
-            return CleanupResult(
-                closed_pull_request_count=closed_pull_request_count,
-                cleaned_resource_count=cleaned_resource_count,
-                removed_worktree_count=removed_worktree_count,
-                removed_local_branch_count=removed_local_branch_count,
-                removed_remote_branch_count=removed_remote_branch_count,
+                self._workspace_reconcile(state)
+                self._project_absence_require(state)
+        return CleanupResult(
+            closed_pull_request_count=state.closed_pull_request_count,
+            cleaned_resource_count=state.cleaned_resource_count,
+            removed_worktree_count=state.removed_worktree_count,
+            removed_local_branch_count=state.removed_local_branch_count,
+            removed_remote_branch_count=state.removed_remote_branch_count,
+        )
+
+    def _cleanup_binding_reconcile(
+        self,
+        repository: WorkspaceRepository,
+        state: RepositoryWorkspaceState,
+        *,
+        issue_identifier: str,
+    ) -> RepositoryWorkspaceState:
+        """Execute and durably record one project-local cleanup binding."""
+
+        if state.cleanup_binding_completed:
+            return state
+        self._task_root_require(repository, state)
+        cleanup_binding_run(
+            state.cleanup_argument_list,
+            working_directory=Path(state.task_root),
+            placeholder_by_name_map=state.cleanup_placeholder_map(issue_identifier),
+        )
+        state = replace(state, cleanup_binding_completed=True)
+        repository.state_write(state)
+        return state
+
+    def _local_branch_removal_reconcile(
+        self,
+        run_state: CleanupState,
+        repository: WorkspaceRepository,
+        state: RepositoryWorkspaceState,
+    ) -> RepositoryWorkspaceState:
+        """Remove one exact local task branch after its durable snapshot."""
+
+        local_exists = repository.exist_local_branch(state.branch_name)
+        if state.local_branch_removed and local_exists:
+            raise TaskCleanupError("Removed local task branch reappeared after durable cleanup")
+        if not state.local_branch_removed and local_exists:
+            if repository.commit_get(state.branch_name) != state.cleanup_local_branch_commit:
+                raise TaskCleanupError("Local task branch changed after the durable cleanup snapshot")
+            git_command_run(repository.main_root, ("branch", "-D", state.branch_name))
+            run_state.removed_local_branch_count += 1
+        if not state.local_branch_removed:
+            state = replace(state, local_branch_removed=True)
+            repository.state_write(state)
+        return state
+
+    def _project_absence_require(self, state: CleanupState) -> None:
+        """Prove every Project issue workspace absent at the final cleanup gate."""
+
+        if state.request.authority.scope != "project-final":
+            return
+        for repository in state.repository_by_origin_url_map.values():
+            for issue_identifier in state.request.project_issue_identifier_list:
+                if repository.state_read(issue_identifier) is not None:
+                    raise TaskCleanupError(f"Project issue {issue_identifier} retains private task-workspace state")
+                self._absence_require(repository, issue_identifier)
+
+    def _pull_request_reconcile(self, state: CleanupState) -> None:
+        """Close canceled PRs or prove every successful task PR merged."""
+
+        canceled = (
+            state.request.authority.issue_status == "Canceled" or state.request.authority.project_status == "Canceled"
+        )
+        repository_list = list(state.repository_by_origin_url_map.values())
+        for reference in state.request.pull_request_list:
+            before = self._github.inspect(repository=reference.repository, number=reference.number)
+            target = self._pull_request_target_get(
+                reference.repository.value,
+                request=state.request,
+                repository_list=repository_list,
             )
+            before.integration_identity_require(state.request.issue_identifier)
+            before.target_require(base_branch=target.base_branch, head_branch=target.head_branch)
+            if canceled:
+                self._github.close_if_open(
+                    repository=reference.repository,
+                    number=reference.number,
+                    issue_identifier=state.request.issue_identifier,
+                    base_branch=target.base_branch,
+                    head_branch=target.head_branch,
+                )
+                if before.state == "OPEN":
+                    state.closed_pull_request_count += 1
+            elif before.state != "MERGED":
+                raise TaskCleanupError("Successful task cleanup requires every linked pull request to be merged")
+
+    def _remote_branch_removal_reconcile(
+        self,
+        run_state: CleanupState,
+        repository: WorkspaceRepository,
+        state: RepositoryWorkspaceState,
+    ) -> RepositoryWorkspaceState:
+        """Remove one exact remote task branch after its durable snapshot."""
+
+        repository.fetch()
+        remote_exists = repository.exist_remote_branch(state.branch_name)
+        if state.remote_branch_removed and remote_exists:
+            raise TaskCleanupError("Removed remote task branch reappeared after durable cleanup")
+        if not state.remote_branch_removed and remote_exists:
+            if not state.cleanup_remote_branch_commit:
+                raise TaskCleanupError("Remote task branch appeared after the durable cleanup snapshot")
+            repository.remote_branch_delete_exact(
+                state.branch_name,
+                expected_commit=state.cleanup_remote_branch_commit,
+            )
+            run_state.removed_remote_branch_count += 1
+        if not state.remote_branch_removed:
+            state = replace(state, remote_branch_removed=True)
+            repository.state_write(state)
+        return state
+
+    def _repository_state_load(self, state: CleanupState) -> None:
+        """Load and validate exact participating repositories under the issue lock."""
+
+        state.repository_by_origin_url_map = {
+            item.origin_url: WorkspaceRepository.from_config(self._config, item)
+            for item in state.request.repository_list
+        }
+        for repository in state.repository_by_origin_url_map.values():
+            repository.fetch()
+        state.workspace_state_by_origin_url_map = {
+            origin_url: repository.state_read(state.request.issue_identifier)
+            for origin_url, repository in state.repository_by_origin_url_map.items()
+        }
+        for origin_url, workspace_state in state.workspace_state_by_origin_url_map.items():
+            repository = state.repository_by_origin_url_map[origin_url]
+            if workspace_state is not None:
+                repository.state_identity_require(state.request.issue_identifier, workspace_state)
+            else:
+                self._absence_require(repository, state.request.issue_identifier)
+
+    def _resource_reconcile(self, run_state: CleanupState) -> None:
+        """Execute each declared resource cleanup and durably record completion."""
+
+        for resource in run_state.request.resource_list:
+            repository = run_state.repository_by_origin_url_map[resource.repository_url]
+            state = run_state.workspace_state_by_origin_url_map[resource.repository_url]
+            cleaned_resource_fingerprint_by_resource_key_map: dict[str, str] = {}
+            if run_state.request.authority.scope != "attempt" and state is not None:
+                cleaned_resource_fingerprint_by_resource_key_map = dict(
+                    state.cleaned_resource_fingerprint_by_resource_key_map
+                )
+                if resource.key in cleaned_resource_fingerprint_by_resource_key_map:
+                    if cleaned_resource_fingerprint_by_resource_key_map[resource.key] != resource.fingerprint():
+                        raise TaskCleanupError(
+                            f"Cleanup declaration changed after exact resource {resource.key} was reconciled"
+                        )
+                    continue
+            task_root = Path(state.task_root) if state is not None else None
+            if state is not None:
+                self._task_root_require(repository, state)
+            working_directory = task_root if task_root is not None else repository.main_root
+            placeholder_by_name_map = (
+                state.cleanup_placeholder_map(run_state.request.issue_identifier)
+                if state is not None
+                else {
+                    "linear_issue_identifier": run_state.request.issue_identifier,
+                    "main_root": str(repository.main_root),
+                    "task_branch": f"linear/{run_state.request.issue_identifier.lower()}",
+                    "task_root": str(repository.main_root / ".worktree" / run_state.request.issue_identifier.lower()),
+                }
+            )
+            self._resources.cleanup(
+                resource,
+                working_directory=working_directory,
+                placeholder_by_name_map=placeholder_by_name_map,
+            )
+            if state is not None and run_state.request.authority.scope != "attempt":
+                cleaned_resource_fingerprint_by_resource_key_map[resource.key] = resource.fingerprint()
+                state = replace(
+                    state,
+                    cleaned_resource_fingerprint_by_resource_key_map=dict(
+                        sorted(cleaned_resource_fingerprint_by_resource_key_map.items())
+                    ),
+                )
+                repository.state_write(state)
+                run_state.workspace_state_by_origin_url_map[resource.repository_url] = state
+            run_state.cleaned_resource_count += 1
+
+    def _resource_scope_require(self, state: CleanupState) -> None:
+        """Require every cleanup resource to name one participating repository."""
+
+        for resource in state.request.resource_list:
+            if resource.repository_url not in state.repository_by_origin_url_map:
+                raise TaskCleanupError(f"Resource {resource.key} has no exact participating repository")
+
+    def _terminal_contract_prepare(self, state: CleanupState) -> None:
+        """Bind PR and branch identities before terminal destructive cleanup."""
+
+        if state.request.authority.scope == "attempt":
+            return
+        repository_list = list(state.repository_by_origin_url_map.values())
+        self._pull_request_contract_require(state.request, repository_list)
+        for origin_url, workspace_state in state.workspace_state_by_origin_url_map.items():
+            if workspace_state is None:
+                continue
+            repository = state.repository_by_origin_url_map[origin_url]
+            workspace_state = self._cleanup_branch_snapshot_prepare(
+                repository,
+                workspace_state,
+                successful=state.request.authority.issue_status == "Done",
+                pull_request_list=state.request.pull_request_list,
+            )
+            repository.state_write(workspace_state)
+            state.workspace_state_by_origin_url_map[origin_url] = workspace_state
+
+    def _worktree_removal_reconcile(
+        self,
+        run_state: CleanupState,
+        repository: WorkspaceRepository,
+        state: RepositoryWorkspaceState,
+    ) -> RepositoryWorkspaceState:
+        """Prove clean state and remove one exact registered task worktree."""
+
+        task_root = Path(state.task_root)
+        registered_branch = repository.worktree_branch_get(task_root)
+        if state.worktree_removed and (task_root.exists() or registered_branch is not None):
+            raise TaskCleanupError("Removed task worktree reappeared after durable cleanup")
+        if registered_branch is not None and registered_branch != state.branch_name:
+            raise TaskCleanupError("Task worktree registration changed after durable cleanup snapshot")
+        if not state.cleanup_worktree_removal_ready:
+            if run_state.request.authority.issue_status != "Canceled":
+                if not task_root.is_dir():
+                    raise TaskCleanupError("Successful task worktree disappeared before dirty-state proof")
+                dirty = git_command_run(
+                    task_root,
+                    (
+                        "status",
+                        "--porcelain=v1",
+                        "-z",
+                        "--ignore-submodules=none",
+                    ),
+                ).stdout
+                if dirty:
+                    raise TaskCleanupError("Successful task worktree contains uncommitted user work")
+            state = replace(state, cleanup_worktree_removal_ready=True)
+            repository.state_write(state)
+        if not state.worktree_removed and (task_root.exists() or registered_branch is not None):
+            git_command_run(
+                repository.main_root,
+                ("worktree", "remove", "--force", str(task_root)),
+            )
+            run_state.removed_worktree_count += 1
+        if not state.worktree_removed:
+            state = replace(state, worktree_removed=True)
+            repository.state_write(state)
+        return state
+
+    def _workspace_reconcile(self, run_state: CleanupState) -> None:
+        """Reconcile bindings, worktrees and branches for every terminal task repository."""
+
+        for origin_url, repository in run_state.repository_by_origin_url_map.items():
+            state = run_state.workspace_state_by_origin_url_map[origin_url]
+            if state is None:
+                self._absence_require(repository, run_state.request.issue_identifier)
+                continue
+            state = self._cleanup_binding_reconcile(
+                repository,
+                state,
+                issue_identifier=run_state.request.issue_identifier,
+            )
+            state = self._cleanup_branch_snapshot_prepare(
+                repository,
+                state,
+                successful=run_state.request.authority.issue_status == "Done",
+                pull_request_list=run_state.request.pull_request_list,
+            )
+            state = self._worktree_removal_reconcile(run_state, repository, state)
+            state = self._remote_branch_removal_reconcile(run_state, repository, state)
+            state = self._local_branch_removal_reconcile(run_state, repository, state)
+            repository.fetch()
+            task_root = Path(state.task_root)
+            if (
+                task_root.exists()
+                or repository.worktree_branch_get(task_root) is not None
+                or repository.exist_local_branch(state.branch_name)
+                or repository.exist_remote_branch(state.branch_name)
+            ):
+                raise TaskCleanupError("Task workspace or branch remained after cleanup")
+            repository.state_delete(run_state.request.issue_identifier)
 
     def _absence_require(self, repository: WorkspaceRepository, issue_identifier: str) -> None:
         """Treat complete absence as success but reject orphaned foreign-looking state.
