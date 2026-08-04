@@ -39,7 +39,7 @@ from linear_boundary.configuration.reconciliation import WorkflowConfigurationRe
 from linear_boundary.contract import LinearContractError
 from linear_boundary.status import IssueStatusName, ProjectStatusName
 from linear_boundary.task.model import TaskExecutionSnapshot, TransitionProof
-from linear_boundary.task.workflow import transition_require
+from linear_boundary.task.workflow import TaskTransition
 from linear_boundary.transport import (
     LinearAuthenticationError,
     LinearGraphQLTransport,
@@ -77,6 +77,12 @@ def _destination() -> DestinationIdentity:
     """
 
     return DestinationIdentity(WORKSPACE_ID, VIEWER_ID, TEAM_ID, True, False, True)
+
+
+def _transition_require(**payload: object) -> None:
+    """Apply one transition while keeping table-driven tests concise."""
+
+    TaskTransition(**payload).require()  # type: ignore[arg-type]
 
 
 def _existing_status(item: StatusDefinition, index: int) -> StatusDefinition:
@@ -586,7 +592,7 @@ def test_transition_rejects_incompatible_role_delivery_pair_before_activation() 
     with pytest.raises(
         LinearContractError, match="role and delivery kind are incompatible"
     ):
-        transition_require(
+        _transition_require(
             current=IssueStatusName.BACKLOG,
             target=IssueStatusName.TODO,
             project_status=ProjectStatusName.PLANNED,
@@ -601,7 +607,7 @@ def test_transition_contract_requires_fresh_rework_and_exact_human_candidate() -
     """Rework adopts state and merge approval cannot survive mutation."""
 
     with pytest.raises(LinearContractError, match="fresh thread"):
-        transition_require(
+        _transition_require(
             current=IssueStatusName.REWORK,
             target=IssueStatusName.IN_PROGRESS,
             project_status=ProjectStatusName.IN_PROGRESS,
@@ -610,7 +616,7 @@ def test_transition_contract_requires_fresh_rework_and_exact_human_candidate() -
             proof=TransitionProof(workspace_preserved=True),
             dispatchable=True,
         )
-    transition_require(
+    _transition_require(
         current=IssueStatusName.REWORK,
         target=IssueStatusName.IN_PROGRESS,
         project_status=ProjectStatusName.IN_PROGRESS,
@@ -620,7 +626,7 @@ def test_transition_contract_requires_fresh_rework_and_exact_human_candidate() -
         dispatchable=True,
     )
     with pytest.raises(LinearContractError, match="unchanged code candidate"):
-        transition_require(
+        _transition_require(
             current=IssueStatusName.HUMAN_REVIEW,
             target=IssueStatusName.MERGING,
             project_status=ProjectStatusName.IN_PROGRESS,
@@ -636,7 +642,7 @@ def test_transition_contract_uses_delivery_specific_evidence_and_remediation_pat
 ):
     """Evidence tasks need no fake PR/CI and findings use the exact remediation path."""
 
-    transition_require(
+    _transition_require(
         current=IssueStatusName.BACKLOG,
         target=IssueStatusName.TODO,
         project_status=ProjectStatusName.PLANNED,
@@ -645,7 +651,7 @@ def test_transition_contract_uses_delivery_specific_evidence_and_remediation_pat
         proof=TransitionProof(task_definition_ready=True),
         dispatchable=False,
     )
-    transition_require(
+    _transition_require(
         current=IssueStatusName.IN_PROGRESS,
         target=IssueStatusName.HUMAN_REVIEW,
         project_status=ProjectStatusName.IN_PROGRESS,
@@ -659,7 +665,7 @@ def test_transition_contract_uses_delivery_specific_evidence_and_remediation_pat
         ),
         dispatchable=False,
     )
-    transition_require(
+    _transition_require(
         current=IssueStatusName.IN_PROGRESS,
         target=IssueStatusName.TODO,
         project_status=ProjectStatusName.IN_PROGRESS,
@@ -669,7 +675,7 @@ def test_transition_contract_uses_delivery_specific_evidence_and_remediation_pat
         dispatchable=False,
     )
     with pytest.raises(LinearContractError, match="review or acceptance"):
-        transition_require(
+        _transition_require(
             current=IssueStatusName.IN_PROGRESS,
             target=IssueStatusName.TODO,
             project_status=ProjectStatusName.IN_PROGRESS,
@@ -683,7 +689,7 @@ def test_transition_contract_uses_delivery_specific_evidence_and_remediation_pat
 def test_transition_contract_returns_mutated_merge_candidate_to_rework() -> None:
     """A merge runner never changes an approved candidate in place."""
 
-    transition_require(
+    _transition_require(
         current=IssueStatusName.MERGING,
         target=IssueStatusName.REWORK,
         project_status=ProjectStatusName.IN_PROGRESS,
@@ -693,7 +699,7 @@ def test_transition_contract_returns_mutated_merge_candidate_to_rework() -> None
         dispatchable=False,
     )
     with pytest.raises(LinearContractError, match="proven candidate mutation"):
-        transition_require(
+        _transition_require(
             current=IssueStatusName.MERGING,
             target=IssueStatusName.REWORK,
             project_status=ProjectStatusName.IN_PROGRESS,
@@ -708,7 +714,7 @@ def test_transition_contract_rejects_lifecycle_progress_after_project_stop() -> 
     """Project-first cancellation prevents a racing task from publishing a later state."""
 
     with pytest.raises(LinearContractError, match="active Project"):
-        transition_require(
+        _transition_require(
             current=IssueStatusName.IN_PROGRESS,
             target=IssueStatusName.HUMAN_REVIEW,
             project_status=ProjectStatusName.CANCELED,
@@ -725,7 +731,7 @@ def test_transition_contract_rejects_lifecycle_progress_after_project_stop() -> 
             dispatchable=False,
         )
 
-    transition_require(
+    _transition_require(
         current=IssueStatusName.IN_PROGRESS,
         target=IssueStatusName.CANCELED,
         project_status=ProjectStatusName.CANCELED,
@@ -736,7 +742,7 @@ def test_transition_contract_rejects_lifecycle_progress_after_project_stop() -> 
     )
 
     with pytest.raises(LinearContractError, match="completed Project"):
-        transition_require(
+        _transition_require(
             current=IssueStatusName.IN_PROGRESS,
             target=IssueStatusName.CANCELED,
             project_status=ProjectStatusName.COMPLETED,

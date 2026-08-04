@@ -17,7 +17,7 @@ from json_contract import JsonContractError, json_load_strict
 from linear_boundary.contract import LinearContractError
 from linear_boundary.status import IssueStatusName, ProjectStatusName
 from linear_boundary.task.model import TaskExecutionSnapshot, TransitionProof
-from linear_boundary.task.workflow import transition_require
+from linear_boundary.task.workflow import TaskTransition
 
 
 def _parser_get() -> argparse.ArgumentParser:
@@ -66,7 +66,7 @@ def _transition_validate(payload: object) -> None:
     if not isinstance(proof_payload, dict) or set(proof_payload) != proof_field_set:
         raise LinearContractError("Task transition proof has another shape")
     try:
-        transition_require(
+        TaskTransition(
             current=IssueStatusName(payload["current_status"]),
             target=IssueStatusName(payload["target_status"]),
             project_status=ProjectStatusName(payload["project_status"]),
@@ -74,7 +74,7 @@ def _transition_validate(payload: object) -> None:
             delivery_kind=payload["delivery_kind"],
             proof=TransitionProof(**proof_payload),
             dispatchable=payload["dispatchable"],
-        )
+        ).require()
     except (TypeError, ValueError) as error:
         raise LinearContractError(
             "Task transition input contains an unsupported value"
