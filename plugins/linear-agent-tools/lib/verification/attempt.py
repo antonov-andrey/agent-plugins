@@ -15,7 +15,7 @@ from verification._validation import (
     instant_parse,
     instant_render,
     single_line_validate,
-    text_pair_tuple,
+    text_by_text_map_parse,
     utc_validate,
 )
 
@@ -84,13 +84,13 @@ class AttemptSummary:
     started_at: datetime
     completed_at: datetime
     outcome: str
-    changed_commit_by_repository: tuple[tuple[str, str], ...]
+    changed_commit_by_repository_map: dict[str, str]
     receipt_hit_count: int
     receipt_miss_count: int
     external_wait_seconds: float
-    token_usage: int | None
+    token_count: int | None
     candidate_fingerprint: str
-    evidence_url_list: tuple[str, ...]
+    evidence_url_list: list[str]
 
     def __post_init__(self) -> None:
         """Validate bounded telemetry without accepting raw logs or prompts."""
@@ -114,27 +114,18 @@ class AttemptSummary:
             raise VerificationReceiptError("Attempt outcome is unsupported")
         if self.outcome not in _OUTCOME_SET_BY_ROLE[self.role_label]:
             raise VerificationReceiptError("Attempt role and outcome are incompatible")
-        if not isinstance(self.changed_commit_by_repository, tuple) or any(
-            not isinstance(item, tuple) or len(item) != 2 for item in self.changed_commit_by_repository
-        ):
-            raise VerificationReceiptError("Attempt commit set contains a malformed pair")
-        if (
-            self.changed_commit_by_repository != tuple(sorted(self.changed_commit_by_repository))
-            or len(self.changed_commit_by_repository) != len(set(self.changed_commit_by_repository))
-            or len({repository for repository, _commit in self.changed_commit_by_repository})
-            != len(self.changed_commit_by_repository)
-        ):
-            raise VerificationReceiptError("Attempt commit set must be unique and sorted")
-        for repository, commit in self.changed_commit_by_repository:
+        if not isinstance(self.changed_commit_by_repository_map, dict):
+            raise VerificationReceiptError("Attempt commit set must be a mapping")
+        for repository, commit in self.changed_commit_by_repository_map.items():
             single_line_validate(repository, label="Attempt repository")
             if COMMIT_PATTERN.fullmatch(commit) is None:
                 raise VerificationReceiptError("Attempt commit is not a full lowercase identity")
-        if self.delivery_kind != "code" and self.changed_commit_by_repository:
+        if self.delivery_kind != "code" and self.changed_commit_by_repository_map:
             raise VerificationReceiptError("Non-code attempt cannot report changed Product commits")
         if (
             self.delivery_kind == "code"
             and self.outcome in _CANDIDATE_OUTCOME_SET
-            and not self.changed_commit_by_repository
+            and not self.changed_commit_by_repository_map
         ):
             raise VerificationReceiptError("Completed code delivery requires one or more changed Product commits")
         if self.outcome == "merged" and self.delivery_kind != "code":
@@ -152,10 +143,10 @@ class AttemptSummary:
             or self.external_wait_seconds < 0
         ):
             raise VerificationReceiptError("Attempt external wait must be non-negative seconds")
-        if self.token_usage is not None and (
-            isinstance(self.token_usage, bool) or not isinstance(self.token_usage, int) or self.token_usage < 0
+        if self.token_count is not None and (
+            isinstance(self.token_count, bool) or not isinstance(self.token_count, int) or self.token_count < 0
         ):
-            raise VerificationReceiptError("Attempt token usage must be absent or a non-negative integer")
+            raise VerificationReceiptError("Attempt token count must be absent or a non-negative integer")
         if not isinstance(self.candidate_fingerprint, str) or (
             self.candidate_fingerprint and SHA256_PATTERN.fullmatch(self.candidate_fingerprint) is None
         ):
@@ -163,8 +154,8 @@ class AttemptSummary:
         if (self.outcome in _CANDIDATE_OUTCOME_SET) != bool(self.candidate_fingerprint):
             raise VerificationReceiptError("Attempt candidate fingerprint is incompatible with its outcome")
         if (
-            not isinstance(self.evidence_url_list, tuple)
-            or self.evidence_url_list != tuple(sorted(self.evidence_url_list))
+            not isinstance(self.evidence_url_list, list)
+            or self.evidence_url_list != sorted(self.evidence_url_list)
             or len(self.evidence_url_list) != len(set(self.evidence_url_list))
         ):
             raise VerificationReceiptError("Attempt evidence links must be unique and sorted")
@@ -172,6 +163,12 @@ class AttemptSummary:
             single_line_validate(value, label="Attempt evidence URL")
         if self.outcome in _EVIDENCE_OUTCOME_SET and not self.evidence_url_list:
             raise VerificationReceiptError("Completed attempt outcome requires bounded evidence links")
+        object.__setattr__(
+            self,
+            "changed_commit_by_repository_map",
+            dict(sorted(self.changed_commit_by_repository_map.items())),
+        )
+        object.__setattr__(self, "evidence_url_list", list(self.evidence_url_list))
 
     def payload(self) -> dict[str, object]:
         """Return canonical concise attempt telemetry.
@@ -184,7 +181,7 @@ class AttemptSummary:
             "schema_version": 1,
             "attempt_id": self.attempt_id,
             "candidate_fingerprint": self.candidate_fingerprint,
-            "changed_commit_by_repository": [list(item) for item in self.changed_commit_by_repository],
+            "changed_commit_by_repository_map": dict(self.changed_commit_by_repository_map),
             "completed_at": instant_render(self.completed_at),
             "delivery_kind": self.delivery_kind,
             "evidence_url_list": list(self.evidence_url_list),
@@ -196,8 +193,8 @@ class AttemptSummary:
             "role_label": self.role_label,
             "started_at": instant_render(self.started_at),
         }
-        if self.token_usage is not None:
-            payload["token_usage"] = self.token_usage
+        if self.token_count is not None:
+            payload["token_count"] = self.token_count
         return payload
 
     @classmethod
@@ -215,7 +212,7 @@ class AttemptSummary:
             "schema_version",
             "attempt_id",
             "candidate_fingerprint",
-            "changed_commit_by_repository",
+            "changed_commit_by_repository_map",
             "completed_at",
             "delivery_kind",
             "evidence_url_list",
@@ -227,7 +224,7 @@ class AttemptSummary:
             "role_label",
             "started_at",
         }
-        allowed = required | {"token_usage"}
+        allowed = required | {"token_count"}
         if (
             not isinstance(payload, dict)
             or (set(payload) != required and set(payload) != allowed)
@@ -245,13 +242,13 @@ class AttemptSummary:
             started_at=instant_parse(payload["started_at"], label="Attempt start"),
             completed_at=instant_parse(payload["completed_at"], label="Attempt completion"),
             outcome=payload["outcome"],
-            changed_commit_by_repository=text_pair_tuple(
-                payload["changed_commit_by_repository"], label="attempt commits"
+            changed_commit_by_repository_map=text_by_text_map_parse(
+                payload["changed_commit_by_repository_map"], label="attempt commits"
             ),
             receipt_hit_count=payload["receipt_hit_count"],
             receipt_miss_count=payload["receipt_miss_count"],
             external_wait_seconds=payload["external_wait_seconds"],
-            token_usage=payload.get("token_usage"),
+            token_count=payload.get("token_count"),
             candidate_fingerprint=payload["candidate_fingerprint"],
-            evidence_url_list=tuple(evidence_url_list),
+            evidence_url_list=list(evidence_url_list),
         )

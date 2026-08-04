@@ -28,7 +28,7 @@ class TaskWorkspaceBaseline:
     issue_identifier: str
     source_fingerprint: str
     branch_name: str
-    baseline_commit_by_repository_url: tuple[tuple[str, str], ...]
+    baseline_commit_by_repository_url_map: dict[str, str]
 
     def __post_init__(self) -> None:
         """Require one complete deterministic repository baseline map."""
@@ -42,26 +42,26 @@ class TaskWorkspaceBaseline:
             raise VerificationReceiptError("Workspace baseline source fingerprint must be SHA-256")
         if self.branch_name != f"linear/{self.issue_identifier.lower()}":
             raise VerificationReceiptError("Workspace baseline branch differs from its Linear issue")
-        value = self.baseline_commit_by_repository_url
-        if (
-            not isinstance(value, tuple)
-            or not value
-            or value != tuple(sorted(value))
-            or len(value) != len(set(value))
-            or len({repository for repository, _commit in value}) != len(value)
+        if not isinstance(self.baseline_commit_by_repository_url_map, dict) or not (
+            self.baseline_commit_by_repository_url_map
         ):
-            raise VerificationReceiptError("Workspace baseline repository commits must be non-empty, unique and sorted")
-        for repository_url, commit in value:
+            raise VerificationReceiptError("Workspace baseline repository commits must be a non-empty mapping")
+        for repository_url, commit in self.baseline_commit_by_repository_url_map.items():
             single_line_validate(repository_url, label="Workspace baseline repository URL")
             if COMMIT_PATTERN.fullmatch(commit) is None:
                 raise VerificationReceiptError("Workspace baseline commit must be one full lowercase identity")
+        object.__setattr__(
+            self,
+            "baseline_commit_by_repository_url_map",
+            dict(sorted(self.baseline_commit_by_repository_url_map.items())),
+        )
 
     def payload(self) -> dict[str, object]:
         """Return canonical first-dispatch baseline evidence."""
 
         return {
             "schema_version": 1,
-            "baseline_commit_by_repository_url": [list(item) for item in self.baseline_commit_by_repository_url],
+            "baseline_commit_by_repository_url_map": dict(self.baseline_commit_by_repository_url_map),
             "branch_name": self.branch_name,
             "issue_identifier": self.issue_identifier,
             "source_fingerprint": self.source_fingerprint,
@@ -73,31 +73,21 @@ class TaskWorkspaceBaseline:
 
         expected = {
             "schema_version",
-            "baseline_commit_by_repository_url",
+            "baseline_commit_by_repository_url_map",
             "branch_name",
             "issue_identifier",
             "source_fingerprint",
         }
         if not isinstance(payload, dict) or set(payload) != expected or payload["schema_version"] != 1:
             raise VerificationReceiptError("Workspace baseline has another shape")
-        pair_list = payload["baseline_commit_by_repository_url"]
-        if not isinstance(pair_list, list):
-            raise VerificationReceiptError("Workspace baseline repository commits must be a list")
-        parsed: list[tuple[str, str]] = []
-        for item in pair_list:
-            if (
-                not isinstance(item, list)
-                or len(item) != 2
-                or not isinstance(item[0], str)
-                or not isinstance(item[1], str)
-            ):
-                raise VerificationReceiptError("Workspace baseline contains a malformed repository commit")
-            parsed.append((item[0], item[1]))
+        baseline_commit_by_repository_url_map = payload["baseline_commit_by_repository_url_map"]
+        if not isinstance(baseline_commit_by_repository_url_map, dict):
+            raise VerificationReceiptError("Workspace baseline repository commits must be a mapping")
         return cls(
             issue_identifier=payload["issue_identifier"],
             source_fingerprint=payload["source_fingerprint"],
             branch_name=payload["branch_name"],
-            baseline_commit_by_repository_url=tuple(parsed),
+            baseline_commit_by_repository_url_map=dict(baseline_commit_by_repository_url_map),
         )
 
 
@@ -109,7 +99,7 @@ class LocalPhaseBaseline:
     source_fingerprint: str
     candidate_fingerprint: str
     measured_at: datetime
-    duration_seconds_by_phase: tuple[tuple[str, float], ...]
+    duration_seconds_by_phase_map: dict[str, float]
     evidence_url: str
 
     def __post_init__(self) -> None:
@@ -124,13 +114,9 @@ class LocalPhaseBaseline:
             if not isinstance(value, str) or SHA256_PATTERN.fullmatch(value) is None:
                 raise VerificationReceiptError(f"Baseline {label} must be SHA-256")
         utc_validate(self.measured_at, label="Baseline measurement")
-        if any(not isinstance(item, tuple) or len(item) != 2 for item in self.duration_seconds_by_phase):
-            raise VerificationReceiptError("Baseline contains a malformed phase")
-        if self.duration_seconds_by_phase != tuple(sorted(self.duration_seconds_by_phase)):
-            raise VerificationReceiptError("Baseline phases must be sorted")
-        if {name for name, _duration in self.duration_seconds_by_phase} != _BASELINE_PHASE_SET or len(
-            self.duration_seconds_by_phase
-        ) != len(_BASELINE_PHASE_SET):
+        if not isinstance(self.duration_seconds_by_phase_map, dict):
+            raise VerificationReceiptError("Baseline phases must be a mapping")
+        if set(self.duration_seconds_by_phase_map) != _BASELINE_PHASE_SET:
             raise VerificationReceiptError(
                 "Baseline must contain queue, startup, execution, review and merge exactly once"
             )
@@ -139,10 +125,15 @@ class LocalPhaseBaseline:
             or not isinstance(duration, (int, float))
             or not math.isfinite(duration)
             or duration < 0
-            for _name, duration in self.duration_seconds_by_phase
+            for duration in self.duration_seconds_by_phase_map.values()
         ):
             raise VerificationReceiptError("Baseline phase durations must be non-negative seconds")
         single_line_validate(self.evidence_url, label="Baseline evidence URL")
+        object.__setattr__(
+            self,
+            "duration_seconds_by_phase_map",
+            dict(sorted(self.duration_seconds_by_phase_map.items())),
+        )
 
     def payload(self) -> dict[str, object]:
         """Return canonical local phase telemetry.
@@ -154,7 +145,7 @@ class LocalPhaseBaseline:
         return {
             "schema_version": 1,
             "candidate_fingerprint": self.candidate_fingerprint,
-            "duration_seconds_by_phase": [list(item) for item in self.duration_seconds_by_phase],
+            "duration_seconds_by_phase_map": dict(self.duration_seconds_by_phase_map),
             "evidence_url": self.evidence_url,
             "measured_at": instant_render(self.measured_at),
             "project_id": self.project_id,
@@ -175,7 +166,7 @@ class LocalPhaseBaseline:
         expected = {
             "schema_version",
             "candidate_fingerprint",
-            "duration_seconds_by_phase",
+            "duration_seconds_by_phase_map",
             "evidence_url",
             "measured_at",
             "project_id",
@@ -183,25 +174,14 @@ class LocalPhaseBaseline:
         }
         if not isinstance(payload, dict) or set(payload) != expected or payload["schema_version"] != 1:
             raise VerificationReceiptError("Local phase baseline has another shape")
-        phase_list = payload["duration_seconds_by_phase"]
-        if not isinstance(phase_list, list):
-            raise VerificationReceiptError("Baseline phases must be a list")
-        duration_list: list[tuple[str, float]] = []
-        for item in phase_list:
-            if (
-                not isinstance(item, list)
-                or len(item) != 2
-                or not isinstance(item[0], str)
-                or isinstance(item[1], bool)
-                or not isinstance(item[1], (int, float))
-            ):
-                raise VerificationReceiptError("Baseline contains a malformed phase")
-            duration_list.append((item[0], item[1]))
+        duration_seconds_by_phase_map = payload["duration_seconds_by_phase_map"]
+        if not isinstance(duration_seconds_by_phase_map, dict):
+            raise VerificationReceiptError("Baseline phases must be a mapping")
         return cls(
             project_id=payload["project_id"],
             source_fingerprint=payload["source_fingerprint"],
             candidate_fingerprint=payload["candidate_fingerprint"],
             measured_at=instant_parse(payload["measured_at"], label="Baseline measurement"),
-            duration_seconds_by_phase=tuple(duration_list),
+            duration_seconds_by_phase_map=dict(duration_seconds_by_phase_map),
             evidence_url=payload["evidence_url"],
         )

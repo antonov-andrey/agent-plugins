@@ -106,7 +106,7 @@ class GitHubPullRequestBoundary:
         repository: RepositoryIdentity,
         base_branch: str,
         head_branch: str,
-    ) -> tuple[int, ...]:
+    ) -> list[int]:
         """Return exact existing pull requests for one base/head pair.
 
         Args:
@@ -123,7 +123,7 @@ class GitHubPullRequestBoundary:
         _branch_require(base_branch, label="base")
         _branch_require(head_branch, label="head")
         owner, _name = repository.value.split("/", 1)
-        result = self._checked(
+        completed_process = self._checked(
             (
                 "api",
                 "--method",
@@ -142,7 +142,7 @@ class GitHubPullRequestBoundary:
             )
         )
         try:
-            payload = json.loads(result.stdout)
+            payload = json.loads(completed_process.stdout)
         except json.JSONDecodeError as error:
             raise GitHubContractError("GitHub pull-request lookup response is malformed") from error
         if not isinstance(payload, list) or any(not isinstance(page, list) for page in payload):
@@ -164,7 +164,7 @@ class GitHubPullRequestBoundary:
                 number_list.append(item["number"])
         if len(number_list) != len(set(number_list)):
             raise GitHubContractError("GitHub pull-request lookup repeated one pull request")
-        return tuple(sorted(number_list))
+        return sorted(number_list)
 
     def inspect(self, *, repository: RepositoryIdentity, number: int) -> PullRequestSnapshot:
         """Read one exact PR and its required checks.
@@ -179,7 +179,7 @@ class GitHubPullRequestBoundary:
 
         if isinstance(number, bool) or not isinstance(number, int) or number < 1:
             raise GitHubContractError("Pull request number must be positive")
-        result = self._checked(
+        completed_process = self._checked(
             (
                 "pr",
                 "view",
@@ -191,10 +191,10 @@ class GitHubPullRequestBoundary:
             )
         )
         try:
-            payload = json.loads(result.stdout)
+            payload = json.loads(completed_process.stdout)
         except json.JSONDecodeError as error:
             raise GitHubContractError("GitHub PR response is malformed") from error
-        required_check_list = self._required_checks(repository=repository, number=number)
+        required_check_list = self._required_check_list_get(repository=repository, number=number)
         snapshot = _snapshot_from_payload(repository, payload, required_check_list=required_check_list)
         expected_url = f"https://github.com/{repository.value}/pull/{number}"
         if snapshot.number != number or snapshot.url.rstrip("/") != expected_url:
@@ -288,7 +288,7 @@ class GitHubPullRequestBoundary:
             raise GitHubContractError("Canceled-task pull request did not reach a terminal state")
         return snapshot
 
-    def _required_checks(self, *, repository: RepositoryIdentity, number: int) -> tuple[RequiredCheck, ...]:
+    def _required_check_list_get(self, *, repository: RepositoryIdentity, number: int) -> list[RequiredCheck]:
         """Read branch-protection-required check results only.
 
         Args:
@@ -299,8 +299,8 @@ class GitHubPullRequestBoundary:
             Required check results.
         """
 
-        result = self._runner(
-            (
+        completed_process = self._runner(
+            [
                 "gh",
                 "pr",
                 "checks",
@@ -310,22 +310,22 @@ class GitHubPullRequestBoundary:
                 "--required",
                 "--json",
                 "name,bucket,link",
-            )
+            ]
         )
-        if result.returncode not in {0, 1, 8}:
+        if completed_process.returncode not in {0, 1, 8}:
             raise GitHubContractError("Unable to read required GitHub checks")
         try:
-            payload = json.loads(result.stdout or "[]")
+            payload = json.loads(completed_process.stdout or "[]")
         except json.JSONDecodeError as error:
             raise GitHubContractError("GitHub required-check response is malformed") from error
         if not isinstance(payload, list) or any(not isinstance(item, dict) for item in payload):
             raise GitHubContractError("GitHub required-check response has another shape")
-        result_list: list[RequiredCheck] = []
+        required_check_list: list[RequiredCheck] = []
         for item in payload:
             if set(item) != {"name", "bucket", "link"}:
                 raise GitHubContractError("GitHub required-check item has another shape")
-            result_list.append(RequiredCheck(name=item["name"], bucket=item["bucket"], link=item["link"] or ""))
-        return tuple(sorted(result_list, key=lambda item: item.name))
+            required_check_list.append(RequiredCheck(name=item["name"], bucket=item["bucket"], link=item["link"] or ""))
+        return sorted(required_check_list, key=lambda item: item.name)
 
     def _checked(self, argument_list: Sequence[str]) -> subprocess.CompletedProcess[str]:
         """Run one checked gh domain command without exposing raw provider output.
@@ -337,10 +337,10 @@ class GitHubPullRequestBoundary:
             Completed command.
         """
 
-        result = self._runner(("gh", *argument_list))
-        if result.returncode != 0:
+        completed_process = self._runner(["gh", *argument_list])
+        if completed_process.returncode != 0:
             raise GitHubContractError("Authenticated GitHub pull-request operation failed")
-        return result
+        return completed_process
 
 
 def _gh_run(argument_list: Sequence[str]) -> subprocess.CompletedProcess[str]:
@@ -398,7 +398,7 @@ def _snapshot_from_payload(
     repository: RepositoryIdentity,
     payload: object,
     *,
-    required_check_list: tuple[RequiredCheck, ...],
+    required_check_list: list[RequiredCheck],
 ) -> PullRequestSnapshot:
     """Parse one exact gh PR payload.
 

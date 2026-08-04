@@ -25,11 +25,14 @@ from verification import (
 )
 
 
-def _parser_get() -> argparse.ArgumentParser:
-    """Build the closed evidence command parser.
+def _args_parse(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse the closed evidence command arguments.
+
+    Args:
+        argv: Optional direct argument list.
 
     Returns:
-        The argument parser.
+        Parsed arguments.
     """
 
     parser = argparse.ArgumentParser(description="Render exact Linear workflow evidence.")
@@ -37,7 +40,7 @@ def _parser_get() -> argparse.ArgumentParser:
     for command in ("candidate", "attempt", "baseline", "workspace-baseline"):
         operation = subparsers.add_parser(command)
         operation.add_argument("--input", required=True, type=Path)
-    return parser
+    return parser.parse_args(argv)
 
 
 def _json_load(path: Path) -> object:
@@ -68,7 +71,7 @@ def main(argv: list[str] | None = None) -> int:
         Zero on success or two on malformed input.
     """
 
-    args = _parser_get().parse_args(argv)
+    args = _args_parse(argv)
     try:
         payload = _json_load(args.input)
         if args.command == "candidate":

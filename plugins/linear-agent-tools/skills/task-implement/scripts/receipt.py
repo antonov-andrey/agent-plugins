@@ -23,11 +23,14 @@ from verification import (
 )
 
 
-def _parser_get() -> argparse.ArgumentParser:
-    """Build the closed receipt command parser.
+def _args_parse(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse the closed receipt command arguments.
+
+    Args:
+        argv: Optional direct argument list.
 
     Returns:
-        The argument parser.
+        Parsed arguments.
     """
 
     parser = argparse.ArgumentParser(description="Create or evaluate one exact verification receipt.")
@@ -44,7 +47,7 @@ def _parser_get() -> argparse.ArgumentParser:
         help="Exact provider-owned Linear comment body saved as one UTF-8 file.",
     )
     reuse.add_argument("--input", required=True, type=Path)
-    return parser
+    return parser.parse_args(argv)
 
 
 def _json_load(path: Path, *, label: str) -> object:
@@ -95,7 +98,7 @@ def main(argv: list[str] | None = None) -> int:
         Zero on success, one for a cache miss, or two for malformed input.
     """
 
-    args = _parser_get().parse_args(argv)
+    args = _args_parse(argv)
     try:
         current = VerificationInput.from_payload(_json_load(args.input, label="Verification input"))
         if args.command == "create":

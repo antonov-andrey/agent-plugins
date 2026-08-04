@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from verification._validation import VerificationReceiptError
 from verification.model import VerificationInput, VerificationReceipt
 
 
@@ -12,7 +13,14 @@ class ReceiptDecision:
     """Describe whether one prior receipt is reusable and why."""
 
     reusable: bool
-    reason_list: tuple[str, ...]
+    reason_list: list[str]
+
+    def __post_init__(self) -> None:
+        """Detach the concise reason list from caller mutation."""
+
+        if not isinstance(self.reusable, bool) or not isinstance(self.reason_list, list):
+            raise VerificationReceiptError("Receipt decision has another shape")
+        object.__setattr__(self, "reason_list", list(self.reason_list))
 
 
 def receipt_reuse_decide(receipt: VerificationReceipt, current: VerificationInput) -> ReceiptDecision:
@@ -38,11 +46,11 @@ def receipt_reuse_decide(receipt: VerificationReceipt, current: VerificationInpu
         reason_list.append("verification-repository-changed")
     if prior.source_fingerprint != current.source_fingerprint:
         reason_list.append("source-fingerprint-changed")
-    if prior.repository_commit_by_url != current.repository_commit_by_url:
+    if prior.repository_commit_by_url_map != current.repository_commit_by_url_map:
         reason_list.append("repository-commit-set-changed")
-    if prior.recursive_submodule_commit_by_path != current.recursive_submodule_commit_by_path:
+    if prior.recursive_submodule_commit_by_path_map != current.recursive_submodule_commit_by_path_map:
         reason_list.append("recursive-submodule-set-changed")
-    if prior.dependency_lock_sha256_by_path != current.dependency_lock_sha256_by_path:
+    if prior.dependency_lock_sha256_by_path_map != current.dependency_lock_sha256_by_path_map:
         reason_list.append("dependency-lock-set-changed")
     if prior.environment_identity != current.environment_identity:
         reason_list.append("environment-identity-changed")
@@ -50,4 +58,4 @@ def receipt_reuse_decide(receipt: VerificationReceipt, current: VerificationInpu
         reason_list.append("release-identity-changed")
     if receipt.verification_key != current.key() and not reason_list:
         reason_list.append("canonical-key-changed")
-    return ReceiptDecision(reusable=not reason_list, reason_list=tuple(reason_list))
+    return ReceiptDecision(reusable=not reason_list, reason_list=reason_list)

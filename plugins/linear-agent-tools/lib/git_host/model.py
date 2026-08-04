@@ -68,7 +68,7 @@ class RequiredCheck:
             ):
                 raise GitHubContractError(f"Required check {label} has another shape")
 
-    def passed(self) -> bool:
+    def is_passed(self) -> bool:
         """Return whether GitHub classified the required check as passing.
 
         Returns:
@@ -95,7 +95,7 @@ class PullRequestSnapshot:
     review_decision: str
     merged_at: datetime | None
     merge_commit: str
-    required_check_list: tuple[RequiredCheck, ...]
+    required_check_list: list[RequiredCheck]
 
     def __post_init__(self) -> None:
         """Validate one provider snapshot."""
@@ -121,7 +121,7 @@ class PullRequestSnapshot:
             raise GitHubContractError("Pull request merge commit must be empty or one full lowercase commit")
         if not isinstance(self.draft, bool):
             raise GitHubContractError("Pull request draft flag must be boolean")
-        if not isinstance(self.required_check_list, tuple) or any(
+        if not isinstance(self.required_check_list, list) or any(
             not isinstance(item, RequiredCheck) for item in self.required_check_list
         ):
             raise GitHubContractError("Pull request required checks have another shape")
@@ -133,6 +133,7 @@ class PullRequestSnapshot:
                 raise GitHubContractError("Pull request merged_at must be timezone-aware")
             if self.merged_at.utcoffset() != timezone.utc.utcoffset(self.merged_at):
                 raise GitHubContractError("Pull request merged_at must be normalized to UTC")
+        object.__setattr__(self, "required_check_list", list(self.required_check_list))
 
     def integration_identity_require(self, issue_identifier: str) -> None:
         """Require the issue identity that lets GitHub integration create a Linear link.
@@ -174,9 +175,9 @@ class PullRequestSnapshot:
             raise GitHubContractError(f"Pull request is not mergeable: {self.merge_state}")
         if self.review_decision == "CHANGES_REQUESTED":
             raise GitHubContractError("Pull request has requested changes")
-        failed = [item.name for item in self.required_check_list if not item.passed()]
-        if failed:
-            raise GitHubContractError(f"Required GitHub checks are not passing: {sorted(failed)}")
+        failed_check_name_list = [item.name for item in self.required_check_list if not item.is_passed()]
+        if failed_check_name_list:
+            raise GitHubContractError(f"Required GitHub checks are not passing: {sorted(failed_check_name_list)}")
 
     def merged_result_require(self, *, approved_head_commit: str) -> None:
         """Require one exact already-merged human-approved candidate.
@@ -194,6 +195,6 @@ class PullRequestSnapshot:
             raise GitHubContractError("Pull request head changed after human approval")
         if self.state != "MERGED" or self.merged_at is None or not self.merge_commit:
             raise GitHubContractError("Pull request does not expose one complete merged result")
-        failed = [item.name for item in self.required_check_list if not item.passed()]
-        if failed:
-            raise GitHubContractError(f"Required GitHub checks are not passing: {sorted(failed)}")
+        failed_check_name_list = [item.name for item in self.required_check_list if not item.is_passed()]
+        if failed_check_name_list:
+            raise GitHubContractError(f"Required GitHub checks are not passing: {sorted(failed_check_name_list)}")

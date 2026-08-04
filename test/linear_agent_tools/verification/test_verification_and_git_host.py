@@ -60,13 +60,13 @@ def _verification_input(
     """
 
     return VerificationInput(
-        command_argument_list=("pytest", "-q"),
+        command_argument_list=["pytest", "-q"],
         working_directory=".",
         repository_url="git@github.com:antonov-andrey/example.git",
         source_fingerprint="f" * 64,
-        repository_commit_by_url=(("git@github.com:antonov-andrey/example.git", commit),),
-        recursive_submodule_commit_by_path=(("module/provider", COMMIT_ONE),),
-        dependency_lock_sha256_by_path=(("requirements-dev.txt", lock),),
+        repository_commit_by_url_map={"git@github.com:antonov-andrey/example.git": commit},
+        recursive_submodule_commit_by_path_map={"module/provider": COMMIT_ONE},
+        dependency_lock_sha256_by_path_map={"requirements-dev.txt": lock},
         environment_identity=environment,
         release_identity="sha256:" + "e" * 64,
     )
@@ -87,60 +87,60 @@ def test_receipt_roundtrip_and_exact_reuse_key() -> None:
     assert parsed == receipt
     assert receipt_reuse_decide(parsed, current).reusable
     changed_commit = receipt_reuse_decide(parsed, _verification_input(commit=COMMIT_TWO))
-    assert changed_commit.reason_list == ("repository-commit-set-changed",)
+    assert changed_commit.reason_list == ["repository-commit-set-changed"]
     changed_lock = receipt_reuse_decide(parsed, _verification_input(lock=LOCK_TWO))
-    assert changed_lock.reason_list == ("dependency-lock-set-changed",)
+    assert changed_lock.reason_list == ["dependency-lock-set-changed"]
     changed_environment = receipt_reuse_decide(parsed, _verification_input(environment="development:release-two"))
-    assert changed_environment.reason_list == ("environment-identity-changed",)
+    assert changed_environment.reason_list == ["environment-identity-changed"]
     changed_repository = receipt_reuse_decide(
         parsed,
         VerificationInput(
-            command_argument_list=("pytest", "-q"),
+            command_argument_list=["pytest", "-q"],
             working_directory=".",
             repository_url="git@github.com:antonov-andrey/other.git",
             source_fingerprint="f" * 64,
-            repository_commit_by_url=(
-                ("git@github.com:antonov-andrey/example.git", COMMIT_ONE),
-                ("git@github.com:antonov-andrey/other.git", COMMIT_ONE),
-            ),
-            recursive_submodule_commit_by_path=(("module/provider", COMMIT_ONE),),
-            dependency_lock_sha256_by_path=(("requirements-dev.txt", LOCK_ONE),),
+            repository_commit_by_url_map={
+                "git@github.com:antonov-andrey/example.git": COMMIT_ONE,
+                "git@github.com:antonov-andrey/other.git": COMMIT_ONE,
+            },
+            recursive_submodule_commit_by_path_map={"module/provider": COMMIT_ONE},
+            dependency_lock_sha256_by_path_map={"requirements-dev.txt": LOCK_ONE},
             environment_identity="development:release-one",
             release_identity="sha256:" + "e" * 64,
         ),
     )
-    assert changed_repository.reason_list == (
+    assert changed_repository.reason_list == [
         "verification-repository-changed",
         "repository-commit-set-changed",
-    )
+    ]
 
     changed_source = receipt_reuse_decide(
         parsed,
         VerificationInput(
             **{
                 **_verification_input().payload(),
-                "command_argument_list": ("pytest", "-q"),
+                "command_argument_list": ["pytest", "-q"],
                 "source_fingerprint": "0" * 64,
-                "repository_commit_by_url": (("git@github.com:antonov-andrey/example.git", COMMIT_ONE),),
-                "recursive_submodule_commit_by_path": (("module/provider", COMMIT_ONE),),
-                "dependency_lock_sha256_by_path": (("requirements-dev.txt", LOCK_ONE),),
+                "repository_commit_by_url_map": {"git@github.com:antonov-andrey/example.git": COMMIT_ONE},
+                "recursive_submodule_commit_by_path_map": {"module/provider": COMMIT_ONE},
+                "dependency_lock_sha256_by_path_map": {"requirements-dev.txt": LOCK_ONE},
             }
         ),
     )
-    assert changed_source.reason_list == ("source-fingerprint-changed",)
+    assert changed_source.reason_list == ["source-fingerprint-changed"]
 
 
 def test_external_evidence_receipt_can_bind_source_without_a_repository_commit() -> None:
     """A source-independent provider probe remains reusable only for its exact source."""
 
     value = VerificationInput(
-        command_argument_list=("linear-provider-probe",),
+        command_argument_list=["linear-provider-probe"],
         working_directory=".",
         repository_url="",
         source_fingerprint="f" * 64,
-        repository_commit_by_url=(),
-        recursive_submodule_commit_by_path=(),
-        dependency_lock_sha256_by_path=(),
+        repository_commit_by_url_map={},
+        recursive_submodule_commit_by_path_map={},
+        dependency_lock_sha256_by_path_map={},
         environment_identity="linear:workspace-one",
         release_identity="",
     )
@@ -166,55 +166,34 @@ def test_repository_scoped_inputs_require_the_exact_verification_repository() ->
         VerificationInput.from_payload(payload)
 
 
-def test_identity_pair_maps_reject_one_key_with_conflicting_values() -> None:
-    """Candidate, receipt and attempt mappings never carry two values for one owner key."""
+@pytest.mark.parametrize(
+    ("payload_field", "pair_list"),
+    [
+        (
+            "repository_commit_by_url_map",
+            [["git@github.com:antonov-andrey/example.git", COMMIT_ONE]],
+        ),
+        (
+            "recursive_submodule_commit_by_path_map",
+            [["module/provider", COMMIT_ONE]],
+        ),
+        (
+            "dependency_lock_sha256_by_path_map",
+            [["requirements-dev.txt", LOCK_ONE]],
+        ),
+    ],
+)
+def test_verification_mapping_boundaries_reject_pair_list_carriers(
+    payload_field: str,
+    pair_list: list[list[str]],
+) -> None:
+    """Verification identities use explicit JSON mappings, never positional pairs."""
 
-    with pytest.raises(VerificationReceiptError, match="unique and sorted"):
-        VerificationInput(
-            command_argument_list=("pytest", "-q"),
-            working_directory=".",
-            repository_url="git@github.com:antonov-andrey/example.git",
-            source_fingerprint="f" * 64,
-            repository_commit_by_url=(
-                ("git@github.com:antonov-andrey/example.git", COMMIT_ONE),
-                ("git@github.com:antonov-andrey/example.git", COMMIT_TWO),
-            ),
-            recursive_submodule_commit_by_path=(),
-            dependency_lock_sha256_by_path=(),
-            environment_identity="",
-            release_identity="",
-        )
+    payload = _verification_input().payload()
+    payload[payload_field] = pair_list
 
-    with pytest.raises(VerificationReceiptError, match="unique and sorted"):
-        CandidateInput(
-            delivery_kind="code",
-            pull_request_head_by_url=(
-                ("https://github.com/antonov-andrey/example/pull/17", COMMIT_ONE),
-                ("https://github.com/antonov-andrey/example/pull/17", COMMIT_TWO),
-            ),
-            evidence_identity_by_kind=(),
-        )
-
-    with pytest.raises(VerificationReceiptError, match="unique and sorted"):
-        AttemptSummary(
-            attempt_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-            issue_identifier="AND-17",
-            role_label="task:implementation",
-            delivery_kind="code",
-            started_at=datetime(2026, 8, 4, 12, 0, tzinfo=timezone.utc),
-            completed_at=datetime(2026, 8, 4, 12, 30, tzinfo=timezone.utc),
-            outcome="failed",
-            changed_commit_by_repository=(
-                ("antonov-andrey/example", COMMIT_ONE),
-                ("antonov-andrey/example", COMMIT_TWO),
-            ),
-            receipt_hit_count=0,
-            receipt_miss_count=1,
-            external_wait_seconds=0.0,
-            token_usage=None,
-            candidate_fingerprint="",
-            evidence_url_list=(),
-        )
+    with pytest.raises(VerificationReceiptError, match="mapping"):
+        VerificationInput.from_payload(payload)
 
 
 @pytest.mark.parametrize(
@@ -303,8 +282,8 @@ def test_candidate_fingerprint_and_attempt_comment_bind_exact_external_state() -
 
     candidate = CandidateInput(
         delivery_kind="code",
-        pull_request_head_by_url=(("https://github.com/antonov-andrey/example/pull/17", COMMIT_ONE),),
-        evidence_identity_by_kind=(),
+        pull_request_head_by_url_map={"https://github.com/antonov-andrey/example/pull/17": COMMIT_ONE},
+        evidence_identity_by_kind_map={},
     )
     summary = AttemptSummary(
         attempt_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
@@ -314,31 +293,31 @@ def test_candidate_fingerprint_and_attempt_comment_bind_exact_external_state() -
         started_at=datetime(2026, 8, 4, 12, 0, tzinfo=timezone.utc),
         completed_at=datetime(2026, 8, 4, 12, 30, tzinfo=timezone.utc),
         outcome="human-review",
-        changed_commit_by_repository=(("antonov-andrey/example", COMMIT_ONE),),
+        changed_commit_by_repository_map={"antonov-andrey/example": COMMIT_ONE},
         receipt_hit_count=2,
         receipt_miss_count=1,
         external_wait_seconds=12.5,
-        token_usage=None,
+        token_count=None,
         candidate_fingerprint=candidate.fingerprint(),
-        evidence_url_list=("https://example.test/evidence/17",),
+        evidence_url_list=["https://example.test/evidence/17"],
     )
 
     assert attempt_comment_parse(attempt_comment_render(summary)) == summary
-    assert "token_usage" not in summary.payload()
+    assert "token_count" not in summary.payload()
     assert (
         candidate.fingerprint()
         != CandidateInput(
             delivery_kind="code",
-            pull_request_head_by_url=(("https://github.com/antonov-andrey/example/pull/17", COMMIT_TWO),),
-            evidence_identity_by_kind=(),
+            pull_request_head_by_url_map={"https://github.com/antonov-andrey/example/pull/17": COMMIT_TWO},
+            evidence_identity_by_kind_map={},
         ).fingerprint()
     )
 
     with pytest.raises(VerificationReceiptError, match="canonical GitHub PR"):
         CandidateInput(
             delivery_kind="code",
-            pull_request_head_by_url=(("https://example.test/pull/17", COMMIT_ONE),),
-            evidence_identity_by_kind=(),
+            pull_request_head_by_url_map={"https://example.test/pull/17": COMMIT_ONE},
+            evidence_identity_by_kind_map={},
         )
 
 
@@ -352,7 +331,7 @@ def test_candidate_fingerprint_and_attempt_comment_bind_exact_external_state() -
             {"role_label": "task:cleanup", "delivery_kind": "cleanup"},
             "role and outcome",
         ),
-        ({"evidence_url_list": ()}, "bounded evidence links"),
+        ({"evidence_url_list": []}, "bounded evidence links"),
     ],
 )
 def test_attempt_summary_rejects_role_outcome_candidate_and_evidence_mismatch(
@@ -369,13 +348,13 @@ def test_attempt_summary_rejects_role_outcome_candidate_and_evidence_mismatch(
         "started_at": datetime(2026, 8, 4, 12, 0, tzinfo=timezone.utc),
         "completed_at": datetime(2026, 8, 4, 12, 30, tzinfo=timezone.utc),
         "outcome": "human-review",
-        "changed_commit_by_repository": (("antonov-andrey/example", COMMIT_ONE),),
+        "changed_commit_by_repository_map": {"antonov-andrey/example": COMMIT_ONE},
         "receipt_hit_count": 1,
         "receipt_miss_count": 0,
         "external_wait_seconds": 0.0,
-        "token_usage": None,
+        "token_count": None,
         "candidate_fingerprint": "f" * 64,
-        "evidence_url_list": ("https://example.test/evidence/17",),
+        "evidence_url_list": ["https://example.test/evidence/17"],
     }
     argument_by_name.update(replacement)
 
@@ -395,13 +374,13 @@ def test_attempt_summary_rejects_commits_for_evidence_delivery() -> None:
             started_at=datetime(2026, 8, 4, 12, 0, tzinfo=timezone.utc),
             completed_at=datetime(2026, 8, 4, 12, 30, tzinfo=timezone.utc),
             outcome="failed",
-            changed_commit_by_repository=(("antonov-andrey/example", COMMIT_ONE),),
+            changed_commit_by_repository_map={"antonov-andrey/example": COMMIT_ONE},
             receipt_hit_count=0,
             receipt_miss_count=1,
             external_wait_seconds=0.0,
-            token_usage=None,
+            token_count=None,
             candidate_fingerprint="",
-            evidence_url_list=(),
+            evidence_url_list=[],
         )
 
 
@@ -413,13 +392,13 @@ def test_local_phase_baseline_requires_every_phase_and_round_trips() -> None:
         source_fingerprint="c" * 64,
         candidate_fingerprint="d" * 64,
         measured_at=datetime(2026, 8, 4, 13, 0, tzinfo=timezone.utc),
-        duration_seconds_by_phase=(
-            ("execution", 120.0),
-            ("merge", 10.0),
-            ("queue", 4.0),
-            ("review", 30.0),
-            ("startup", 2.0),
-        ),
+        duration_seconds_by_phase_map={
+            "execution": 120.0,
+            "merge": 10.0,
+            "queue": 4.0,
+            "review": 30.0,
+            "startup": 2.0,
+        },
         evidence_url="https://linear.app/example/project/acceptance",
     )
 
@@ -430,7 +409,7 @@ def test_local_phase_baseline_requires_every_phase_and_round_trips() -> None:
             source_fingerprint=baseline.source_fingerprint,
             candidate_fingerprint=baseline.candidate_fingerprint,
             measured_at=baseline.measured_at,
-            duration_seconds_by_phase=(("execution", 1.0),),
+            duration_seconds_by_phase_map={"execution": 1.0},
             evidence_url=baseline.evidence_url,
         )
 
@@ -442,7 +421,7 @@ def test_task_workspace_baseline_is_deterministic_linear_evidence() -> None:
         issue_identifier="AND-17",
         source_fingerprint="c" * 64,
         branch_name="linear/and-17",
-        baseline_commit_by_repository_url=(("git@github.com:antonov-andrey/example.git", COMMIT_ONE),),
+        baseline_commit_by_repository_url_map={"git@github.com:antonov-andrey/example.git": COMMIT_ONE},
     )
 
     assert workspace_baseline_comment_parse(workspace_baseline_comment_render(baseline)) == baseline
@@ -451,7 +430,7 @@ def test_task_workspace_baseline_is_deterministic_linear_evidence() -> None:
             issue_identifier=baseline.issue_identifier,
             source_fingerprint=baseline.source_fingerprint,
             branch_name="linear/and-18",
-            baseline_commit_by_repository_url=baseline.baseline_commit_by_repository_url,
+            baseline_commit_by_repository_url_map=baseline.baseline_commit_by_repository_url_map,
         )
 
 
@@ -464,8 +443,8 @@ def test_shared_evidence_cli_renders_candidate_without_persistent_state(
     input_path = tmp_path / "candidate.json"
     candidate = CandidateInput(
         delivery_kind="evidence",
-        pull_request_head_by_url=(),
-        evidence_identity_by_kind=(("acceptance", "sha256:" + "e" * 64),),
+        pull_request_head_by_url_map={},
+        evidence_identity_by_kind_map={"acceptance": "sha256:" + "e" * 64},
     )
     input_path.write_text(json.dumps(candidate.payload()), encoding="utf-8")
 
@@ -490,11 +469,11 @@ class _GhRunner:
         self.check_bucket = "pass"
         self.state = "OPEN"
         self.pr_exists = False
-        self.command_list: list[tuple[str, ...]] = []
+        self.command_list: list[list[str]] = []
 
-    def __call__(self, argument_list: tuple[str, ...]) -> subprocess.CompletedProcess[str]:
-        self.command_list.append(tuple(argument_list))
-        if argument_list[1:3] == ("pr", "checks"):
+    def __call__(self, argument_list: list[str]) -> subprocess.CompletedProcess[str]:
+        self.command_list.append(list(argument_list))
+        if argument_list[1:3] == ["pr", "checks"]:
             return subprocess.CompletedProcess(
                 argument_list,
                 8 if self.check_bucket == "pending" else 0,
@@ -509,7 +488,7 @@ class _GhRunner:
                 ),
                 "",
             )
-        if argument_list[1:3] == ("api", "--method"):
+        if argument_list[1:3] == ["api", "--method"]:
             payload = (
                 [
                     [
@@ -524,7 +503,7 @@ class _GhRunner:
                 else [[]]
             )
             return subprocess.CompletedProcess(argument_list, 0, json.dumps(payload), "")
-        if argument_list[1:3] == ("pr", "create"):
+        if argument_list[1:3] == ["pr", "create"]:
             self.pr_exists = True
             return subprocess.CompletedProcess(
                 argument_list,
@@ -532,13 +511,13 @@ class _GhRunner:
                 "https://github.com/antonov-andrey/example/pull/17\n",
                 "",
             )
-        if argument_list[1:3] == ("pr", "merge"):
+        if argument_list[1:3] == ["pr", "merge"]:
             self.state = "MERGED"
             return subprocess.CompletedProcess(argument_list, 0, "", "")
-        if argument_list[1:3] == ("pr", "close"):
+        if argument_list[1:3] == ["pr", "close"]:
             self.state = "CLOSED"
             return subprocess.CompletedProcess(argument_list, 0, "", "")
-        if argument_list[1:3] == ("pr", "view"):
+        if argument_list[1:3] == ["pr", "view"]:
             payload = {
                 "number": 17,
                 "url": "https://github.com/antonov-andrey/example/pull/17",
@@ -576,8 +555,8 @@ def test_github_merge_binds_exact_human_approved_head_and_required_checks() -> N
 
     assert merged.state == "MERGED"
     assert merged.merge_commit == COMMIT_TWO
-    merge_command = next(item for item in runner.command_list if item[1:3] == ("pr", "merge"))
-    assert merge_command[-2:] == ("--match-head-commit", COMMIT_ONE)
+    merge_command = next(item for item in runner.command_list if item[1:3] == ["pr", "merge"])
+    assert merge_command[-2:] == ["--match-head-commit", COMMIT_ONE]
 
 
 def test_github_merge_retry_adopts_exact_already_merged_candidate() -> None:
@@ -598,7 +577,7 @@ def test_github_merge_retry_adopts_exact_already_merged_candidate() -> None:
     )
 
     assert merged.state == "MERGED"
-    assert not any(item[1:3] == ("pr", "merge") for item in runner.command_list)
+    assert not any(item[1:3] == ["pr", "merge"] for item in runner.command_list)
 
 
 def test_github_pr_create_is_idempotent_for_exact_issue_branch(tmp_path: Path) -> None:
@@ -621,8 +600,8 @@ def test_github_pr_create_is_idempotent_for_exact_issue_branch(tmp_path: Path) -
     second = boundary.create(**arguments)
 
     assert first.number == second.number == 17
-    assert sum(item[1:3] == ("pr", "create") for item in runner.command_list) == 1
-    lookup_command = next(item for item in runner.command_list if item[1:3] == ("api", "--method"))
+    assert sum(item[1:3] == ["pr", "create"] for item in runner.command_list) == 1
+    lookup_command = next(item for item in runner.command_list if item[1:3] == ["api", "--method"])
     assert "--paginate" in lookup_command
     assert "--slurp" in lookup_command
     assert "--jq" not in lookup_command
@@ -652,7 +631,7 @@ def test_github_pr_lookup_rejects_malformed_or_conflicting_pages(
 ) -> None:
     """Native paginated output cannot weaken exact PR identity or uniqueness."""
 
-    def runner(argument_list: tuple[str, ...]) -> subprocess.CompletedProcess[str]:
+    def runner(argument_list: list[str]) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(argument_list, 0, json.dumps(payload), "")
 
     with pytest.raises(GitHubContractError, match="lookup"):
@@ -700,7 +679,7 @@ def test_github_merge_rejects_candidate_mutation_before_external_merge() -> None
             merge_method="merge",
         )
 
-    assert not any(item[1:3] == ("pr", "merge") for item in runner.command_list)
+    assert not any(item[1:3] == ["pr", "merge"] for item in runner.command_list)
 
 
 def test_github_merge_reads_gh_check_bucket_and_rejects_pending_required_check() -> None:
@@ -721,9 +700,9 @@ def test_github_merge_reads_gh_check_bucket_and_rejects_pending_required_check()
             merge_method="merge",
         )
 
-    check_command = next(item for item in runner.command_list if item[1:3] == ("pr", "checks"))
+    check_command = next(item for item in runner.command_list if item[1:3] == ["pr", "checks"])
     assert check_command[-1] == "name,bucket,link"
-    assert not any(item[1:3] == ("pr", "merge") for item in runner.command_list)
+    assert not any(item[1:3] == ["pr", "merge"] for item in runner.command_list)
 
 
 def test_github_merge_rejects_wrong_base_before_external_merge() -> None:
@@ -743,7 +722,7 @@ def test_github_merge_rejects_wrong_base_before_external_merge() -> None:
             merge_method="merge",
         )
 
-    assert not any(item[1:3] == ("pr", "merge") for item in runner.command_list)
+    assert not any(item[1:3] == ["pr", "merge"] for item in runner.command_list)
 
 
 def test_canceled_pull_request_close_is_idempotent() -> None:
@@ -765,7 +744,7 @@ def test_canceled_pull_request_close_is_idempotent() -> None:
 
     assert first.state == "CLOSED"
     assert second.state == "CLOSED"
-    assert sum(item[1:3] == ("pr", "close") for item in runner.command_list) == 1
+    assert sum(item[1:3] == ["pr", "close"] for item in runner.command_list) == 1
 
 
 def test_canceled_pull_request_close_rejects_foreign_target_before_mutation() -> None:
@@ -783,4 +762,4 @@ def test_canceled_pull_request_close_rejects_foreign_target_before_mutation() ->
             head_branch="linear/and-17",
         )
 
-    assert not any(item[1:3] == ("pr", "close") for item in runner.command_list)
+    assert not any(item[1:3] == ["pr", "close"] for item in runner.command_list)

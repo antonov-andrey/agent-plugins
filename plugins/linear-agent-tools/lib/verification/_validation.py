@@ -88,33 +88,23 @@ def instant_render(value: datetime) -> str:
     return value.isoformat().replace("+00:00", "Z")
 
 
-def text_pair_tuple(value: object, *, label: str) -> tuple[tuple[str, str], ...]:
-    """Parse one canonical sorted text-pair list.
+def text_by_text_map_parse(value: object, *, label: str, empty_allowed: bool = True) -> dict[str, str]:
+    """Parse one closed text-to-text mapping.
 
     Args:
         value: Candidate JSON value.
         label: Diagnostic owner label.
+        empty_allowed: Whether an empty mapping is valid.
 
     Returns:
-        Typed pair tuple.
+        Canonically ordered mapping.
     """
 
-    if not isinstance(value, list):
-        raise VerificationReceiptError(f"{label} must be a list")
-    result: list[tuple[str, str]] = []
-    for item in value:
-        if not isinstance(item, list) or len(item) != 2:
-            raise VerificationReceiptError(f"{label} contains a malformed pair")
-        result.append(
-            (
-                single_line_validate(item[0], label=f"{label} key"),
-                single_line_validate(item[1], label=f"{label} value"),
-            )
-        )
-    if (
-        result != sorted(result)
-        or len(result) != len(set(result))
-        or len({key for key, _value in result}) != len(result)
-    ):
-        raise VerificationReceiptError(f"{label} must be unique and sorted")
-    return tuple(result)
+    if not isinstance(value, dict) or (not value and not empty_allowed):
+        qualifier = "possibly empty" if empty_allowed else "non-empty"
+        raise VerificationReceiptError(f"{label} must be a {qualifier} mapping")
+    text_by_text_map: dict[str, str] = {}
+    for key, mapped_value in value.items():
+        parsed_key = single_line_validate(key, label=f"{label} key")
+        text_by_text_map[parsed_key] = single_line_validate(mapped_value, label=f"{label} value")
+    return dict(sorted(text_by_text_map.items()))

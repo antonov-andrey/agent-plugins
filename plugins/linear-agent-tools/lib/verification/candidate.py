@@ -12,7 +12,7 @@ from verification._validation import (
     COMMIT_PATTERN,
     VerificationReceiptError,
     single_line_validate,
-    text_pair_tuple,
+    text_by_text_map_parse,
 )
 
 _GITHUB_PULL_REQUEST_PATH_PATTERN = re.compile(r"/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[1-9][0-9]*")
@@ -23,8 +23,8 @@ class CandidateInput:
     """Own the exact external identities approved at Human Review."""
 
     delivery_kind: str
-    pull_request_head_by_url: tuple[tuple[str, str], ...]
-    evidence_identity_by_kind: tuple[tuple[str, str], ...]
+    pull_request_head_by_url_map: dict[str, str]
+    evidence_identity_by_kind_map: dict[str, str]
 
     def __post_init__(self) -> None:
         """Require one code or evidence candidate with no mixed identity surface."""
@@ -35,26 +35,20 @@ class CandidateInput:
         }:
             raise VerificationReceiptError("Candidate delivery kind must be code or evidence")
         for label, value in (
-            ("pull-request heads", self.pull_request_head_by_url),
-            ("evidence identities", self.evidence_identity_by_kind),
+            ("pull-request heads", self.pull_request_head_by_url_map),
+            ("evidence identities", self.evidence_identity_by_kind_map),
         ):
-            if not isinstance(value, tuple) or any(not isinstance(item, tuple) or len(item) != 2 for item in value):
-                raise VerificationReceiptError(f"Candidate {label} contains a malformed pair")
-            if (
-                value != tuple(sorted(value))
-                or len(value) != len(set(value))
-                or len({key for key, _identity in value}) != len(value)
-            ):
-                raise VerificationReceiptError(f"Candidate {label} must be unique and sorted")
-            for key, identity in value:
+            if not isinstance(value, dict):
+                raise VerificationReceiptError(f"Candidate {label} must be a mapping")
+            for key, identity in value.items():
                 single_line_validate(key, label=f"Candidate {label} key")
                 single_line_validate(identity, label=f"Candidate {label} identity")
         if self.delivery_kind == "code":
-            if not self.pull_request_head_by_url or self.evidence_identity_by_kind:
+            if not self.pull_request_head_by_url_map or self.evidence_identity_by_kind_map:
                 raise VerificationReceiptError("Code candidate requires only one or more exact pull-request heads")
-            if any(COMMIT_PATTERN.fullmatch(commit) is None for _url, commit in self.pull_request_head_by_url):
+            if any(COMMIT_PATTERN.fullmatch(commit) is None for commit in self.pull_request_head_by_url_map.values()):
                 raise VerificationReceiptError("Code candidate pull-request head is not a full lowercase commit")
-            for url, _commit in self.pull_request_head_by_url:
+            for url in self.pull_request_head_by_url_map:
                 parsed = urlsplit(url)
                 if (
                     parsed.scheme != "https"
@@ -64,8 +58,18 @@ class CandidateInput:
                     or _GITHUB_PULL_REQUEST_PATH_PATTERN.fullmatch(parsed.path) is None
                 ):
                     raise VerificationReceiptError("Code candidate pull-request URL is not one canonical GitHub PR")
-        elif self.pull_request_head_by_url or not self.evidence_identity_by_kind:
+        elif self.pull_request_head_by_url_map or not self.evidence_identity_by_kind_map:
             raise VerificationReceiptError("Evidence candidate requires only one or more exact evidence identities")
+        object.__setattr__(
+            self,
+            "pull_request_head_by_url_map",
+            dict(sorted(self.pull_request_head_by_url_map.items())),
+        )
+        object.__setattr__(
+            self,
+            "evidence_identity_by_kind_map",
+            dict(sorted(self.evidence_identity_by_kind_map.items())),
+        )
 
     def payload(self) -> dict[str, object]:
         """Return the canonical candidate input.
@@ -76,8 +80,8 @@ class CandidateInput:
 
         return {
             "delivery_kind": self.delivery_kind,
-            "evidence_identity_by_kind": [list(item) for item in self.evidence_identity_by_kind],
-            "pull_request_head_by_url": [list(item) for item in self.pull_request_head_by_url],
+            "evidence_identity_by_kind_map": dict(self.evidence_identity_by_kind_map),
+            "pull_request_head_by_url_map": dict(self.pull_request_head_by_url_map),
         }
 
     def fingerprint(self) -> str:
@@ -109,15 +113,17 @@ class CandidateInput:
 
         expected = {
             "delivery_kind",
-            "evidence_identity_by_kind",
-            "pull_request_head_by_url",
+            "evidence_identity_by_kind_map",
+            "pull_request_head_by_url_map",
         }
         if not isinstance(payload, dict) or set(payload) != expected:
             raise VerificationReceiptError("Candidate input has another shape")
         return cls(
             delivery_kind=payload["delivery_kind"],
-            pull_request_head_by_url=text_pair_tuple(payload["pull_request_head_by_url"], label="pull-request heads"),
-            evidence_identity_by_kind=text_pair_tuple(
-                payload["evidence_identity_by_kind"], label="evidence identities"
+            pull_request_head_by_url_map=text_by_text_map_parse(
+                payload["pull_request_head_by_url_map"], label="pull-request heads"
+            ),
+            evidence_identity_by_kind_map=text_by_text_map_parse(
+                payload["evidence_identity_by_kind_map"], label="evidence identities"
             ),
         )
