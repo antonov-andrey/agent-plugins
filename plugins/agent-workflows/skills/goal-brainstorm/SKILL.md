@@ -19,6 +19,8 @@ Read `references/specification-contract.md` completely before changing a specifi
 6. Run `scripts/source.py write` with the explicit canonical `project-goals` root, common prefix and both input paths. The command publishes exactly the pair through one serialized direct-main transaction and pushes it immediately.
 7. Run `scripts/source.py validate`, report the exact source commit, fingerprint and root-relative paths, and stop. Recommend a fresh thread with `linear-agent-tools:task-graph-create` for handoff.
 
+Every publication or publication-preview response MUST say explicitly that the complete pair remains freely revisable through the same ordinary atomic `write` operation until successful Linear handoff. It MUST also state that authoring creates no task graph, checkpoint, branch, worktree, persistent harness goal, seal, implementation change or other hidden lifecycle state.
+
 ## Revision Boundary
 
 Before successful Linear handoff, a correction is an ordinary revision of the same pair. Repeat semantic review and `write` with both complete files. There is no seal, active state or special revision command.

@@ -187,7 +187,7 @@
       "id": "negative-ordinary-python-fix",
       "working_directory": "..",
       "working_directory_mode": "same-branch",
-      "prompt": "Fix a small bug in one ordinary non-Legacy Python function and add a focused pytest regression test.",
+      "prompt": "Fix a small bug in one ordinary non-Legacy Python function and add a focused pytest regression test. Every skill listed by the repository as required is available.",
       "expected_skill_list": [
         "project-standards:project-foundation",
         "project-standards:python-developer",
