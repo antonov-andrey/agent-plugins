@@ -18,7 +18,7 @@ from task_workspace.model import (
 )
 
 
-class _IssueFileLock(AbstractContextManager["_IssueFileLock"]):
+class IssueFileLock(AbstractContextManager["IssueFileLock"]):
     """Hold one kernel-released lock keyed by workspace root, issue and purpose."""
 
     def __init__(
@@ -98,7 +98,7 @@ class _IssueFileLock(AbstractContextManager["_IssueFileLock"]):
             self._descriptor = None
 
 
-class IssueWorkspaceLock(_IssueFileLock):
+class IssueWorkspaceLock(IssueFileLock):
     """Serialize short Git workspace and cleanup transactions for one issue."""
 
     def __init__(self, config: WorkspaceConfig, issue_identifier: str) -> None:
@@ -107,7 +107,7 @@ class IssueWorkspaceLock(_IssueFileLock):
         super().__init__(config, issue_identifier, purpose="operation")
 
 
-class IssueAttemptLock(_IssueFileLock):
+class IssueAttemptLock(IssueFileLock):
     """Prevent two local agent attempts from owning one issue concurrently."""
 
     def __init__(self, config: WorkspaceConfig, issue_identifier: str) -> None:

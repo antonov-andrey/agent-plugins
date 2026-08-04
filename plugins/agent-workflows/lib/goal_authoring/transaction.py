@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from contextlib import AbstractContextManager
 import fcntl
 import hashlib
@@ -10,7 +11,6 @@ import os
 from pathlib import Path
 import secrets
 import stat
-from typing import Mapping
 
 from goal_authoring.model import (
     GoalAuthoringError,
@@ -62,7 +62,7 @@ def _atomic_json_write(path: Path, payload: Mapping[str, object]) -> None:
         raise
 
 
-class _ExclusiveFileLock(AbstractContextManager["_ExclusiveFileLock"]):
+class ExclusiveFileLock(AbstractContextManager["ExclusiveFileLock"]):
     """Hold one kernel-released non-blocking exclusive lock."""
 
     def __init__(self, path: Path) -> None:
@@ -75,7 +75,7 @@ class _ExclusiveFileLock(AbstractContextManager["_ExclusiveFileLock"]):
         self._path = path
         self._descriptor: int | None = None
 
-    def __enter__(self) -> "_ExclusiveFileLock":
+    def __enter__(self) -> "ExclusiveFileLock":
         """Acquire the lock without waiting.
 
         Returns:
@@ -148,7 +148,7 @@ class GoalSourceTransaction:
         payload_by_path = source.relative_payload_by_path()
         digest_by_path = {path: hashlib.sha256(payload).hexdigest() for path, payload in payload_by_path.items()}
         lock_path = self._repository.private_directory_require("lock") / "direct-main.lock"
-        with _ExclusiveFileLock(lock_path):
+        with ExclusiveFileLock(lock_path):
             recovered = self._recover(source.common_prefix, expected_digest_by_path=digest_by_path)
             if recovered is not None:
                 return recovered
@@ -181,7 +181,7 @@ class GoalSourceTransaction:
                     remote_commit,
                     label="Concurrent project-goals main update",
                 )
-                if self._paths_changed(base_commit, remote_commit, tuple(sorted(payload_by_path))):
+                if self._have_path_change(base_commit, remote_commit, sorted(payload_by_path)):
                     raise GoalAuthoringError("Concurrent project-goals update overlaps this source pair")
                 self._git.run(("merge", "--ff-only", remote_commit))
                 self._git.clean_require()
@@ -299,14 +299,14 @@ class GoalSourceTransaction:
         parent_list = self._git.output(("show", "-s", "--format=%P", commit)).split()
         if parent_list != [base_commit]:
             raise GoalAuthoringError("Source publication pending commit has another parent")
-        if not self._tree_payload_matches(commit, digest_by_path):
+        if not self._match_tree_payload(commit, digest_by_path):
             raise GoalAuthoringError("Source publication pending commit differs from its journal")
         self._repository.checkout_shape_require()
         self._git.run(("fetch", "--prune", "origin"))
         local_commit = self._git.commit()
         remote_commit = self._git.commit("refs/remotes/origin/main")
         if self._is_ancestor(commit, remote_commit):
-            if not self._tree_payload_matches(remote_commit, digest_by_path):
+            if not self._match_tree_payload(remote_commit, digest_by_path):
                 raise GoalAuthoringError("Published source bytes were replaced by a conflicting update")
             if local_commit != remote_commit:
                 self._git.run(("merge", "--ff-only", remote_commit))
@@ -319,8 +319,8 @@ class GoalSourceTransaction:
             if push.returncode == 0:
                 self._finish_local(commit, journal_path=journal_path)
                 return commit
-        if self._is_ancestor(base_commit, remote_commit) and not self._paths_changed(
-            base_commit, remote_commit, tuple(sorted(expected_path_set))
+        if self._is_ancestor(base_commit, remote_commit) and not self._have_path_change(
+            base_commit, remote_commit, sorted(expected_path_set)
         ):
             if local_commit == base_commit:
                 self._git.run(("merge", "--ff-only", remote_commit))
@@ -356,7 +356,7 @@ class GoalSourceTransaction:
 
         return self._repository.private_directory_require("journal") / f"{common_prefix_validate(common_prefix)}.json"
 
-    def _tree_payload_matches(self, ref: str, digest_by_path: Mapping[str, str]) -> bool:
+    def _match_tree_payload(self, ref: str, digest_by_path: Mapping[str, str]) -> bool:
         """Return whether one tree retains every recorded source payload.
 
         Args:
@@ -373,7 +373,7 @@ class GoalSourceTransaction:
                 return False
         return True
 
-    def _paths_changed(self, old: str, new: str, path_list: tuple[str, ...]) -> bool:
+    def _have_path_change(self, old: str, new: str, path_list: list[str]) -> bool:
         """Return whether one exact path set changed between commits.
 
         Args:

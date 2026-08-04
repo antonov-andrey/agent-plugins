@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 import os
 from pathlib import Path
 import stat
 import subprocess
-from typing import Mapping, Sequence
 
 from goal_authoring.model import (
     GoalAuthoringError,
@@ -74,7 +74,7 @@ class GitRepository:
         """
 
         environment = os.environ.copy()
-        for name in tuple(environment):
+        for name in list(environment):
             if name in _GIT_REDIRECTION_NAME_SET or name.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")):
                 environment.pop(name, None)
         environment["GIT_TERMINAL_PROMPT"] = "0"

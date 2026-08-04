@@ -160,7 +160,7 @@ def resource_materialize(resource: BootstrapResource, *, main_root: Path, task_r
     )
     destination = destination_parent / PurePosixPath(resource.relative_path).name
     if destination.exists() or destination.is_symlink():
-        if _destination_matches(destination, resource):
+        if _match_destination(destination, resource):
             return
         raise TaskWorkspaceError(f"Owned bootstrap destination conflicts with its plan: {resource.relative_path}")
     temporary = destination.parent / f".{destination.name}.linear-agent-{secrets.token_hex(8)}"
@@ -181,7 +181,7 @@ def resource_materialize(resource: BootstrapResource, *, main_root: Path, task_r
         elif temporary.is_dir():
             shutil.rmtree(temporary)
         raise
-    if not _destination_matches(destination, resource):
+    if not _match_destination(destination, resource):
         raise TaskWorkspaceError(f"Bootstrap resource read-back failed: {resource.relative_path}")
 
 
@@ -201,7 +201,7 @@ def resource_ready_require(resource: BootstrapResource, *, task_root: Path) -> N
         create=False,
     )
     destination = destination_parent / PurePosixPath(resource.relative_path).name
-    if not (destination.exists() or destination.is_symlink()) or not _destination_matches(destination, resource):
+    if not (destination.exists() or destination.is_symlink()) or not _match_destination(destination, resource):
         raise TaskWorkspaceError(f"Bootstrap resource is absent or changed: {resource.relative_path}")
 
 
@@ -398,7 +398,7 @@ def _source_identity_get(path: Path, *, kind: str) -> str:
     return f"copy:{_path_fingerprint(path)}"
 
 
-def _destination_matches(path: Path, resource: BootstrapResource) -> bool:
+def _match_destination(path: Path, resource: BootstrapResource) -> bool:
     """Return whether one pre-owned destination matches its planned identity.
 
     Args:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 from pathlib import Path
 import subprocess
@@ -23,6 +24,22 @@ from goal_authoring.transaction import GoalSourceTransaction
 PREFIX = "2026-08-04-test-source"
 
 
+@dataclass(frozen=True, slots=True)
+class RepositoryFixture:
+    """Contain one isolated project-goals checkout and its bare remote."""
+
+    main_root: Path
+    remote_root: Path
+
+
+@dataclass(frozen=True, slots=True)
+class SourceInputFixture:
+    """Contain one complete goal and specification input pair."""
+
+    goal_path: Path
+    specification_path: Path
+
+
 def _git(repository: Path, *argument_list: str) -> str:
     """Run one checked Git command in a test repository.
 
@@ -42,7 +59,7 @@ def _git(repository: Path, *argument_list: str) -> str:
     ).stdout.strip()
 
 
-def _repository_create(workspace: Path) -> tuple[Path, Path]:
+def _repository_fixture_create(workspace: Path) -> RepositoryFixture:
     """Create one isolated canonical project-goals repository.
 
     Args:
@@ -66,10 +83,10 @@ def _repository_create(workspace: Path) -> tuple[Path, Path]:
     _git(root, "add", "DESIGN.md")
     _git(root, "commit", "-m", "Initialize project goals")
     _git(root, "push", "-u", "origin", "main")
-    return root, remote
+    return RepositoryFixture(main_root=root, remote_root=remote)
 
 
-def _input_pair_create(workspace: Path, *, suffix: str = "one") -> tuple[Path, Path]:
+def _source_input_fixture_create(workspace: Path, *, suffix: str = "one") -> SourceInputFixture:
     """Create one complete pair of source input files.
 
     Args:
@@ -84,40 +101,40 @@ def _input_pair_create(workspace: Path, *, suffix: str = "one") -> tuple[Path, P
     specification = workspace / f"spec-{suffix}.md"
     goal.write_text(f"# Goal {suffix}\n", encoding="utf-8")
     specification.write_text(f"# Specification {suffix}\n", encoding="utf-8")
-    return goal, specification
+    return SourceInputFixture(goal_path=goal, specification_path=specification)
 
 
 def test_write_and_revision_publish_only_complete_pair(tmp_path: Path) -> None:
     """Initial authoring and revision publish one atomic pair each."""
 
-    root, remote = _repository_create(tmp_path)
-    workflow = GoalAuthoringWorkflow(root)
-    goal_one, specification_one = _input_pair_create(tmp_path, suffix="one")
+    repository = _repository_fixture_create(tmp_path)
+    workflow = GoalAuthoringWorkflow(repository.main_root)
+    source_one = _source_input_fixture_create(tmp_path, suffix="one")
 
     first = workflow.write(
         common_prefix=PREFIX,
-        goal_input=goal_one,
-        specification_input=specification_one,
+        goal_input=source_one.goal_path,
+        specification_input=source_one.specification_path,
     )
 
-    assert first.commit == _git(root, "rev-parse", "HEAD")
-    assert first.commit == _git(remote, "rev-parse", "refs/heads/main")
-    assert sorted(path.name for path in (root / PREFIX).iterdir()) == [
+    assert first.commit == _git(repository.main_root, "rev-parse", "HEAD")
+    assert first.commit == _git(repository.remote_root, "rev-parse", "refs/heads/main")
+    assert sorted(path.name for path in (repository.main_root / PREFIX).iterdir()) == [
         "goal.md",
         "spec.md",
     ]
-    assert (root / PREFIX / "goal.md").read_bytes() == goal_one.read_bytes()
-    assert (root / PREFIX / "spec.md").read_bytes() == specification_one.read_bytes()
+    assert (repository.main_root / PREFIX / "goal.md").read_bytes() == source_one.goal_path.read_bytes()
+    assert (repository.main_root / PREFIX / "spec.md").read_bytes() == source_one.specification_path.read_bytes()
 
-    goal_two, specification_two = _input_pair_create(tmp_path, suffix="two")
+    source_two = _source_input_fixture_create(tmp_path, suffix="two")
     second = workflow.write(
         common_prefix=PREFIX,
-        goal_input=goal_two,
-        specification_input=specification_two,
+        goal_input=source_two.goal_path,
+        specification_input=source_two.specification_path,
     )
 
     assert second.commit != first.commit
-    changed_path_list = _git(root, "diff", "--name-only", first.commit, second.commit).splitlines()
+    changed_path_list = _git(repository.main_root, "diff", "--name-only", first.commit, second.commit).splitlines()
     assert changed_path_list == [f"{PREFIX}/goal.md", f"{PREFIX}/spec.md"]
     assert workflow.validate(common_prefix=PREFIX) == second
 
@@ -125,15 +142,23 @@ def test_write_and_revision_publish_only_complete_pair(tmp_path: Path) -> None:
 def test_identical_write_is_idempotent(tmp_path: Path) -> None:
     """Retrying exact source bytes does not create another commit."""
 
-    root, _remote = _repository_create(tmp_path)
-    goal, specification = _input_pair_create(tmp_path)
-    workflow = GoalAuthoringWorkflow(root)
+    repository = _repository_fixture_create(tmp_path)
+    source = _source_input_fixture_create(tmp_path)
+    workflow = GoalAuthoringWorkflow(repository.main_root)
 
-    first = workflow.write(common_prefix=PREFIX, goal_input=goal, specification_input=specification)
-    second = workflow.write(common_prefix=PREFIX, goal_input=goal, specification_input=specification)
+    first = workflow.write(
+        common_prefix=PREFIX,
+        goal_input=source.goal_path,
+        specification_input=source.specification_path,
+    )
+    second = workflow.write(
+        common_prefix=PREFIX,
+        goal_input=source.goal_path,
+        specification_input=source.specification_path,
+    )
 
     assert second == first
-    assert _git(root, "rev-list", "--count", "HEAD") == "2"
+    assert _git(repository.main_root, "rev-list", "--count", "HEAD") == "2"
 
 
 def test_private_authoring_symlink_is_rejected_before_git_mutation(
@@ -141,47 +166,47 @@ def test_private_authoring_symlink_is_rejected_before_git_mutation(
 ) -> None:
     """A predictable Git-admin path cannot redirect authoring recovery state outside the repository."""
 
-    root, remote = _repository_create(tmp_path)
-    goal, specification = _input_pair_create(tmp_path)
+    repository = _repository_fixture_create(tmp_path)
+    source = _source_input_fixture_create(tmp_path)
     outside = tmp_path / "outside"
     outside.mkdir()
-    (root / ".git" / "agent-workflows").symlink_to(outside, target_is_directory=True)
-    baseline = _git(root, "rev-parse", "HEAD")
+    (repository.main_root / ".git" / "agent-workflows").symlink_to(outside, target_is_directory=True)
+    baseline = _git(repository.main_root, "rev-parse", "HEAD")
 
     with pytest.raises(GoalAuthoringError, match="user-owned and physical"):
-        GoalAuthoringWorkflow(root).write(
+        GoalAuthoringWorkflow(repository.main_root).write(
             common_prefix=PREFIX,
-            goal_input=goal,
-            specification_input=specification,
+            goal_input=source.goal_path,
+            specification_input=source.specification_path,
         )
 
-    assert tuple(outside.iterdir()) == ()
-    assert _git(root, "rev-parse", "HEAD") == baseline
-    assert _git(remote, "rev-parse", "refs/heads/main") == baseline
+    assert list(outside.iterdir()) == []
+    assert _git(repository.main_root, "rev-parse", "HEAD") == baseline
+    assert _git(repository.remote_root, "rev-parse", "refs/heads/main") == baseline
 
 
 def test_validate_rejects_incomplete_or_legacy_directory_shape(tmp_path: Path) -> None:
     """A current source is never accepted with a missing or third artifact."""
 
-    root, _remote = _repository_create(tmp_path)
-    directory = root / PREFIX
+    repository = _repository_fixture_create(tmp_path)
+    directory = repository.main_root / PREFIX
     directory.mkdir()
     (directory / "spec.md").write_text("# Spec\n", encoding="utf-8")
-    _git(root, "add", ".")
-    _git(root, "commit", "-m", "Add incomplete source")
-    _git(root, "push", "origin", "main")
+    _git(repository.main_root, "add", ".")
+    _git(repository.main_root, "commit", "-m", "Add incomplete source")
+    _git(repository.main_root, "push", "origin", "main")
 
     with pytest.raises(GoalAuthoringError, match="exactly goal.md and spec.md"):
-        GoalAuthoringWorkflow(root).validate(common_prefix=PREFIX)
+        GoalAuthoringWorkflow(repository.main_root).validate(common_prefix=PREFIX)
 
     (directory / "goal.md").write_text("# Goal\n", encoding="utf-8")
     (directory / "checkpoint.yaml").write_text("schema_version: 1\n", encoding="utf-8")
-    _git(root, "add", ".")
-    _git(root, "commit", "-m", "Add legacy shape")
-    _git(root, "push", "origin", "main")
+    _git(repository.main_root, "add", ".")
+    _git(repository.main_root, "commit", "-m", "Add legacy shape")
+    _git(repository.main_root, "push", "origin", "main")
 
     with pytest.raises(GoalAuthoringError, match="exactly goal.md and spec.md"):
-        GoalAuthoringWorkflow(root).validate(common_prefix=PREFIX)
+        GoalAuthoringWorkflow(repository.main_root).validate(common_prefix=PREFIX)
 
 
 def test_successful_remote_push_is_recovered_after_local_interruption(
@@ -195,10 +220,10 @@ def test_successful_remote_push_is_recovered_after_local_interruption(
         monkeypatch: Pytest monkeypatch fixture.
     """
 
-    root, remote = _repository_create(tmp_path)
-    goal, specification = _input_pair_create(tmp_path)
-    source = GoalSource(PREFIX, goal.read_bytes(), specification.read_bytes())
-    transaction = GoalSourceTransaction(ProjectGoalsRepository(root))
+    repository = _repository_fixture_create(tmp_path)
+    source_input = _source_input_fixture_create(tmp_path)
+    source = GoalSource(PREFIX, source_input.goal_path.read_bytes(), source_input.specification_path.read_bytes())
+    transaction = GoalSourceTransaction(ProjectGoalsRepository(repository.main_root))
 
     def interrupted_finish(commit: str, *, journal_path: Path) -> None:
         del commit, journal_path
@@ -207,21 +232,21 @@ def test_successful_remote_push_is_recovered_after_local_interruption(
     monkeypatch.setattr(transaction, "_finish_local", interrupted_finish)
     with pytest.raises(RuntimeError, match="simulated process loss"):
         transaction.publish(source)
-    remote_commit = _git(remote, "rev-parse", "refs/heads/main")
-    assert _git(root, "rev-parse", "HEAD") != remote_commit
+    remote_commit = _git(repository.remote_root, "rev-parse", "refs/heads/main")
+    assert _git(repository.main_root, "rev-parse", "HEAD") != remote_commit
 
-    recovered = GoalSourceTransaction(ProjectGoalsRepository(root)).publish(source)
+    recovered = GoalSourceTransaction(ProjectGoalsRepository(repository.main_root)).publish(source)
 
     assert recovered == remote_commit
-    assert _git(root, "rev-parse", "HEAD") == remote_commit
-    assert _git(root, "rev-list", "--count", "HEAD") == "2"
+    assert _git(repository.main_root, "rev-parse", "HEAD") == remote_commit
+    assert _git(repository.main_root, "rev-list", "--count", "HEAD") == "2"
 
 
 def test_cli_emits_machine_readable_snapshot(tmp_path: Path) -> None:
     """The direct entrypoint runs and emits one closed JSON object."""
 
-    root, _remote = _repository_create(tmp_path)
-    goal, specification = _input_pair_create(tmp_path)
+    repository = _repository_fixture_create(tmp_path)
+    source = _source_input_fixture_create(tmp_path)
     script = PLUGIN_ROOT / "skills" / "goal-brainstorm" / "scripts" / "source.py"
 
     result = subprocess.run(
@@ -229,13 +254,13 @@ def test_cli_emits_machine_readable_snapshot(tmp_path: Path) -> None:
             str(script),
             "write",
             "--goals-repository",
-            str(root),
+            str(repository.main_root),
             "--common-prefix",
             PREFIX,
             "--goal-input",
-            str(goal),
+            str(source.goal_path),
             "--specification-input",
-            str(specification),
+            str(source.specification_path),
         ],
         check=True,
         capture_output=True,
@@ -244,6 +269,6 @@ def test_cli_emits_machine_readable_snapshot(tmp_path: Path) -> None:
     payload = json.loads(result.stdout)
 
     assert payload["common_prefix"] == PREFIX
-    assert payload["commit"] == _git(root, "rev-parse", "HEAD")
+    assert payload["commit"] == _git(repository.main_root, "rev-parse", "HEAD")
     assert payload["goal_path"] == f"{PREFIX}/goal.md"
     assert payload["specification_path"] == f"{PREFIX}/spec.md"

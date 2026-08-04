@@ -512,7 +512,7 @@ def test_issue_lock_rejects_attacker_symlink_parent(tmp_path: Path, monkeypatch:
         with IssueWorkspaceLock(WorkspaceConfig(workspace.resolve()), "AND-113"):
             pass
 
-    assert tuple(outside.iterdir()) == ()
+    assert list(outside.iterdir()) == []
 
 
 def test_workspace_discovery_rejects_symlink_checkout_outside_explicit_root(
@@ -798,7 +798,7 @@ def test_private_state_parent_symlink_is_rejected_before_git_mutation(
     with pytest.raises(TaskWorkspaceError, match="user-owned physical directory"):
         TaskWorkspaceTransaction(WorkspaceConfig(tmp_path.resolve())).prepare(_request(remote, issue="AND-115"))
 
-    assert tuple(outside.iterdir()) == ()
+    assert list(outside.iterdir()) == []
     assert _git(root, "branch", "--list", "linear/and-115") == ""
 
 
