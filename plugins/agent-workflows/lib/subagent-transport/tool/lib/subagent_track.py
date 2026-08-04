@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-import json
 from pathlib import Path
 import re
 from uuid import UUID
+
+from json_contract import JsonContractError, json_load_strict
 
 LOG_THREAD_ID_PATTERN = re.compile(r"\bthread_id=([^\s}]+)")
 LOG_TURN_THREAD_ID_PATTERN = re.compile(r"\bthread\.id=([^\s}]+)")
@@ -50,7 +51,9 @@ def _agent_activity_status_get(
     if normalized_agent_id is None:
         return STATUS_ERROR_AGENT_ID_NOT_FOUND
     try:
-        idle_ms = _subagent_idle_ms_get(normalized_agent_id, codex_root=codex_root, now=now)
+        idle_ms = _subagent_idle_ms_get(
+            normalized_agent_id, codex_root=codex_root, now=now
+        )
     except SubagentTrackError:
         return STATUS_ERROR_AGENT_ID_NOT_FOUND
     if idle_ms > SUBAGENT_STATUS_TIMEOUT_MS:
@@ -72,8 +75,8 @@ def _jsonl_last_timestamp_get(path: Path) -> datetime | None:
     with path.open(encoding="utf-8") as handle:
         for raw_line in handle:
             try:
-                record = json.loads(raw_line)
-            except json.JSONDecodeError:
+                record = json_load_strict(raw_line)
+            except JsonContractError:
                 continue
             if not isinstance(record, dict):
                 continue
@@ -109,7 +112,8 @@ def _log_last_timestamp_get(log_path: Path, agent_id: str) -> datetime | None:
             if not observed_agent_id_list:
                 continue
             if not any(
-                _uuid_normalized_get(observed_agent_id) == agent_id for observed_agent_id in observed_agent_id_list
+                _uuid_normalized_get(observed_agent_id) == agent_id
+                for observed_agent_id in observed_agent_id_list
             ):
                 continue
             raw_timestamp = raw_line.split(maxsplit=1)[0]
@@ -131,7 +135,9 @@ def _log_observed_agent_id_list_collect(raw_line: str) -> list[str]:
 
     ordered_id_list: list[str] = []
     seen_id_set: set[str] = set()
-    for observed_agent_id in LOG_THREAD_ID_PATTERN.findall(raw_line) + LOG_TURN_THREAD_ID_PATTERN.findall(raw_line):
+    for observed_agent_id in LOG_THREAD_ID_PATTERN.findall(
+        raw_line
+    ) + LOG_TURN_THREAD_ID_PATTERN.findall(raw_line):
         if observed_agent_id in seen_id_set:
             continue
         seen_id_set.add(observed_agent_id)
@@ -158,7 +164,9 @@ def _session_last_timestamp_get(sessions_root: Path, agent_id: str) -> datetime 
     return latest
 
 
-def _session_rollout_path_list_collect(sessions_root: Path, agent_id: str) -> list[Path]:
+def _session_rollout_path_list_collect(
+    sessions_root: Path, agent_id: str
+) -> list[Path]:
     """Collect matching session rollout files for one subagent.
 
     Args:
@@ -172,7 +180,9 @@ def _session_rollout_path_list_collect(sessions_root: Path, agent_id: str) -> li
     if not sessions_root.is_dir():
         return []
 
-    return sorted(path for path in sessions_root.rglob(f"*{agent_id}.jsonl") if path.is_file())
+    return sorted(
+        path for path in sessions_root.rglob(f"*{agent_id}.jsonl") if path.is_file()
+    )
 
 
 def _subagent_idle_ms_get(
@@ -198,7 +208,9 @@ def _subagent_idle_ms_get(
     return max(0, idle_ms)
 
 
-def _subagent_last_activity_at_get(agent_id: str, *, codex_root: Path | None = None) -> datetime:
+def _subagent_last_activity_at_get(
+    agent_id: str, *, codex_root: Path | None = None
+) -> datetime:
     """Return the latest observed activity timestamp for one subagent.
 
     Args:
@@ -221,7 +233,11 @@ def _subagent_last_activity_at_get(agent_id: str, *, codex_root: Path | None = N
     log_path = root / "log" / "codex-tui.log"
     session_timestamp = _session_last_timestamp_get(sessions_root, normalized_agent_id)
     log_timestamp = _log_last_timestamp_get(log_path, normalized_agent_id)
-    timestamp_list = [timestamp for timestamp in [session_timestamp, log_timestamp] if timestamp is not None]
+    timestamp_list = [
+        timestamp
+        for timestamp in [session_timestamp, log_timestamp]
+        if timestamp is not None
+    ]
     if timestamp_list:
         return max(timestamp_list)
     raise SubagentTrackError(f"no activity found for subagent '{normalized_agent_id}'")
@@ -303,7 +319,9 @@ def subagent_status_get(
     normalized_agent_id = _uuid_normalized_get(agent_id)
     if normalized_agent_id is None:
         return STATUS_ERROR_AGENT_ID_NOT_FOUND
-    return _agent_activity_status_get(normalized_agent_id, codex_root=codex_root, now=now)
+    return _agent_activity_status_get(
+        normalized_agent_id, codex_root=codex_root, now=now
+    )
 
 
 class SubagentTrackError(RuntimeError):

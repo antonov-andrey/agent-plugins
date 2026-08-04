@@ -132,6 +132,8 @@ Codex plugin manifest не устанавливает произвольные P
 
 Эта installability boundary является явным исключением из обычного project-owned `retry_runtime`: узкий `linear_boundary.transport` самостоятельно владеет только bounded HTTP retry для доказанно repeat-safe Linear GraphQL operations, никогда не повторяет non-repeat-safe mutation и не превращается в общий retry framework. Все внешние и transient JSON inputs independently installable `linear-agent-tools` проходят через один stdlib-only `json_contract` owner, который запрещает duplicate object keys, non-standard numeric constants и malformed UTF-8; domain owners затем проверяют exact shape. Разрозненные permissive `json.loads` на внешних границах запрещены.
 
+Тот же strict external-input contract применяется независимо внутри installable `agent-workflows`: один plugin-local stdlib-only `json_contract` обслуживает authoring recovery journals и session JSONL readers. Plugin boundaries не импортируют реализацию друг друга, но duplicate keys, non-standard numeric constants и malformed UTF-8 не принимаются ни одним recovery owner.
+
 Все repository-level provider suites расположены только под `test/<plugin>/<owner>/`. Корневой `pytest.ini` явно включает shared owner-aware pytest plugin; `pytest -q` обязан обнаруживать весь tracked provider suite, а не только корневые smoke tests. Произвольные `plugins/**/lib/**/test/` roots запрещены, поскольку они не являются самостоятельными Skill или Submodule test owners.
 
 Workflow входит в `agent-workflows` только по явно утверждённому пользователем source-to-target решению. Для утверждённого переноса workflow обязан:

@@ -5,7 +5,12 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 import sys
+
+PLUGIN_LIBRARY_ROOT = Path(__file__).resolve().parents[2]
+if str(PLUGIN_LIBRARY_ROOT) not in sys.path:
+    sys.path.insert(0, str(PLUGIN_LIBRARY_ROOT))
 
 from lib.subagent_track import subagent_status_get
 
