@@ -13,7 +13,8 @@ LIBRARY_ROOT = Path(__file__).resolve().parents[3] / "lib"
 if str(LIBRARY_ROOT) not in sys.path:
     sys.path.insert(0, str(LIBRARY_ROOT))
 
-from goal_authoring import GoalAuthoringError, GoalAuthoringWorkflow
+from goal_authoring.model import GoalAuthoringError
+from goal_authoring.workflow import GoalAuthoringWorkflow
 
 
 def _parser_get() -> argparse.ArgumentParser:

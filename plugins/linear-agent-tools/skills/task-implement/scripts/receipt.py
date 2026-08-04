@@ -13,13 +13,13 @@ LIBRARY_ROOT = Path(__file__).resolve().parents[3] / "lib"
 if str(LIBRARY_ROOT) not in sys.path:
     sys.path.insert(0, str(LIBRARY_ROOT))
 
-from verification import (
-    VerificationInput,
-    VerificationReceiptError,
+from verification._validation import VerificationReceiptError
+from verification.invalidation import receipt_reuse_decide
+from verification.model import VerificationInput
+from verification.receipt import (
     receipt_comment_parse,
     receipt_comment_render,
     receipt_create,
-    receipt_reuse_decide,
 )
 
 

@@ -13,12 +13,11 @@ LIBRARY_ROOT = Path(__file__).resolve().parents[2]
 if str(LIBRARY_ROOT) not in sys.path:
     sys.path.insert(0, str(LIBRARY_ROOT))
 
-from verification import (
-    AttemptSummary,
-    CandidateInput,
-    LocalPhaseBaseline,
-    TaskWorkspaceBaseline,
-    VerificationReceiptError,
+from verification._validation import VerificationReceiptError
+from verification.attempt import AttemptSummary
+from verification.baseline import LocalPhaseBaseline, TaskWorkspaceBaseline
+from verification.candidate import CandidateInput
+from verification.receipt import (
     attempt_comment_render,
     baseline_comment_render,
     workspace_baseline_comment_render,

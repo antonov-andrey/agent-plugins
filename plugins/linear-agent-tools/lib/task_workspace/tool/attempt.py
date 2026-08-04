@@ -15,7 +15,8 @@ LIBRARY_ROOT = Path(__file__).resolve().parents[2]
 if str(LIBRARY_ROOT) not in sys.path:
     sys.path.insert(0, str(LIBRARY_ROOT))
 
-from task_workspace import IssueAttemptLock, TaskWorkspaceError, WorkspaceConfig
+from task_workspace.lock import IssueAttemptLock
+from task_workspace.model import TaskWorkspaceError, WorkspaceConfig
 
 
 def _parser_get() -> argparse.ArgumentParser:

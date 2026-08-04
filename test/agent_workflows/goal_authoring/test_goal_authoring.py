@@ -16,10 +16,10 @@ LIBRARY_ROOT = PLUGIN_ROOT / "lib"
 if str(LIBRARY_ROOT) not in sys.path:
     sys.path.insert(0, str(LIBRARY_ROOT))
 
-from goal_authoring import GoalAuthoringError, GoalAuthoringWorkflow
-from goal_authoring.model import GoalSource
+from goal_authoring.model import GoalAuthoringError, GoalSource
 from goal_authoring.repository import ProjectGoalsRepository
 from goal_authoring.transaction import GoalSourceTransaction
+from goal_authoring.workflow import GoalAuthoringWorkflow
 
 PREFIX = "2026-08-04-test-source"
 

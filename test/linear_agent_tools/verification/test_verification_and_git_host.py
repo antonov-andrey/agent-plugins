@@ -16,14 +16,15 @@ LIBRARY_ROOT = PLUGIN_ROOT / "lib"
 if str(LIBRARY_ROOT) not in sys.path:
     sys.path.insert(0, str(LIBRARY_ROOT))
 
-from git_host import GitHubContractError, GitHubPullRequestBoundary, RepositoryIdentity
-from verification import (
-    AttemptSummary,
-    CandidateInput,
-    LocalPhaseBaseline,
-    TaskWorkspaceBaseline,
-    VerificationInput,
-    VerificationReceiptError,
+from git_host.model import GitHubContractError, RepositoryIdentity
+from git_host.pull_request import GitHubPullRequestBoundary
+from verification._validation import VerificationReceiptError
+from verification.attempt import AttemptSummary
+from verification.baseline import LocalPhaseBaseline, TaskWorkspaceBaseline
+from verification.candidate import CandidateInput
+from verification.invalidation import receipt_reuse_decide
+from verification.model import VerificationInput
+from verification.receipt import (
     attempt_comment_parse,
     attempt_comment_render,
     baseline_comment_parse,
@@ -31,7 +32,6 @@ from verification import (
     receipt_comment_parse,
     receipt_comment_render,
     receipt_create,
-    receipt_reuse_decide,
     workspace_baseline_comment_parse,
     workspace_baseline_comment_render,
 )

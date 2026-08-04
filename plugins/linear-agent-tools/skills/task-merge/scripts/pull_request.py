@@ -14,7 +14,8 @@ LIBRARY_ROOT = Path(__file__).resolve().parents[3] / "lib"
 if str(LIBRARY_ROOT) not in sys.path:
     sys.path.insert(0, str(LIBRARY_ROOT))
 
-from git_host import GitHubContractError, GitHubPullRequestBoundary, RepositoryIdentity
+from git_host.model import GitHubContractError, RepositoryIdentity
+from git_host.pull_request import GitHubPullRequestBoundary
 
 
 def _parser_get() -> argparse.ArgumentParser:

@@ -14,8 +14,9 @@ if str(LIBRARY_ROOT) not in sys.path:
     sys.path.insert(0, str(LIBRARY_ROOT))
 
 from git_host.model import GitHubContractError
-from task_cleanup import CleanupRequest, TaskCleanupError, TaskCleanupReconciler
-from task_workspace import TaskWorkspaceError, WorkspaceConfig
+from task_cleanup.model import CleanupRequest, TaskCleanupError
+from task_cleanup.reconciliation import TaskCleanupReconciler
+from task_workspace.model import TaskWorkspaceError, WorkspaceConfig
 
 
 def _parser_get() -> argparse.ArgumentParser:

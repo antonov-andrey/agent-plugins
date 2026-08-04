@@ -13,20 +13,19 @@ LIBRARY_ROOT = REPOSITORY_ROOT / "plugins" / "linear-agent-tools" / "lib"
 if str(LIBRARY_ROOT) not in sys.path:
     sys.path.insert(0, str(LIBRARY_ROOT))
 
-from task_graph import (
+from task_graph.delta import TaskGraphDelta
+from task_graph.delta_reconciliation import delta_reconciliation_plan_build
+from task_graph.model import TaskGraph, TaskGraphError
+from task_graph.publication import delta_publication_view_build, graph_publication_view_build
+from task_graph.reconciliation import (
+    PublicationPhase,
     RemoteDocument,
+    RemoteIssue,
     RemoteProject,
-    TaskGraph,
-    TaskGraphDelta,
-    TaskGraphError,
     activation_readback_require,
     cancellation_plan_build,
-    delta_publication_view_build,
-    delta_reconciliation_plan_build,
-    graph_publication_view_build,
     reconciliation_plan_build,
 )
-from task_graph.reconciliation import PublicationPhase, RemoteIssue
 
 TEAM_ID = "33333333-3333-4333-8333-333333333333"
 ASSIGNEE_ID = "22222222-2222-4222-8222-222222222222"

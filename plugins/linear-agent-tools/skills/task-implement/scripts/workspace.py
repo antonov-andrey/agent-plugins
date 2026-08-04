@@ -13,14 +13,14 @@ LIBRARY_ROOT = Path(__file__).resolve().parents[3] / "lib"
 if str(LIBRARY_ROOT) not in sys.path:
     sys.path.insert(0, str(LIBRARY_ROOT))
 
-from task_workspace import (
+from task_workspace.model import (
     RepositoryRequest,
     TaskWorkspaceError,
-    TaskWorkspaceTransaction,
     WorkspaceConfig,
     WorkspaceRequest,
-    recursive_submodule_state_list_get,
 )
+from task_workspace.submodule import recursive_submodule_state_list_get
+from task_workspace.transaction import TaskWorkspaceTransaction
 
 
 def _args_parse(argv: list[str] | None = None) -> argparse.Namespace:

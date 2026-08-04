@@ -17,27 +17,25 @@ if str(LIBRARY_ROOT) not in sys.path:
 
 import task_workspace.transaction as transaction_module
 import task_workspace.lock as lock_module
-from task_cleanup import (
+from task_cleanup.model import (
     CleanupAuthority,
     CleanupRequest,
     TaskCleanupError,
-    TaskCleanupReconciler,
 )
-from task_cleanup.reconciliation import _pull_request_contract_require
+from task_cleanup.reconciliation import TaskCleanupReconciler, _pull_request_contract_require
 from task_cleanup.resource import ResourceCleaner
 from task_graph.model import ResourceDeclaration, ResourceLifetime
-from task_workspace import (
-    IssueAttemptLock,
+from task_workspace.lock import IssueAttemptLock, IssueWorkspaceLock
+from task_workspace.model import (
     RepositoryRequest,
     TaskWorkspaceError,
-    TaskWorkspaceTransaction,
     WorkspaceConfig,
     WorkspaceRequest,
 )
 from task_workspace.bootstrap import manifest_parse
-from task_workspace.lock import IssueWorkspaceLock
 from task_workspace.repository import WorkspaceRepository, origin_identity_get
 from task_workspace.submodule import recursive_submodule_state_list_get
+from task_workspace.transaction import TaskWorkspaceTransaction
 
 
 @dataclass(frozen=True, slots=True)
