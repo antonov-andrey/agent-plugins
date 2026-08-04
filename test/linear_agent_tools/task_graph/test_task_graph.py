@@ -14,17 +14,15 @@ if str(LIBRARY_ROOT) not in sys.path:
     sys.path.insert(0, str(LIBRARY_ROOT))
 
 from task_graph.delta import TaskGraphDelta
-from task_graph.delta_reconciliation import delta_reconciliation_plan_build
 from task_graph.model import TaskGraph, TaskGraphError
 from task_graph.publication import DeltaPublicationView, GraphPublicationView
-from task_graph.reconciliation import (
+from task_graph.reconciliation.delta import TaskGraphDeltaReconciler
+from task_graph.reconciliation.initial import TaskGraphReconciler
+from task_graph.reconciliation.model import (
     PublicationPhase,
     RemoteDocument,
     RemoteIssue,
     RemoteProject,
-    activation_readback_require,
-    cancellation_plan_build,
-    reconciliation_plan_build,
 )
 
 TEAM_ID = "33333333-3333-4333-8333-333333333333"
@@ -568,7 +566,7 @@ def test_delta_resource_keys_remain_unique_across_new_and_accepted_issues() -> N
         project_status="In Progress",
     )
     with pytest.raises(TaskGraphError, match="repeats accepted resource keys"):
-        delta_reconciliation_plan_build(delta, remote)
+        TaskGraphDeltaReconciler(delta).plan(remote)
 
 
 def test_graph_requires_every_task_to_reach_all_applicable_downstream_gates() -> None:
@@ -627,25 +625,25 @@ def test_activation_barrier_advances_one_idempotent_phase_at_a_time() -> None:
 
     graph = TaskGraph.from_payload(_graph_payload())
 
-    project_plan = reconciliation_plan_build(graph, None)
+    project_plan = TaskGraphReconciler(graph).plan(None)
     assert project_plan.phase is PublicationPhase.PROJECT
     assert (
         project_plan.action_list[0]
         .payload["description"]
         .startswith("<!-- linear-agent-tools-project:v1 -->")
     )
-    document_plan = reconciliation_plan_build(
-        graph, _remote(graph, document=False, issues=False)
+    document_plan = TaskGraphReconciler(graph).plan(
+        _remote(graph, document=False, issues=False)
     )
     assert document_plan.phase is PublicationPhase.DOCUMENT
     assert (
-        reconciliation_plan_build(
-            graph, _remote(graph, document=True, issues=False)
-        ).phase
+        TaskGraphReconciler(graph)
+        .plan(_remote(graph, document=True, issues=False))
+        .phase
         is PublicationPhase.ISSUES
     )
-    issue_creation = reconciliation_plan_build(
-        graph, _remote(graph, document=True, issues=False)
+    issue_creation = TaskGraphReconciler(graph).plan(
+        _remote(graph, document=True, issues=False)
     )
     assert all(
         action.payload["label_name_list"] == [] for action in issue_creation.action_list
@@ -657,16 +655,17 @@ def test_activation_barrier_advances_one_idempotent_phase_at_a_time() -> None:
         action.payload["delegate_id"] == "" for action in issue_creation.action_list
     )
     assert (
-        reconciliation_plan_build(
-            graph, _remote(graph, document=True, issues=True)
-        ).phase
+        TaskGraphReconciler(graph)
+        .plan(_remote(graph, document=True, issues=True))
+        .phase
         is PublicationPhase.RELATIONS
     )
     assert (
-        reconciliation_plan_build(
-            graph,
+        TaskGraphReconciler(graph)
+        .plan(
             _remote(graph, document=True, issues=True, relations=True),
-        ).phase
+        )
+        .phase
         is PublicationPhase.NODE_METADATA
     )
     node_by_key_map = {item.node_key: item for item in graph.node_list}
@@ -687,17 +686,15 @@ def test_activation_barrier_advances_one_idempotent_phase_at_a_time() -> None:
         ],
     )
     assert (
-        reconciliation_plan_build(graph, metadata_ready).phase
+        TaskGraphReconciler(graph).plan(metadata_ready).phase
         is PublicationPhase.NODE_ACTIVATION
     )
-    activation = reconciliation_plan_build(
-        graph,
+    activation = TaskGraphReconciler(graph).plan(
         _remote(graph, document=True, issues=True, relations=True, activated=True),
     )
     assert activation.phase is PublicationPhase.PROJECT_ACTIVATION
     assert activation.activation_ready
-    complete = reconciliation_plan_build(
-        graph,
+    complete = TaskGraphReconciler(graph).plan(
         _remote(
             graph,
             document=True,
@@ -717,7 +714,7 @@ def test_project_creation_publishes_exact_provider_identity() -> None:
     graph = TaskGraph.from_payload(_graph_payload())
     view = GraphPublicationView.from_graph(graph)
 
-    action = reconciliation_plan_build(graph, None).action_list[0]
+    action = TaskGraphReconciler(graph).plan(None).action_list[0]
 
     assert action.kind == "project-create"
     assert action.stable_key == view.project_key
@@ -746,11 +743,11 @@ def test_import_document_recovery_rejects_duplicates_and_foreign_collision() -> 
         ],
     )
     with pytest.raises(TaskGraphError, match="duplicate import documents"):
-        reconciliation_plan_build(graph, duplicate)
+        TaskGraphReconciler(graph).plan(duplicate)
 
     foreign = replace(exact, content="A user-owned document with the same title.")
     with pytest.raises(TaskGraphError, match="collides with a foreign document"):
-        reconciliation_plan_build(graph, replace(remote, document_list=[foreign]))
+        TaskGraphReconciler(graph).plan(replace(remote, document_list=[foreign]))
 
     stale_provider = replace(
         exact,
@@ -763,8 +760,8 @@ def test_import_document_recovery_rejects_duplicates_and_foreign_collision() -> 
             )
         ),
     )
-    plan = reconciliation_plan_build(
-        graph, replace(remote, document_list=[stale_provider])
+    plan = TaskGraphReconciler(graph).plan(
+        replace(remote, document_list=[stale_provider])
     )
 
     assert plan.phase is PublicationPhase.DOCUMENT
@@ -787,7 +784,11 @@ def test_activation_readback_proves_exact_handoff_without_freezing_later_linear_
         activated=True,
         project_status="In Progress",
     )
-    assert activation_readback_require(graph, activated).activation_ready
+    assert (
+        TaskGraphReconciler(graph)
+        .activation_readback_require(activated)
+        .activation_ready
+    )
 
     progressed = replace(
         activated,
@@ -801,9 +802,9 @@ def test_activation_readback_proves_exact_handoff_without_freezing_later_linear_
         ],
     )
     with pytest.raises(TaskGraphError, match="exact handoff graph"):
-        activation_readback_require(graph, progressed)
+        TaskGraphReconciler(graph).activation_readback_require(progressed)
     assert (
-        reconciliation_plan_build(graph, progressed).phase is PublicationPhase.COMPLETE
+        TaskGraphReconciler(graph).plan(progressed).phase is PublicationPhase.COMPLETE
     )
 
 
@@ -827,7 +828,7 @@ def test_initial_import_rejects_unapproved_label_before_project_activation() -> 
     with pytest.raises(
         TaskGraphError, match="outside its approved activation metadata"
     ):
-        reconciliation_plan_build(graph, replace(remote, issue_list=issue_list))
+        TaskGraphReconciler(graph).plan(replace(remote, issue_list=issue_list))
 
 
 def test_interrupted_issue_import_reuses_stable_keys_without_duplicates() -> None:
@@ -849,7 +850,7 @@ def test_interrupted_issue_import_reuses_stable_keys_without_duplicates() -> Non
             if item.node_key in {"implementation", "review"}
         ],
     )
-    plan = reconciliation_plan_build(graph, partial)
+    plan = TaskGraphReconciler(graph).plan(partial)
 
     assert plan.phase is PublicationPhase.ISSUES
     assert [item.stable_key for item in plan.action_list] == ["acceptance", "cleanup"]
@@ -876,7 +877,7 @@ def test_interrupted_issue_import_reuses_stable_keys_without_duplicates() -> Non
         issue_list=[*partial.issue_list, foreign],
     )
     with pytest.raises(TaskGraphError, match="unknown issue keys"):
-        reconciliation_plan_build(graph, conflicting)
+        TaskGraphReconciler(graph).plan(conflicting)
 
 
 def test_remote_snapshot_parser_rejects_malformed_provider_identities() -> None:
@@ -923,8 +924,7 @@ def test_active_project_is_not_reimported_and_terminal_project_is_not_reopened()
 
     graph = TaskGraph.from_payload(_graph_payload())
     for status in ("In Progress", "Completed", "Canceled"):
-        result = reconciliation_plan_build(
-            graph,
+        result = TaskGraphReconciler(graph).plan(
             _remote(graph, document=True, issues=False, project_status=status),
         )
         assert result.phase is PublicationPhase.COMPLETE
@@ -934,21 +934,21 @@ def test_active_project_is_not_reimported_and_terminal_project_is_not_reopened()
         graph, document=False, issues=False, project_status="In Progress"
     )
     with pytest.raises(TaskGraphError, match="import receipt"):
-        reconciliation_plan_build(graph, corrupted)
+        TaskGraphReconciler(graph).plan(corrupted)
 
     wrong_identity = replace(
         _remote(graph, document=True, issues=False, project_status="In Progress"),
         description="Foreign Project with a copied key",
     )
     with pytest.raises(TaskGraphError, match="Project key conflicts"):
-        reconciliation_plan_build(graph, wrong_identity)
+        TaskGraphReconciler(graph).plan(wrong_identity)
 
     wrong_team = replace(
         _remote(graph, document=True, issues=False, project_status="In Progress"),
         team_id="99999999-9999-4999-8999-999999999999",
     )
     with pytest.raises(TaskGraphError, match="Project key conflicts"):
-        reconciliation_plan_build(graph, wrong_team)
+        TaskGraphReconciler(graph).plan(wrong_team)
 
 
 def test_project_cancellation_stops_dispatch_before_canceling_unfinished_issues() -> (
@@ -966,14 +966,18 @@ def test_project_cancellation_stops_dispatch_before_canceling_unfinished_issues(
         project_status="In Progress",
     )
     with pytest.raises(TaskGraphError, match="explicit human decision"):
-        cancellation_plan_build(graph, active, human_decision=False)
+        TaskGraphReconciler(graph).cancellation_plan(active, human_decision=False)
 
-    project_plan = cancellation_plan_build(graph, active, human_decision=True)
+    project_plan = TaskGraphReconciler(graph).cancellation_plan(
+        active, human_decision=True
+    )
     assert project_plan.phase is PublicationPhase.PROJECT_CANCELLATION
     assert project_plan.action_list[0].payload["status_name"] == "Canceled"
 
     canceled = replace(active, status_name="Canceled")
-    issue_plan = cancellation_plan_build(graph, canceled, human_decision=True)
+    issue_plan = TaskGraphReconciler(graph).cancellation_plan(
+        canceled, human_decision=True
+    )
     assert issue_plan.phase is PublicationPhase.NODE_CANCELLATION
     assert {item.payload["status_name"] for item in issue_plan.action_list} == {
         "Canceled"
@@ -986,13 +990,15 @@ def test_project_cancellation_stops_dispatch_before_canceling_unfinished_issues(
         ],
     )
     assert (
-        cancellation_plan_build(graph, terminal, human_decision=True).phase
+        TaskGraphReconciler(graph)
+        .cancellation_plan(terminal, human_decision=True)
+        .phase
         is PublicationPhase.COMPLETE
     )
 
     with pytest.raises(TaskGraphError, match="completed.*cannot be canceled"):
-        cancellation_plan_build(
-            graph, replace(active, status_name="Completed"), human_decision=True
+        TaskGraphReconciler(graph).cancellation_plan(
+            replace(active, status_name="Completed"), human_decision=True
         )
 
 
@@ -1002,15 +1008,15 @@ def test_partial_or_damaged_import_can_be_canceled_without_an_import_document() 
     graph = TaskGraph.from_payload(_graph_payload())
     partial = _remote(graph, document=False, issues=False, project_status="Planned")
 
-    plan = cancellation_plan_build(graph, partial, human_decision=True)
+    plan = TaskGraphReconciler(graph).cancellation_plan(partial, human_decision=True)
 
     assert plan.phase is PublicationPhase.PROJECT_CANCELLATION
 
     active_without_document = replace(partial, status_name="In Progress")
     assert (
-        cancellation_plan_build(
-            graph, active_without_document, human_decision=True
-        ).phase
+        TaskGraphReconciler(graph)
+        .cancellation_plan(active_without_document, human_decision=True)
+        .phase
         is PublicationPhase.PROJECT_CANCELLATION
     )
 
@@ -1032,7 +1038,7 @@ def test_active_project_delta_advances_issue_relation_metadata_and_todo_separate
         project_status="In Progress",
     )
 
-    receipt_plan = delta_reconciliation_plan_build(delta, remote)
+    receipt_plan = TaskGraphDeltaReconciler(delta).plan(remote)
     assert receipt_plan.phase is PublicationPhase.DELTA_DOCUMENT
     assert receipt_plan.action_list[0].kind == "delta-document-create"
     assert (
@@ -1040,7 +1046,7 @@ def test_active_project_delta_advances_issue_relation_metadata_and_todo_separate
     )
     remote = _delta_receipt_add(delta, remote)
     assert (
-        delta_reconciliation_plan_build(delta, remote).phase
+        TaskGraphDeltaReconciler(delta).plan(remote).phase
         is PublicationPhase.DELTA_ISSUES
     )
 
@@ -1057,7 +1063,7 @@ def test_active_project_delta_advances_issue_relation_metadata_and_todo_separate
     )
     with_issue = replace(remote, issue_list=[*remote.issue_list, remediation])
     assert (
-        delta_reconciliation_plan_build(delta, with_issue).phase
+        TaskGraphDeltaReconciler(delta).plan(with_issue).phase
         is PublicationPhase.DELTA_RELATIONS
     )
 
@@ -1076,7 +1082,7 @@ def test_active_project_delta_advances_issue_relation_metadata_and_todo_separate
             for item in with_issue.issue_list
         ],
     )
-    reverification = delta_reconciliation_plan_build(delta, with_relation)
+    reverification = TaskGraphDeltaReconciler(delta).plan(with_relation)
     assert reverification.phase is PublicationPhase.DELTA_REVERIFICATION
     assert reverification.action_list[0].stable_key == "review"
     assert reverification.action_list[0].payload["status_name"] == "Todo"
@@ -1089,7 +1095,7 @@ def test_active_project_delta_advances_issue_relation_metadata_and_todo_separate
         ],
     )
     assert (
-        delta_reconciliation_plan_build(delta, with_reverification).phase
+        TaskGraphDeltaReconciler(delta).plan(with_reverification).phase
         is PublicationPhase.DELTA_METADATA
     )
 
@@ -1104,7 +1110,7 @@ def test_active_project_delta_advances_issue_relation_metadata_and_todo_separate
             for item in with_reverification.issue_list
         ],
     )
-    activation = delta_reconciliation_plan_build(delta, with_metadata)
+    activation = TaskGraphDeltaReconciler(delta).plan(with_metadata)
     assert activation.phase is PublicationPhase.DELTA_ACTIVATION
     assert activation.activation_ready
     assert activation.action_list[0].payload["status_name"] == "Todo"
@@ -1120,7 +1126,7 @@ def test_active_project_delta_advances_issue_relation_metadata_and_todo_separate
             for item in with_metadata.issue_list
         ],
     )
-    complete = delta_reconciliation_plan_build(delta, activated)
+    complete = TaskGraphDeltaReconciler(delta).plan(activated)
     assert complete.phase is PublicationPhase.COMPLETE
     assert complete.activation_ready
 
@@ -1192,7 +1198,7 @@ def test_active_project_delta_never_bypasses_or_reopens_downstream_verification(
     with pytest.raises(
         TaskGraphError, match="must already be Todo or explicitly return"
     ):
-        delta_reconciliation_plan_build(delta, relation_ready)
+        TaskGraphDeltaReconciler(delta).plan(relation_ready)
 
 
 def test_active_project_delta_may_reverify_only_review_or_acceptance() -> None:
@@ -1257,7 +1263,7 @@ def test_active_project_delta_may_reverify_only_review_or_acceptance() -> None:
     )
 
     with pytest.raises(TaskGraphError, match="only when it is review or acceptance"):
-        delta_reconciliation_plan_build(delta, relation_ready)
+        TaskGraphDeltaReconciler(delta).plan(relation_ready)
 
 
 def test_active_project_delta_rejects_unapproved_label_before_node_activation() -> None:
@@ -1306,7 +1312,7 @@ def test_active_project_delta_rejects_unapproved_label_before_node_activation() 
     with pytest.raises(
         TaskGraphError, match="outside its approved activation metadata"
     ):
-        delta_reconciliation_plan_build(delta, with_issue)
+        TaskGraphDeltaReconciler(delta).plan(with_issue)
 
 
 def test_active_project_delta_requires_downstream_gates_and_exact_active_destination() -> (
@@ -1344,16 +1350,16 @@ def test_active_project_delta_requires_downstream_gates_and_exact_active_destina
     )
 
     with pytest.raises(TaskGraphError, match="downstream path"):
-        delta_reconciliation_plan_build(delta, with_issue)
+        TaskGraphDeltaReconciler(delta).plan(with_issue)
 
     valid_delta = TaskGraphDelta.from_payload(_delta_payload(graph))
     terminal = replace(remote, status_name="Completed")
     with pytest.raises(TaskGraphError, match="active In Progress"):
-        delta_reconciliation_plan_build(valid_delta, terminal)
+        TaskGraphDeltaReconciler(valid_delta).plan(terminal)
 
     without_receipt = replace(remote, document_list=[])
     with pytest.raises(TaskGraphError, match="unique immutable import receipt"):
-        delta_reconciliation_plan_build(valid_delta, without_receipt)
+        TaskGraphDeltaReconciler(valid_delta).plan(without_receipt)
 
     corrupt_receipt = replace(
         remote,
@@ -1365,7 +1371,7 @@ def test_active_project_delta_requires_downstream_gates_and_exact_active_destina
         ],
     )
     with pytest.raises(TaskGraphError, match="lost its immutable source identity"):
-        delta_reconciliation_plan_build(valid_delta, corrupt_receipt)
+        TaskGraphDeltaReconciler(valid_delta).plan(corrupt_receipt)
 
     with_delta_receipt = _delta_receipt_add(valid_delta, remote)
     delta_view = DeltaPublicationView.from_delta(valid_delta)
@@ -1381,7 +1387,7 @@ def test_active_project_delta_requires_downstream_gates_and_exact_active_destina
         ],
     )
     with pytest.raises(TaskGraphError, match="duplicate receipts"):
-        delta_reconciliation_plan_build(valid_delta, duplicate_delta_receipt)
+        TaskGraphDeltaReconciler(valid_delta).plan(duplicate_delta_receipt)
 
     changed_delta_receipt = replace(
         with_delta_receipt,
@@ -1395,7 +1401,7 @@ def test_active_project_delta_requires_downstream_gates_and_exact_active_destina
         ],
     )
     with pytest.raises(TaskGraphError, match="differs from its exact approved content"):
-        delta_reconciliation_plan_build(valid_delta, changed_delta_receipt)
+        TaskGraphDeltaReconciler(valid_delta).plan(changed_delta_receipt)
 
 
 def test_active_project_delta_preserves_unrelated_nodes_and_rejects_unsafe_progressed_metadata() -> (
@@ -1441,7 +1447,7 @@ def test_active_project_delta_preserves_unrelated_nodes_and_rejects_unsafe_progr
         remote, issue_list=[*remote.issue_list, unrelated, remediation]
     )
     assert (
-        delta_reconciliation_plan_build(delta, with_nodes).phase
+        TaskGraphDeltaReconciler(delta).plan(with_nodes).phase
         is PublicationPhase.DELTA_RELATIONS
     )
 
@@ -1461,7 +1467,7 @@ def test_active_project_delta_preserves_unrelated_nodes_and_rejects_unsafe_progr
         ],
     )
     with pytest.raises(TaskGraphError, match="incomplete activation metadata"):
-        delta_reconciliation_plan_build(delta, relation_ready)
+        TaskGraphDeltaReconciler(delta).plan(relation_ready)
 
 
 def test_active_project_delta_rejects_missing_relation_after_new_node_left_backlog() -> (
@@ -1496,8 +1502,8 @@ def test_active_project_delta_rejects_missing_relation_after_new_node_left_backl
     with pytest.raises(
         TaskGraphError, match="relation is absent after a new node left Backlog"
     ):
-        delta_reconciliation_plan_build(
-            delta, replace(remote, issue_list=[*remote.issue_list, remediation])
+        TaskGraphDeltaReconciler(delta).plan(
+            replace(remote, issue_list=[*remote.issue_list, remediation])
         )
 
 
@@ -1543,8 +1549,7 @@ def test_active_project_delta_rejects_unapproved_relations_involving_new_node(
     )
 
     with pytest.raises(TaskGraphError, match="unapproved current"):
-        delta_reconciliation_plan_build(
-            delta,
+        TaskGraphDeltaReconciler(delta).plan(
             replace(remote, issue_list=[*remote.issue_list, unrelated, remediation]),
         )
 

@@ -15,15 +15,11 @@ if str(LIBRARY_ROOT) not in sys.path:
 
 from json_contract import JsonContractError, json_load_strict
 from task_graph.delta import TaskGraphDelta
-from task_graph.delta_reconciliation import delta_reconciliation_plan_build
 from task_graph.model import TaskGraph, TaskGraphError
 from task_graph.publication import DeltaPublicationView, GraphPublicationView
-from task_graph.reconciliation import (
-    RemoteProject,
-    activation_readback_require,
-    cancellation_plan_build,
-    reconciliation_plan_build,
-)
+from task_graph.reconciliation.delta import TaskGraphDeltaReconciler
+from task_graph.reconciliation.initial import TaskGraphReconciler
+from task_graph.reconciliation.model import RemoteProject
 
 
 def _parser_get() -> argparse.ArgumentParser:
@@ -122,7 +118,7 @@ def main(argv: list[str] | None = None) -> int:
                 remote = RemoteProject.from_payload(
                     _json_load(args.snapshot_input, label="Project snapshot")
                 )
-                payload = delta_reconciliation_plan_build(delta, remote).payload()
+                payload = TaskGraphDeltaReconciler(delta).plan(remote).payload()
         else:
             graph = TaskGraph.from_payload(
                 _json_load(args.graph_input, label="Graph input")
@@ -145,21 +141,28 @@ def main(argv: list[str] | None = None) -> int:
                     if args.snapshot_input is not None
                     else None
                 )
-                payload = reconciliation_plan_build(graph, remote).payload()
+                payload = TaskGraphReconciler(graph).plan(remote).payload()
             elif args.command == "activation-confirm":
                 remote = RemoteProject.from_payload(
                     _json_load(args.snapshot_input, label="Project snapshot")
                 )
-                payload = activation_readback_require(graph, remote).payload()
+                payload = (
+                    TaskGraphReconciler(graph)
+                    .activation_readback_require(remote)
+                    .payload()
+                )
             else:
                 remote = RemoteProject.from_payload(
                     _json_load(args.snapshot_input, label="Project snapshot")
                 )
-                payload = cancellation_plan_build(
-                    graph,
-                    remote,
-                    human_decision=args.human_decision,
-                ).payload()
+                payload = (
+                    TaskGraphReconciler(graph)
+                    .cancellation_plan(
+                        remote,
+                        human_decision=args.human_decision,
+                    )
+                    .payload()
+                )
     except (TaskGraphError, ValueError, TypeError) as error:
         print(str(error), file=sys.stderr)
         return 2
