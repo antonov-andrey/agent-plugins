@@ -13,6 +13,7 @@ LIBRARY_ROOT = Path(__file__).resolve().parents[3] / "lib"
 if str(LIBRARY_ROOT) not in sys.path:
     sys.path.insert(0, str(LIBRARY_ROOT))
 
+from json_contract import JsonContractError, json_load_strict
 from task_graph.delta import TaskGraphDelta
 from task_graph.delta_reconciliation import delta_reconciliation_plan_build
 from task_graph.model import TaskGraph, TaskGraphError
@@ -85,8 +86,8 @@ def _json_load(path: Path, *, label: str) -> object:
     if path.is_symlink() or not path.is_file() or path.stat().st_nlink != 1:
         raise TaskGraphError(f"{label} must be one ordinary file")
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        return json_load_strict(path.read_bytes())
+    except (OSError, JsonContractError) as error:
         raise TaskGraphError(f"{label} is malformed") from error
 
 

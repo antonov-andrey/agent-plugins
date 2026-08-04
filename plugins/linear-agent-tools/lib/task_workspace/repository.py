@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 import json
 import os
 from pathlib import Path
 import secrets
 import stat
 import subprocess
-from typing import Sequence
 from urllib.parse import urlsplit
 
+from json_contract import JsonContractError, json_load_strict
 from task_workspace.model import (
     RepositoryRequest,
     RepositoryWorkspaceState,
@@ -315,10 +316,10 @@ class WorkspaceRepository:
                     raise TaskWorkspaceError(
                         "Workspace private state is not one private user-owned ordinary file"
                     )
-                payload = json.loads(handle.read().decode("utf-8"))
+                payload = json_load_strict(handle.read())
         except TaskWorkspaceError:
             raise
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        except (OSError, JsonContractError) as error:
             raise TaskWorkspaceError("Workspace private state is malformed") from error
         return RepositoryWorkspaceState.from_payload(payload)
 

@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-import json
+from collections.abc import Iterable
 import re
-from typing import Iterable, Protocol
+from typing import Protocol
 
+from json_contract import JsonContractError, json_load_strict
 from task_graph.model import TaskGraphError
 
 _RESOURCE_KEY_PATTERN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
@@ -56,34 +57,63 @@ def accepted_resource_key_set_get(
         payload = _transaction_payload_get(document, marker=marker)
         node_list = payload.get("node_list")
         if not isinstance(node_list, list):
-            raise TaskGraphError("Linear transaction document omits its normalized node list")
+            raise TaskGraphError(
+                "Linear transaction document omits its normalized node list"
+            )
         for node in node_list:
-            if not isinstance(node, dict) or not isinstance(node.get("resource_list"), list):
-                raise TaskGraphError("Linear transaction document has malformed resource ownership")
+            if not isinstance(node, dict) or not isinstance(
+                node.get("resource_list"), list
+            ):
+                raise TaskGraphError(
+                    "Linear transaction document has malformed resource ownership"
+                )
             for resource in node["resource_list"]:
                 key = resource.get("key") if isinstance(resource, dict) else None
-                if not isinstance(key, str) or _RESOURCE_KEY_PATTERN.fullmatch(key) is None:
-                    raise TaskGraphError("Linear transaction document has malformed resource identity")
+                if (
+                    not isinstance(key, str)
+                    or _RESOURCE_KEY_PATTERN.fullmatch(key) is None
+                ):
+                    raise TaskGraphError(
+                        "Linear transaction document has malformed resource identity"
+                    )
                 if key in resource_key_set:
-                    raise TaskGraphError("Linear transaction documents repeat one accepted resource key")
+                    raise TaskGraphError(
+                        "Linear transaction documents repeat one accepted resource key"
+                    )
                 resource_key_set.add(key)
     return frozenset(resource_key_set)
 
 
-def _transaction_payload_get(document: TransactionDocument, *, marker: str) -> dict[str, object]:
+def _transaction_payload_get(
+    document: TransactionDocument, *, marker: str
+) -> dict[str, object]:
     """Decode the one canonical JSON block from a provider transaction document."""
 
     if not document.content.startswith(marker):
-        raise TaskGraphError("Linear transaction document title collides with foreign content")
+        raise TaskGraphError(
+            "Linear transaction document title collides with foreign content"
+        )
     start = document.content.find(_JSON_START)
-    end = document.content.find(_JSON_END, start + len(_JSON_START)) if start >= 0 else -1
-    if start < 0 or end < 0 or document.content.find(_JSON_START, start + len(_JSON_START)) >= 0:
-        raise TaskGraphError("Linear transaction document has no unique normalized payload")
+    end = (
+        document.content.find(_JSON_END, start + len(_JSON_START)) if start >= 0 else -1
+    )
+    if (
+        start < 0
+        or end < 0
+        or document.content.find(_JSON_START, start + len(_JSON_START)) >= 0
+    ):
+        raise TaskGraphError(
+            "Linear transaction document has no unique normalized payload"
+        )
     encoded = document.content[start + len(_JSON_START) : end]
     try:
-        payload = json.loads(encoded)
-    except json.JSONDecodeError as error:
-        raise TaskGraphError("Linear transaction document contains malformed normalized JSON") from error
+        payload = json_load_strict(encoded)
+    except JsonContractError as error:
+        raise TaskGraphError(
+            "Linear transaction document contains malformed normalized JSON"
+        ) from error
     if not isinstance(payload, dict):
-        raise TaskGraphError("Linear transaction document normalized payload must be an object")
+        raise TaskGraphError(
+            "Linear transaction document normalized payload must be an object"
+        )
     return payload

@@ -13,6 +13,7 @@ LIBRARY_ROOT = Path(__file__).resolve().parents[2]
 if str(LIBRARY_ROOT) not in sys.path:
     sys.path.insert(0, str(LIBRARY_ROOT))
 
+from json_contract import JsonContractError, json_load_strict
 from linear_boundary.contract import LinearContractError
 from linear_boundary.status import IssueStatusName, ProjectStatusName
 from linear_boundary.task.model import TaskExecutionSnapshot, TransitionProof
@@ -22,7 +23,9 @@ from linear_boundary.task.workflow import transition_require
 def _parser_get() -> argparse.ArgumentParser:
     """Build the one-input task-state parser."""
 
-    parser = argparse.ArgumentParser(description="Validate one Linear task dispatch or transition boundary.")
+    parser = argparse.ArgumentParser(
+        description="Validate one Linear task dispatch or transition boundary."
+    )
     parser.add_argument("operation", choices=("dispatch", "transition"))
     parser.add_argument("--input", required=True, type=Path)
     return parser
@@ -34,46 +37,9 @@ def _json_load(path: Path) -> object:
     if path.is_symlink() or not path.is_file() or path.stat().st_nlink != 1:
         raise LinearContractError("Task-state input must be one ordinary file")
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        return json_load_strict(path.read_bytes())
+    except (OSError, JsonContractError) as error:
         raise LinearContractError("Task-state input is malformed") from error
-
-
-def _dispatch_snapshot_parse(payload: object) -> TaskExecutionSnapshot:
-    """Parse one complete task dispatch snapshot."""
-
-    expected = {
-        "schema_version",
-        "issue_status",
-        "project_status",
-        "role_label",
-        "delivery_kind",
-        "label_name_list",
-        "assignee_id",
-        "delegate_id",
-        "execution_identity_id",
-        "unresolved_blocker_count",
-        "issue_contract_complete",
-    }
-    if not isinstance(payload, dict) or set(payload) != expected or payload["schema_version"] != 1:
-        raise LinearContractError("Task dispatch snapshot has another shape")
-    if not isinstance(payload["label_name_list"], list):
-        raise LinearContractError("Task dispatch labels must be a list")
-    try:
-        return TaskExecutionSnapshot(
-            issue_status=IssueStatusName(payload["issue_status"]),
-            project_status=ProjectStatusName(payload["project_status"]),
-            role_label=payload["role_label"],
-            delivery_kind=payload["delivery_kind"],
-            label_name_list=list(payload["label_name_list"]),
-            assignee_id=payload["assignee_id"],
-            delegate_id=payload["delegate_id"],
-            execution_identity_id=payload["execution_identity_id"],
-            unresolved_blocker_count=payload["unresolved_blocker_count"],
-            issue_contract_complete=payload["issue_contract_complete"],
-        )
-    except (TypeError, ValueError) as error:
-        raise LinearContractError("Task dispatch snapshot contains an unsupported value") from error
 
 
 def _transition_validate(payload: object) -> None:
@@ -89,7 +55,11 @@ def _transition_validate(payload: object) -> None:
         "dispatchable",
         "proof",
     }
-    if not isinstance(payload, dict) or set(payload) != expected or payload["schema_version"] != 1:
+    if (
+        not isinstance(payload, dict)
+        or set(payload) != expected
+        or payload["schema_version"] != 1
+    ):
         raise LinearContractError("Task transition input has another shape")
     proof_payload = payload["proof"]
     proof_field_set = set(TransitionProof.__dataclass_fields__)
@@ -106,7 +76,9 @@ def _transition_validate(payload: object) -> None:
             dispatchable=payload["dispatchable"],
         )
     except (TypeError, ValueError) as error:
-        raise LinearContractError("Task transition input contains an unsupported value") from error
+        raise LinearContractError(
+            "Task transition input contains an unsupported value"
+        ) from error
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -116,7 +88,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         payload = _json_load(args.input)
         if args.operation == "dispatch":
-            snapshot = _dispatch_snapshot_parse(payload)
+            snapshot = TaskExecutionSnapshot.from_dispatch_payload(payload)
             blocker_list = snapshot.dispatch_blocker_list()
             result = {
                 "schema_version": 1,

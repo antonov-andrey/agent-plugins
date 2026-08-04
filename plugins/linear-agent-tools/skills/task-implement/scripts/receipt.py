@@ -13,6 +13,7 @@ LIBRARY_ROOT = Path(__file__).resolve().parents[3] / "lib"
 if str(LIBRARY_ROOT) not in sys.path:
     sys.path.insert(0, str(LIBRARY_ROOT))
 
+from json_contract import JsonContractError, json_load_strict
 from verification._validation import VerificationReceiptError
 from verification.invalidation import ReceiptReuseEvaluator
 from verification.model import VerificationInput, VerificationReceipt
@@ -29,7 +30,9 @@ def _args_parse(argv: list[str] | None = None) -> argparse.Namespace:
         Parsed arguments.
     """
 
-    parser = argparse.ArgumentParser(description="Create or evaluate one exact verification receipt.")
+    parser = argparse.ArgumentParser(
+        description="Create or evaluate one exact verification receipt."
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
     create = subparsers.add_parser("create")
     create.add_argument("--input", required=True, type=Path)
@@ -60,8 +63,8 @@ def _json_load(path: Path, *, label: str) -> object:
     if path.is_symlink() or not path.is_file() or path.stat().st_nlink != 1:
         raise VerificationReceiptError(f"{label} must be one ordinary file")
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        return json_load_strict(path.read_bytes())
+    except (OSError, JsonContractError) as error:
         raise VerificationReceiptError(f"{label} is malformed") from error
 
 
@@ -96,7 +99,9 @@ def main(argv: list[str] | None = None) -> int:
 
     args = _args_parse(argv)
     try:
-        current = VerificationInput.from_payload(_json_load(args.input, label="Verification input"))
+        current = VerificationInput.from_payload(
+            _json_load(args.input, label="Verification input")
+        )
         if args.command == "create":
             receipt = VerificationReceipt.from_input(
                 current,

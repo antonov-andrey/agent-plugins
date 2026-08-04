@@ -13,6 +13,7 @@ LIBRARY_ROOT = Path(__file__).resolve().parents[3] / "lib"
 if str(LIBRARY_ROOT) not in sys.path:
     sys.path.insert(0, str(LIBRARY_ROOT))
 
+from json_contract import JsonContractError, json_load_strict
 from task_workspace.model import (
     RepositoryRequest,
     TaskWorkspaceError,
@@ -53,8 +54,8 @@ def _request_get(issue_identifier: str, path: Path) -> WorkspaceRequest:
     if path.is_symlink() or not path.is_file() or path.stat().st_nlink != 1:
         raise TaskWorkspaceError("Repository request must be one ordinary file")
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        payload = json_load_strict(path.read_bytes())
+    except (OSError, JsonContractError) as error:
         raise TaskWorkspaceError("Repository request is malformed") from error
     if not isinstance(payload, list):
         raise TaskWorkspaceError("Repository request root must be a list")

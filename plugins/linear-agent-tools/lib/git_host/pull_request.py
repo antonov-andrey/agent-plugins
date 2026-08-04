@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-import json
 from pathlib import Path
 import subprocess
+
+from json_contract import JsonContractError, json_load_strict
 
 from git_host.model import (
     GitHubContractError,
@@ -157,8 +158,8 @@ class GitHubPullRequestBoundary:
             )
         )
         try:
-            payload = json.loads(completed_process.stdout)
-        except json.JSONDecodeError as error:
+            payload = json_load_strict(completed_process.stdout)
+        except JsonContractError as error:
             raise GitHubContractError(
                 "GitHub pull-request lookup response is malformed"
             ) from error
@@ -218,8 +219,8 @@ class GitHubPullRequestBoundary:
             )
         )
         try:
-            payload = json.loads(completed_process.stdout)
-        except json.JSONDecodeError as error:
+            payload = json_load_strict(completed_process.stdout)
+        except JsonContractError as error:
             raise GitHubContractError("GitHub PR response is malformed") from error
         required_check_list = self._required_check_list_get(
             repository=repository, number=number
@@ -354,8 +355,8 @@ class GitHubPullRequestBoundary:
         if completed_process.returncode not in {0, 1, 8}:
             raise GitHubContractError("Unable to read required GitHub checks")
         try:
-            payload = json.loads(completed_process.stdout or "[]")
-        except json.JSONDecodeError as error:
+            payload = json_load_strict(completed_process.stdout or "[]")
+        except JsonContractError as error:
             raise GitHubContractError(
                 "GitHub required-check response is malformed"
             ) from error

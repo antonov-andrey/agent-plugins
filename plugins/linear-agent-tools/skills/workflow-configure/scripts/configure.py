@@ -14,6 +14,7 @@ LIBRARY_ROOT = Path(__file__).resolve().parents[3] / "lib"
 if str(LIBRARY_ROOT) not in sys.path:
     sys.path.insert(0, str(LIBRARY_ROOT))
 
+from json_contract import JsonContractError, json_load_strict
 from linear_boundary.configuration.graphql import LinearWorkflowConfigurationGraphQL
 from linear_boundary.configuration.model import (
     ConfigurationPlan,
@@ -38,7 +39,9 @@ def _args_parse(argv: list[str] | None) -> argparse.Namespace:
         Parsed arguments.
     """
 
-    parser = argparse.ArgumentParser(description="Plan or apply the GraphQL-owned Linear workflow status delta.")
+    parser = argparse.ArgumentParser(
+        description="Plan or apply the GraphQL-owned Linear workflow status delta."
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
     for command in ("plan", "apply"):
         operation = subparsers.add_parser(command)
@@ -92,8 +95,8 @@ def _json_load(path: Path, *, label: str) -> object:
     if path.is_symlink() or not path.is_file() or path.stat().st_nlink != 1:
         raise LinearContractError(f"{label} must be one ordinary file")
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        return json_load_strict(path.read_bytes())
+    except (OSError, JsonContractError) as error:
         raise LinearContractError(f"{label} is malformed") from error
 
 
@@ -108,7 +111,9 @@ def _labels_load(path: Path) -> list[LinearLabel]:
     """
 
     payload = _json_load(path, label="Label snapshot")
-    if not isinstance(payload, list) or any(not isinstance(item, dict) for item in payload):
+    if not isinstance(payload, list) or any(
+        not isinstance(item, dict) for item in payload
+    ):
         raise LinearContractError("Label snapshot root must be a list of objects")
     expected = {"id", "name", "color", "description"}
     if any(set(item) != expected for item in payload):
@@ -155,12 +160,16 @@ def _approved_plan_load(path: Path) -> ConfigurationPlan:
     payload = _json_load(path, label="Approved plan")
     if not isinstance(payload, dict) or "plan_sha256" not in payload:
         raise LinearContractError("Approved plan envelope has another shape")
-    plan_payload = {name: value for name, value in payload.items() if name != "plan_sha256"}
+    plan_payload = {
+        name: value for name, value in payload.items() if name != "plan_sha256"
+    }
     plan = ConfigurationPlan.from_payload(plan_payload)
     if payload["plan_sha256"] != plan.fingerprint():
         raise LinearContractError("Approved plan fingerprint differs from its content")
     if not plan.can_mutate():
-        raise LinearContractError("Conflicting workflow configuration cannot be approved")
+        raise LinearContractError(
+            "Conflicting workflow configuration cannot be approved"
+        )
     plan.status_identifier_require()
     return plan
 
@@ -190,7 +199,11 @@ def main(argv: list[str] | None = None) -> int:
         )
         if args.command == "plan":
             plan = plan.status_identifier_allocate()
-            print(json.dumps(_plan_envelope(plan), ensure_ascii=False, indent=2, sort_keys=True))
+            print(
+                json.dumps(
+                    _plan_envelope(plan), ensure_ascii=False, indent=2, sort_keys=True
+                )
+            )
             return 0 if plan.can_mutate() else 2
         approved_plan = _approved_plan_load(args.approved_plan_input)
         if (
@@ -198,7 +211,9 @@ def main(argv: list[str] | None = None) -> int:
             or approved_plan.destination.viewer_id != args.viewer_id
             or approved_plan.destination.team_id != args.team_id
         ):
-            raise LinearContractError("Approved plan destination differs from apply arguments")
+            raise LinearContractError(
+                "Approved plan destination differs from apply arguments"
+            )
         plan.subset_require(approved_plan)
         service.missing_statuses_create(
             expected_workspace_id=args.workspace_id,

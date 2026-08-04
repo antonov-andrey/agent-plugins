@@ -21,6 +21,7 @@ LIBRARY_ROOT = PLUGIN_ROOT / "lib"
 if str(LIBRARY_ROOT) not in sys.path:
     sys.path.insert(0, str(LIBRARY_ROOT))
 
+from json_contract import JsonContractError, json_load_strict
 from linear_boundary.configuration.graphql import LinearWorkflowConfigurationGraphQL
 from linear_boundary.configuration.catalog import (
     ISSUE_STATUS_DESIRED,
@@ -49,6 +50,23 @@ from linear_boundary.transport import (
 WORKSPACE_ID = "11111111-1111-4111-8111-111111111111"
 VIEWER_ID = "22222222-2222-4222-8222-222222222222"
 TEAM_ID = "33333333-3333-4333-8333-333333333333"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    (
+        '{"key":1,"key":2}',
+        '{"value":NaN}',
+        b"\xff",
+    ),
+)
+def test_strict_json_boundary_rejects_ambiguous_or_nonstandard_payload(
+    payload: str | bytes,
+) -> None:
+    """External JSON never accepts duplicate names, constants, or invalid UTF-8."""
+
+    with pytest.raises(JsonContractError):
+        json_load_strict(payload)
 
 
 def _destination() -> DestinationIdentity:
@@ -144,7 +162,9 @@ def test_status_apply_precedes_still_missing_official_mcp_labels(
     """A credential-gated status apply may leave the exact approved label delta for MCP."""
 
     script = PLUGIN_ROOT / "skills" / "workflow-configure" / "scripts" / "configure.py"
-    spec = importlib.util.spec_from_file_location("linear_workflow_configure_apply", script)
+    spec = importlib.util.spec_from_file_location(
+        "linear_workflow_configure_apply", script
+    )
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -245,7 +265,10 @@ def _workflow_response(
                 "archivedAt": None,
             },
             "states": {
-                "nodes": [_status_node(item, index) for index, item in enumerate(status_list, 1)],
+                "nodes": [
+                    _status_node(item, index)
+                    for index, item in enumerate(status_list, 1)
+                ],
                 "pageInfo": {"hasNextPage": has_next, "endCursor": end_cursor},
             },
         },
@@ -267,7 +290,10 @@ def _project_status_response(
     return {
         "organization": {"id": WORKSPACE_ID},
         "projectStatuses": {
-            "nodes": [_status_node(item, index + 20) for index, item in enumerate(status_list, 1)],
+            "nodes": [
+                _status_node(item, index + 20)
+                for index, item in enumerate(status_list, 1)
+            ],
             "pageInfo": {"hasNextPage": False, "endCursor": None},
         },
     }
@@ -301,25 +327,36 @@ def test_configuration_plan_is_exact_and_idempotent() -> None:
 
     partial = WorkflowConfigurationSnapshot(
         destination=_destination(),
-        issue_status_list=list(_existing_status(item, index) for index, item in enumerate(ISSUE_STATUS_DESIRED[:3], 1)),
+        issue_status_list=list(
+            _existing_status(item, index)
+            for index, item in enumerate(ISSUE_STATUS_DESIRED[:3], 1)
+        ),
         project_status_list=[],
         label_list=[],
     )
 
     plan = WorkflowConfigurationReconciler().plan_get(partial)
 
-    assert [item.name for item in plan.issue_status_create_list] == [item.name for item in ISSUE_STATUS_DESIRED[3:]]
+    assert [item.name for item in plan.issue_status_create_list] == [
+        item.name for item in ISSUE_STATUS_DESIRED[3:]
+    ]
     assert plan.project_status_create_list == list(PROJECT_STATUS_DESIRED)
     assert plan.label_create_list == list(LABEL_DESIRED)
     assert plan.can_mutate()
 
     current = WorkflowConfigurationSnapshot(
         destination=_destination(),
-        issue_status_list=list(_existing_status(item, index) for index, item in enumerate(ISSUE_STATUS_DESIRED, 1)),
-        project_status_list=list(
-            _existing_status(item, index + 20) for index, item in enumerate(PROJECT_STATUS_DESIRED, 1)
+        issue_status_list=list(
+            _existing_status(item, index)
+            for index, item in enumerate(ISSUE_STATUS_DESIRED, 1)
         ),
-        label_list=list(_existing_label(item, index) for index, item in enumerate(LABEL_DESIRED, 1)),
+        project_status_list=list(
+            _existing_status(item, index + 20)
+            for index, item in enumerate(PROJECT_STATUS_DESIRED, 1)
+        ),
+        label_list=list(
+            _existing_label(item, index) for index, item in enumerate(LABEL_DESIRED, 1)
+        ),
     )
 
     assert WorkflowConfigurationReconciler().plan_get(current).is_current()
@@ -348,8 +385,12 @@ def test_configuration_plan_roundtrip_and_fresh_subset_guard() -> None:
     assert approved.status_identifier_allocate() == approved
     current = ConfigurationPlan(
         destination=approved.destination,
-        issue_status_create_list=[replace(item, id="") for item in approved.issue_status_create_list[1:]],
-        project_status_create_list=[replace(item, id="") for item in approved.project_status_create_list],
+        issue_status_create_list=[
+            replace(item, id="") for item in approved.issue_status_create_list[1:]
+        ],
+        project_status_create_list=[
+            replace(item, id="") for item in approved.project_status_create_list
+        ],
         label_create_list=[],
         conflict_list=[],
     )
@@ -387,9 +428,13 @@ def test_configuration_rejects_wrong_category_and_foreign_label() -> None:
         wrong_status.position,
     )
     foreign_label = _existing_label(LABEL_DESIRED[0], 2)
-    foreign_label = LinearLabel(foreign_label.id, foreign_label.name, foreign_label.color, "foreign owner")
+    foreign_label = LinearLabel(
+        foreign_label.id, foreign_label.name, foreign_label.color, "foreign owner"
+    )
     plan = WorkflowConfigurationReconciler().plan_get(
-        WorkflowConfigurationSnapshot(_destination(), [wrong_status], [], [foreign_label])
+        WorkflowConfigurationSnapshot(
+            _destination(), [wrong_status], [], [foreign_label]
+        )
     )
 
     assert not plan.can_mutate()
@@ -405,20 +450,32 @@ def test_configuration_rejects_wrong_category_and_foreign_label() -> None:
     color_plan = WorkflowConfigurationReconciler().plan_get(
         WorkflowConfigurationSnapshot(_destination(), [], [], [wrong_color])
     )
-    assert ("label", "task:implementation") in {(item.kind, item.name) for item in color_plan.conflict_list}
+    assert ("label", "task:implementation") in {
+        (item.kind, item.name) for item in color_plan.conflict_list
+    }
 
-    wrong_case_status = replace(_existing_status(ISSUE_STATUS_DESIRED[1], 4), name="todo")
-    wrong_case_label = replace(_existing_label(LABEL_DESIRED[0], 5), name="TASK:IMPLEMENTATION")
-    casing_plan = WorkflowConfigurationReconciler().plan_get(
-        WorkflowConfigurationSnapshot(_destination(), [wrong_case_status], [], [wrong_case_label])
+    wrong_case_status = replace(
+        _existing_status(ISSUE_STATUS_DESIRED[1], 4), name="todo"
     )
-    assert {(item.kind, item.name, item.reason) for item in casing_plan.conflict_list} == {
+    wrong_case_label = replace(
+        _existing_label(LABEL_DESIRED[0], 5), name="TASK:IMPLEMENTATION"
+    )
+    casing_plan = WorkflowConfigurationReconciler().plan_get(
+        WorkflowConfigurationSnapshot(
+            _destination(), [wrong_case_status], [], [wrong_case_label]
+        )
+    )
+    assert {
+        (item.kind, item.name, item.reason) for item in casing_plan.conflict_list
+    } == {
         ("issue-status", "Todo", "same name uses different casing"),
         ("label", "task:implementation", "same name uses different casing"),
     }
 
 
-def test_dispatchability_uses_exact_status_project_label_identity_and_blockers() -> None:
+def test_dispatchability_uses_exact_status_project_label_identity_and_blockers() -> (
+    None
+):
     """Todo is not a hidden blocked state and Human Review never dispatches."""
 
     ready = TaskExecutionSnapshot(
@@ -526,7 +583,9 @@ def test_task_state_cli_exposes_closed_dispatch_and_transition_gates(
 def test_transition_rejects_incompatible_role_delivery_pair_before_activation() -> None:
     """A role label cannot activate using another role's delivery contract."""
 
-    with pytest.raises(LinearContractError, match="role and delivery kind are incompatible"):
+    with pytest.raises(
+        LinearContractError, match="role and delivery kind are incompatible"
+    ):
         transition_require(
             current=IssueStatusName.BACKLOG,
             target=IssueStatusName.TODO,
@@ -572,7 +631,9 @@ def test_transition_contract_requires_fresh_rework_and_exact_human_candidate() -
         )
 
 
-def test_transition_contract_uses_delivery_specific_evidence_and_remediation_paths() -> None:
+def test_transition_contract_uses_delivery_specific_evidence_and_remediation_paths() -> (
+    None
+):
     """Evidence tasks need no fake PR/CI and findings use the exact remediation path."""
 
     transition_require(
@@ -820,7 +881,9 @@ def test_transport_retries_transient_server_failure_only_for_safe_operation() ->
 
     result = LinearGraphQLTransport(
         "secret",
-        retry=LinearRetryPolicy(attempt_count=2, initial_delay_seconds=0, maximum_delay_seconds=0),
+        retry=LinearRetryPolicy(
+            attempt_count=2, initial_delay_seconds=0, maximum_delay_seconds=0
+        ),
         opener=opener,
         sleeper=lambda _delay: None,
     ).execute(
@@ -860,7 +923,9 @@ def test_transport_classifies_auth_and_graphql_errors_without_raw_payload() -> N
         opener=lambda _request, timeout: _Response(
             {
                 "data": None,
-                "errors": [{"message": "sensitive", "extensions": {"code": "BAD_USER_INPUT"}}],
+                "errors": [
+                    {"message": "sensitive", "extensions": {"code": "BAD_USER_INPUT"}}
+                ],
             }
         ),
     )
@@ -879,12 +944,16 @@ def test_graphql_configuration_fully_paginates_and_guards_exact_destination() ->
 
     transport = _ScriptedTransport(
         [
-            _workflow_response(ISSUE_STATUS_DESIRED[:4], has_next=True, end_cursor="next-page"),
+            _workflow_response(
+                ISSUE_STATUS_DESIRED[:4], has_next=True, end_cursor="next-page"
+            ),
             _workflow_response(ISSUE_STATUS_DESIRED[4:]),
             _project_status_response(PROJECT_STATUS_DESIRED),
         ]
     )
-    service = LinearWorkflowConfigurationGraphQL(transport, WorkflowConfigurationReconciler())
+    service = LinearWorkflowConfigurationGraphQL(
+        transport, WorkflowConfigurationReconciler()
+    )
 
     current = service.read(
         expected_workspace_id=WORKSPACE_ID,
@@ -892,16 +961,24 @@ def test_graphql_configuration_fully_paginates_and_guards_exact_destination() ->
         expected_team_id=TEAM_ID,
     )
 
-    assert [item.name for item in current.issue_status_list] == [item.name for item in ISSUE_STATUS_DESIRED]
-    assert [item.name for item in current.project_status_list] == [item.name for item in PROJECT_STATUS_DESIRED]
+    assert [item.name for item in current.issue_status_list] == [
+        item.name for item in ISSUE_STATUS_DESIRED
+    ]
+    assert [item.name for item in current.project_status_list] == [
+        item.name for item in PROJECT_STATUS_DESIRED
+    ]
     assert transport.call_list[1]["variables"]["after"] == "next-page"
-    assert all(item["variables"]["viewerId"] == VIEWER_ID for item in transport.call_list[:2])
+    assert all(
+        item["variables"]["viewerId"] == VIEWER_ID for item in transport.call_list[:2]
+    )
     assert "membership(userId: $viewerId)" in transport.call_list[0]["document"]
     assert "projectStatuses(first: 100" in transport.call_list[2]["document"]
     assert all(item["repeat_safe"] is True for item in transport.call_list)
 
 
-def test_graphql_configuration_plan_can_discover_workspace_but_binds_its_fingerprint() -> None:
+def test_graphql_configuration_plan_can_discover_workspace_but_binds_its_fingerprint() -> (
+    None
+):
     """The first read-only plan discovers one workspace and makes it approved-plan state."""
 
     transport = _ScriptedTransport(
@@ -910,13 +987,17 @@ def test_graphql_configuration_plan_can_discover_workspace_but_binds_its_fingerp
             _project_status_response(PROJECT_STATUS_DESIRED),
         ]
     )
-    service = LinearWorkflowConfigurationGraphQL(transport, WorkflowConfigurationReconciler())
+    service = LinearWorkflowConfigurationGraphQL(
+        transport, WorkflowConfigurationReconciler()
+    )
 
     plan = service.plan(
         expected_workspace_id=None,
         expected_viewer_id=VIEWER_ID,
         expected_team_id=TEAM_ID,
-        label_list=list(_existing_label(item, index) for index, item in enumerate(LABEL_DESIRED, 1)),
+        label_list=list(
+            _existing_label(item, index) for index, item in enumerate(LABEL_DESIRED, 1)
+        ),
     )
 
     assert plan.destination == _destination()
@@ -924,7 +1005,9 @@ def test_graphql_configuration_plan_can_discover_workspace_but_binds_its_fingerp
     assert ConfigurationPlan.from_payload(plan.payload()) == plan
 
 
-def test_graphql_configuration_rereads_approved_destination_before_status_mutation() -> None:
+def test_graphql_configuration_rereads_approved_destination_before_status_mutation() -> (
+    None
+):
     """Apply creates only statuses still missing from a freshly guarded approved plan."""
 
     partial_issue_status_list = ISSUE_STATUS_DESIRED[:-1]
@@ -932,14 +1015,22 @@ def test_graphql_configuration_rereads_approved_destination_before_status_mutati
     current_snapshot = WorkflowConfigurationSnapshot(
         destination=_destination(),
         issue_status_list=list(
-            _existing_status(item, index) for index, item in enumerate(partial_issue_status_list, 1)
+            _existing_status(item, index)
+            for index, item in enumerate(partial_issue_status_list, 1)
         ),
         project_status_list=list(
-            _existing_status(item, index + 20) for index, item in enumerate(partial_project_status_list, 1)
+            _existing_status(item, index + 20)
+            for index, item in enumerate(partial_project_status_list, 1)
         ),
-        label_list=list(_existing_label(item, index) for index, item in enumerate(LABEL_DESIRED, 1)),
+        label_list=list(
+            _existing_label(item, index) for index, item in enumerate(LABEL_DESIRED, 1)
+        ),
     )
-    approved = WorkflowConfigurationReconciler().plan_get(current_snapshot).status_identifier_allocate()
+    approved = (
+        WorkflowConfigurationReconciler()
+        .plan_get(current_snapshot)
+        .status_identifier_allocate()
+    )
     transport = _ScriptedTransport(
         [
             _workflow_response(partial_issue_status_list),
@@ -950,7 +1041,9 @@ def test_graphql_configuration_rereads_approved_destination_before_status_mutati
             _project_status_response(PROJECT_STATUS_DESIRED),
         ]
     )
-    service = LinearWorkflowConfigurationGraphQL(transport, WorkflowConfigurationReconciler())
+    service = LinearWorkflowConfigurationGraphQL(
+        transport, WorkflowConfigurationReconciler()
+    )
 
     service.missing_statuses_create(
         expected_workspace_id=WORKSPACE_ID,
@@ -971,10 +1064,19 @@ def test_graphql_configuration_rereads_approved_destination_before_status_mutati
     create_call = transport.call_list[2]
     assert create_call["repeat_safe"] is False
     assert create_call["variables"]["input"]["name"] == "Canceled"
-    assert create_call["variables"]["input"]["id"] == approved.issue_status_create_list[0].id
+    assert (
+        create_call["variables"]["input"]["id"]
+        == approved.issue_status_create_list[0].id
+    )
     assert uuid.UUID(create_call["variables"]["input"]["id"]).version == 4
     project_create_call = transport.call_list[3]
     assert project_create_call["repeat_safe"] is False
     assert project_create_call["variables"]["input"]["name"] == "Canceled"
-    assert project_create_call["variables"]["input"]["id"] == approved.project_status_create_list[0].id
-    assert "status { id name type color description position }" in project_create_call["document"]
+    assert (
+        project_create_call["variables"]["input"]["id"]
+        == approved.project_status_create_list[0].id
+    )
+    assert (
+        "status { id name type color description position }"
+        in project_create_call["document"]
+    )

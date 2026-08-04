@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import StrEnum
 import hashlib
 import json
 import re
-from typing import Iterable
 from urllib.parse import unquote, urlsplit
 
 _KEY_PATTERN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")

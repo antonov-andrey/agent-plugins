@@ -14,6 +14,7 @@ if str(LIBRARY_ROOT) not in sys.path:
     sys.path.insert(0, str(LIBRARY_ROOT))
 
 from git_host.model import GitHubContractError
+from json_contract import JsonContractError, json_load_strict
 from task_cleanup.model import CleanupRequest, TaskCleanupError
 from task_cleanup.reconciliation import TaskCleanupReconciler
 from task_workspace.model import TaskWorkspaceError, WorkspaceConfig
@@ -26,7 +27,9 @@ def _parser_get() -> argparse.ArgumentParser:
         The argument parser.
     """
 
-    parser = argparse.ArgumentParser(description="Idempotently clean exact state owned by one Linear task.")
+    parser = argparse.ArgumentParser(
+        description="Idempotently clean exact state owned by one Linear task."
+    )
     parser.add_argument("--request-input", required=True, type=Path)
     return parser
 
@@ -44,8 +47,8 @@ def _request_load(path: Path) -> CleanupRequest:
     if path.is_symlink() or not path.is_file() or path.stat().st_nlink != 1:
         raise TaskCleanupError("Cleanup request must be one ordinary file")
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        payload = json_load_strict(path.read_bytes())
+    except (OSError, JsonContractError) as error:
         raise TaskCleanupError("Cleanup request is malformed") from error
     return CleanupRequest.from_payload(payload)
 
@@ -62,7 +65,9 @@ def main(argv: list[str] | None = None) -> int:
 
     args = _parser_get().parse_args(argv)
     try:
-        result = TaskCleanupReconciler(WorkspaceConfig.from_environment()).cleanup(_request_load(args.request_input))
+        result = TaskCleanupReconciler(WorkspaceConfig.from_environment()).cleanup(
+            _request_load(args.request_input)
+        )
     except (GitHubContractError, TaskCleanupError, TaskWorkspaceError) as error:
         print(str(error), file=sys.stderr)
         return 2

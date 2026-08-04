@@ -13,6 +13,7 @@ LIBRARY_ROOT = Path(__file__).resolve().parents[2]
 if str(LIBRARY_ROOT) not in sys.path:
     sys.path.insert(0, str(LIBRARY_ROOT))
 
+from json_contract import JsonContractError, json_load_strict
 from verification._validation import VerificationReceiptError
 from verification.attempt import AttemptSummary
 from verification.baseline import LocalPhaseBaseline, TaskWorkspaceBaseline
@@ -34,7 +35,9 @@ def _args_parse(argv: list[str] | None = None) -> argparse.Namespace:
         Parsed arguments.
     """
 
-    parser = argparse.ArgumentParser(description="Render exact Linear workflow evidence.")
+    parser = argparse.ArgumentParser(
+        description="Render exact Linear workflow evidence."
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
     for command in ("candidate", "attempt", "baseline", "workspace-baseline"):
         operation = subparsers.add_parser(command)
@@ -55,8 +58,8 @@ def _json_load(path: Path) -> object:
     if path.is_symlink() or not path.is_file() or path.stat().st_nlink != 1:
         raise VerificationReceiptError("Evidence input must be one ordinary file")
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        return json_load_strict(path.read_bytes())
+    except (OSError, JsonContractError) as error:
         raise VerificationReceiptError("Evidence input is malformed") from error
 
 
@@ -87,11 +90,23 @@ def main(argv: list[str] | None = None) -> int:
                 )
             )
         elif args.command == "attempt":
-            print(ATTEMPT_COMMENT_CODEC.render(AttemptSummary.from_payload(payload).payload()))
+            print(
+                ATTEMPT_COMMENT_CODEC.render(
+                    AttemptSummary.from_payload(payload).payload()
+                )
+            )
         elif args.command == "baseline":
-            print(LOCAL_PHASE_BASELINE_COMMENT_CODEC.render(LocalPhaseBaseline.from_payload(payload).payload()))
+            print(
+                LOCAL_PHASE_BASELINE_COMMENT_CODEC.render(
+                    LocalPhaseBaseline.from_payload(payload).payload()
+                )
+            )
         else:
-            print(TASK_WORKSPACE_BASELINE_COMMENT_CODEC.render(TaskWorkspaceBaseline.from_payload(payload).payload()))
+            print(
+                TASK_WORKSPACE_BASELINE_COMMENT_CODEC.render(
+                    TaskWorkspaceBaseline.from_payload(payload).payload()
+                )
+            )
         return 0
     except VerificationReceiptError as error:
         print(str(error), file=sys.stderr)
