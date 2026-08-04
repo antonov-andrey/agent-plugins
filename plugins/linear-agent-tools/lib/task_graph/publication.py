@@ -9,7 +9,7 @@ from task_graph.delta import TaskGraphDelta
 from task_graph.model import SourceIdentity, TaskBlockerEdge, TaskGraph, TaskNode
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class IssuePublication:
     """Contain the exact provider-owned fields for one staged Linear issue."""
 
@@ -24,10 +24,10 @@ class IssuePublication:
     def __post_init__(self) -> None:
         """Detach the provider-owned label list from caller mutation."""
 
-        self.label_name_list = list(self.label_name_list)
+        object.__setattr__(self, "label_name_list", list(self.label_name_list))
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class GraphPublicationView:
     """Contain complete visible content for one Project import transaction."""
 
@@ -46,8 +46,8 @@ class GraphPublicationView:
     def __post_init__(self) -> None:
         """Detach rendered collections from caller mutation."""
 
-        self.issue_list = list(self.issue_list)
-        self.blocker_edge_list = list(self.blocker_edge_list)
+        object.__setattr__(self, "issue_list", list(self.issue_list))
+        object.__setattr__(self, "blocker_edge_list", list(self.blocker_edge_list))
 
     def payload(self) -> dict[str, object]:
         """Return one canonical JSON-ready rendered view.
@@ -72,7 +72,7 @@ class GraphPublicationView:
         }
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class DeltaPublicationView:
     """Contain provider-owned fields for one approved active-Project delta."""
 
@@ -89,9 +89,9 @@ class DeltaPublicationView:
     def __post_init__(self) -> None:
         """Detach rendered collections from caller mutation."""
 
-        self.issue_list = list(self.issue_list)
-        self.blocker_edge_list = list(self.blocker_edge_list)
-        self.reverification_node_key_list = list(self.reverification_node_key_list)
+        object.__setattr__(self, "issue_list", list(self.issue_list))
+        object.__setattr__(self, "blocker_edge_list", list(self.blocker_edge_list))
+        object.__setattr__(self, "reverification_node_key_list", list(self.reverification_node_key_list))
 
     def payload(self) -> dict[str, object]:
         """Return one canonical JSON-ready rendered delta.

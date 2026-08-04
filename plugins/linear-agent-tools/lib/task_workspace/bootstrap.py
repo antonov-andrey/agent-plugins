@@ -51,8 +51,14 @@ class BootstrapPlan:
     """Contain the exact validated bootstrap manifest effect."""
 
     manifest_sha256: str
-    resource_list: tuple[BootstrapResource, ...]
-    cleanup_argument_list: tuple[str, ...]
+    resource_list: list[BootstrapResource]
+    cleanup_argument_list: list[str]
+
+    def __post_init__(self) -> None:
+        """Detach validated plan collections from parser-local mutation."""
+
+        object.__setattr__(self, "resource_list", list(self.resource_list))
+        object.__setattr__(self, "cleanup_argument_list", list(self.cleanup_argument_list))
 
 
 def manifest_parse(payload_bytes: bytes, *, main_root: Path) -> BootstrapPlan:
@@ -113,7 +119,7 @@ def manifest_parse(payload_bytes: bytes, *, main_root: Path) -> BootstrapPlan:
     path_list = [item.relative_path for item in resource_list]
     if len(path_list) != len(set(path_list)):
         raise TaskWorkspaceError("Bootstrap manifest repeats one resource path")
-    cleanup_argument_list: tuple[str, ...] = ()
+    cleanup_argument_list: list[str] = []
     if "cleanup" in payload:
         cleanup = payload["cleanup"]
         if not isinstance(cleanup, dict) or set(cleanup) != {"command_argument_list"}:
@@ -125,10 +131,10 @@ def manifest_parse(payload_bytes: bytes, *, main_root: Path) -> BootstrapPlan:
             or any(not isinstance(item, str) or not item or "\x00" in item for item in arguments)
         ):
             raise TaskWorkspaceError("Bootstrap cleanup command must use direct non-empty argv")
-        cleanup_argument_list = tuple(arguments)
+        cleanup_argument_list = list(arguments)
     return BootstrapPlan(
         manifest_sha256=hashlib.sha256(payload_bytes).hexdigest(),
-        resource_list=tuple(sorted(resource_list, key=lambda item: item.relative_path)),
+        resource_list=sorted(resource_list, key=lambda item: item.relative_path),
         cleanup_argument_list=cleanup_argument_list,
     )
 

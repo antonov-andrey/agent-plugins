@@ -284,7 +284,7 @@ class RepositoryTarget:
         return cls(**payload)
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class VerificationStep:
     """Describe one project-local direct-argv verification requirement."""
 
@@ -317,8 +317,8 @@ class VerificationStep:
         )
         if not isinstance(self.environment_identity_required, bool):
             raise TaskGraphError("environment_identity_required must be boolean")
-        self.command_argument_list = list(self.command_argument_list)
-        self.dependency_path_list = list(self.dependency_path_list)
+        object.__setattr__(self, "command_argument_list", list(self.command_argument_list))
+        object.__setattr__(self, "dependency_path_list", list(self.dependency_path_list))
 
     @classmethod
     def from_payload(cls, payload: object) -> "VerificationStep":
@@ -357,7 +357,7 @@ class VerificationStep:
         )
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class ResourceDeclaration:
     """Bind one exact task-owned resource and its cleanup operation."""
 
@@ -390,8 +390,8 @@ class ResourceDeclaration:
             raise TaskGraphError("Resource consumer node keys must be lowercase semantic slugs")
         if self.lifetime is not ResourceLifetime.ISSUE and self.consumer_node_key_list:
             raise TaskGraphError("Only an issue-lifetime resource may declare downstream consumers")
-        self.cleanup_argument_list = list(self.cleanup_argument_list)
-        self.consumer_node_key_list = list(self.consumer_node_key_list)
+        object.__setattr__(self, "cleanup_argument_list", list(self.cleanup_argument_list))
+        object.__setattr__(self, "consumer_node_key_list", list(self.consumer_node_key_list))
 
     def fingerprint(self) -> str:
         """Return the exact durable cleanup-declaration identity.
@@ -446,7 +446,7 @@ class ResourceDeclaration:
         )
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class TaskNode:
     """Own one bounded executable or human Linear issue contract."""
 
@@ -534,15 +534,15 @@ class TaskNode:
             multiline=True,
         )
         _text_list_validate(self.source_section_list, label="Source sections")
-        self.scope_list = list(self.scope_list)
-        self.non_goal_list = list(self.non_goal_list)
-        self.repository_list = list(self.repository_list)
-        self.required_contract_list = list(self.required_contract_list)
-        self.required_skill_list = list(self.required_skill_list)
-        self.blocker_key_list = list(self.blocker_key_list)
-        self.resource_list = list(self.resource_list)
-        self.verification_list = list(self.verification_list)
-        self.source_section_list = list(self.source_section_list)
+        object.__setattr__(self, "scope_list", list(self.scope_list))
+        object.__setattr__(self, "non_goal_list", list(self.non_goal_list))
+        object.__setattr__(self, "repository_list", list(self.repository_list))
+        object.__setattr__(self, "required_contract_list", list(self.required_contract_list))
+        object.__setattr__(self, "required_skill_list", list(self.required_skill_list))
+        object.__setattr__(self, "blocker_key_list", list(self.blocker_key_list))
+        object.__setattr__(self, "resource_list", list(self.resource_list))
+        object.__setattr__(self, "verification_list", list(self.verification_list))
+        object.__setattr__(self, "source_section_list", list(self.source_section_list))
 
     def can_agent_execute(self) -> bool:
         """Return whether the task receives the dispatch label.
@@ -615,7 +615,7 @@ class TaskNode:
         )
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class TaskGraph:
     """Own one Linear Project and its canonical issue dependency graph."""
 
@@ -675,7 +675,7 @@ class TaskGraph:
         acceptance_key_set = {node.node_key for node in acceptance_list}
         if not acceptance_key_set <= set(cleanup_list[0].blocker_key_list):
             raise TaskGraphError("Final cleanup must be blocked by every acceptance task")
-        self.node_list = list(self.node_list)
+        object.__setattr__(self, "node_list", list(self.node_list))
         downstream_node_key_set_by_blocker_key_map = {node_key: set() for node_key in node_by_key_map}
         for node in self.node_list:
             for blocker_key in node.blocker_key_list:

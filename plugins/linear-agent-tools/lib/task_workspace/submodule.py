@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from task_workspace.model import TaskWorkspaceError
-from task_workspace.repository import GitCommand, re_full_commit
+from task_workspace.model import TaskWorkspaceError, WorkspaceSubmoduleState
+from task_workspace.repository import GitCommand, match_full_commit
 
 
-def recursive_submodule_prepare(repository_root: Path) -> tuple[tuple[str, str], ...]:
+def recursive_submodule_state_list_prepare(repository_root: Path) -> list[WorkspaceSubmoduleState]:
     """Initialize exact recursive gitlinks in a newly owned task worktree.
 
     Args:
@@ -19,7 +19,7 @@ def recursive_submodule_prepare(repository_root: Path) -> tuple[tuple[str, str],
     """
 
     if not _direct_gitlink_by_path_get(repository_root):
-        return ()
+        return []
     GitCommand.run(repository_root, ("submodule", "sync", "--recursive"))
     GitCommand.run(
         repository_root,
@@ -33,12 +33,12 @@ def recursive_submodule_prepare(repository_root: Path) -> tuple[tuple[str, str],
             "--checkout",
         ),
     )
-    return recursive_submodule_snapshot_get(repository_root)
+    return recursive_submodule_state_list_get(repository_root)
 
 
-def recursive_submodule_snapshot_get(
+def recursive_submodule_state_list_get(
     repository_root: Path,
-) -> tuple[tuple[str, str], ...]:
+) -> list[WorkspaceSubmoduleState]:
     """Return and validate every recursive submodule checkout at its index gitlink.
 
     Args:
@@ -48,7 +48,7 @@ def recursive_submodule_snapshot_get(
         Sorted repository-relative path/commit pairs.
     """
 
-    result: list[tuple[str, str]] = []
+    submodule_state_list: list[WorkspaceSubmoduleState] = []
 
     def visit(root: Path, parent_path: str) -> None:
         for relative_path, expected_commit in _direct_gitlink_by_path_get(root).items():
@@ -76,17 +76,17 @@ def recursive_submodule_snapshot_get(
                 ("status", "--porcelain=v1", "-z", "--ignore-submodules=none"),
             ).stdout:
                 raise TaskWorkspaceError(f"Recursive submodule contains uncommitted state: {full_path}")
-            result.append((full_path, current_commit))
+            submodule_state_list.append(WorkspaceSubmoduleState(relative_path=full_path, commit=current_commit))
             visit(child, full_path)
 
     visit(repository_root, "")
-    return tuple(sorted(result))
+    return sorted(submodule_state_list, key=lambda item: item.relative_path)
 
 
 def _direct_gitlink_by_path_get(repository_root: Path) -> dict[str, str]:
     """Read exact stage-zero direct gitlinks from one repository index."""
 
-    result: dict[str, str] = {}
+    commit_by_relative_path_map: dict[str, str] = {}
     payload = GitCommand.run(repository_root, ("ls-files", "--stage", "-z")).stdout
     for record in payload.split(b"\0"):
         if not record:
@@ -111,10 +111,10 @@ def _direct_gitlink_by_path_get(repository_root: Path) -> dict[str, str]:
             or "\\" in relative_path
             or any(ord(character) < 32 for character in relative_path)
             or any(part in {"", ".", ".."} for part in relative_path.split("/"))
-            or not re_full_commit(commit)
+            or not match_full_commit(commit)
         ):
             raise TaskWorkspaceError("Submodule gitlink has an unsafe path or commit identity")
-        if relative_path in result:
+        if relative_path in commit_by_relative_path_map:
             raise TaskWorkspaceError("Git index repeats one submodule path")
-        result[relative_path] = commit
-    return result
+        commit_by_relative_path_map[relative_path] = commit
+    return commit_by_relative_path_map

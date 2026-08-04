@@ -76,7 +76,7 @@ class PublicationPhase(StrEnum):
     COMPLETE = "complete"
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class RemoteIssue:
     """Contain provider-relevant current state of one Project issue."""
 
@@ -115,8 +115,8 @@ class RemoteIssue:
                 _single_line_require(value, label=f"Remote issue {label}")
         for blocker_key in self.blocker_key_list:
             _node_key_require(blocker_key, label="Remote issue blocker key")
-        self.label_name_list = list(self.label_name_list)
-        self.blocker_key_list = list(self.blocker_key_list)
+        object.__setattr__(self, "label_name_list", list(self.label_name_list))
+        object.__setattr__(self, "blocker_key_list", list(self.blocker_key_list))
 
     @classmethod
     def from_payload(cls, payload: object) -> "RemoteIssue":
@@ -183,7 +183,7 @@ class RemoteDocument:
         return cls(**payload)
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class RemoteProject:
     """Contain one fully paginated current Project import snapshot."""
 
@@ -220,8 +220,8 @@ class RemoteProject:
         issue_id_list = [item.id for item in self.issue_list]
         if len(issue_id_list) != len(set(issue_id_list)):
             raise TaskGraphError("Remote Project repeats one issue identity")
-        self.document_list = list(self.document_list)
-        self.issue_list = list(self.issue_list)
+        object.__setattr__(self, "document_list", list(self.document_list))
+        object.__setattr__(self, "issue_list", list(self.issue_list))
 
     @classmethod
     def from_payload(cls, payload: object) -> "RemoteProject":
@@ -272,7 +272,7 @@ class PublicationAction:
     payload: dict[str, object]
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class ReconciliationPlan:
     """Contain only the next safe phase of one graph import."""
 
@@ -283,7 +283,7 @@ class ReconciliationPlan:
     def __post_init__(self) -> None:
         """Detach the action sequence from caller mutation."""
 
-        self.action_list = list(self.action_list)
+        object.__setattr__(self, "action_list", list(self.action_list))
 
     def payload(self) -> dict[str, object]:
         """Return one JSON-ready plan.

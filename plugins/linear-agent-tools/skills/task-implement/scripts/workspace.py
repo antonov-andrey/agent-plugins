@@ -19,15 +19,15 @@ from task_workspace import (
     TaskWorkspaceTransaction,
     WorkspaceConfig,
     WorkspaceRequest,
-    recursive_submodule_snapshot_get,
+    recursive_submodule_state_list_get,
 )
 
 
-def _parser_get() -> argparse.ArgumentParser:
-    """Build the closed workspace command parser.
+def _args_parse(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse the closed workspace command arguments.
 
     Returns:
-        The argument parser.
+        Parsed arguments.
     """
 
     parser = argparse.ArgumentParser(
@@ -36,7 +36,7 @@ def _parser_get() -> argparse.ArgumentParser:
     parser.add_argument("command", choices=("prepare", "validate"))
     parser.add_argument("--issue-identifier", required=True)
     parser.add_argument("--repositories-input", required=True, type=Path)
-    return parser
+    return parser.parse_args(argv)
 
 
 def _request_get(issue_identifier: str, path: Path) -> WorkspaceRequest:
@@ -60,7 +60,7 @@ def _request_get(issue_identifier: str, path: Path) -> WorkspaceRequest:
         raise TaskWorkspaceError("Repository request root must be a list")
     return WorkspaceRequest(
         issue_identifier=issue_identifier,
-        repository_list=tuple(RepositoryRequest.from_payload(item) for item in payload),
+        repository_list=[RepositoryRequest.from_payload(item) for item in payload],
     )
 
 
@@ -74,7 +74,7 @@ def main(argv: list[str] | None = None) -> int:
         Zero on success or two for contract rejection.
     """
 
-    args = _parser_get().parse_args(argv)
+    args = _args_parse(argv)
     try:
         request = _request_get(args.issue_identifier, args.repositories_input)
         transaction = TaskWorkspaceTransaction(WorkspaceConfig.from_environment())
@@ -91,9 +91,10 @@ def main(argv: list[str] | None = None) -> int:
                     {
                         "baseline_commit": item.baseline_commit,
                         "origin_identity": item.origin_identity,
-                        "recursive_submodule_commit_by_path": [
-                            list(pair) for pair in recursive_submodule_snapshot_get(Path(item.task_root))
-                        ],
+                        "recursive_submodule_commit_by_path_map": {
+                            state.relative_path: state.commit
+                            for state in recursive_submodule_state_list_get(Path(item.task_root))
+                        },
                         "task_root": item.task_root,
                     }
                     for item in state_list

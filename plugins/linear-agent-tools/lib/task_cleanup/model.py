@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import re
 
 from git_host.model import RepositoryIdentity
@@ -143,17 +143,31 @@ class PullRequestReference:
 
 
 @dataclass(frozen=True, slots=True)
+class PullRequestTarget:
+    """Bind one pull request to its exact approved base and task branches."""
+
+    base_branch: str
+    head_branch: str
+
+    def __post_init__(self) -> None:
+        """Require two non-empty single-line branch names."""
+
+        _single_line(self.base_branch, label="Pull request base branch")
+        _single_line(self.head_branch, label="Pull request head branch")
+
+
+@dataclass(frozen=True, slots=True)
 class CleanupRequest:
     """Own every exact local, GitHub and declared resource cleanup target."""
 
     issue_identifier: str
     authority: CleanupAuthority
-    repository_list: tuple[RepositoryRequest, ...]
-    pull_request_list: tuple[PullRequestReference, ...]
-    resource_list: tuple[ResourceDeclaration, ...]
-    approved_resource_fingerprint_list: tuple[str, ...] = ()
-    terminal_consumer_node_key_list: tuple[str, ...] = ()
-    project_issue_identifier_list: tuple[str, ...] = ()
+    repository_list: list[RepositoryRequest]
+    pull_request_list: list[PullRequestReference]
+    resource_list: list[ResourceDeclaration]
+    approved_resource_fingerprint_list: list[str] = field(default_factory=list)
+    terminal_consumer_node_key_list: list[str] = field(default_factory=list)
+    project_issue_identifier_list: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         """Validate one complete cleanup request."""
@@ -166,15 +180,14 @@ class CleanupRequest:
             ("pull request", self.pull_request_list, PullRequestReference),
             ("resource", self.resource_list, ResourceDeclaration),
         ):
-            if not isinstance(value, tuple) or any(not isinstance(item, expected_type) for item in value):
+            if not isinstance(value, list) or any(not isinstance(item, expected_type) for item in value):
                 raise TaskCleanupError(f"Cleanup {label} list has another shape")
-        if not isinstance(self.project_issue_identifier_list, tuple):
-            raise TaskCleanupError("Project issue identifier list must be a tuple")
+        if not isinstance(self.project_issue_identifier_list, list):
+            raise TaskCleanupError("Project issue identifier list must be a list")
         repository_url_set = {item.origin_url for item in self.repository_list}
         if len(repository_url_set) != len(self.repository_list):
             raise TaskCleanupError("Cleanup request repeats one repository")
-        pr_key_list = [(item.repository.value, item.number) for item in self.pull_request_list]
-        if len(pr_key_list) != len(set(pr_key_list)):
+        if len(self.pull_request_list) != len(set(self.pull_request_list)):
             raise TaskCleanupError("Cleanup request repeats one pull request")
         pr_repository_list = [item.repository.value for item in self.pull_request_list]
         if len(pr_repository_list) != len(set(pr_repository_list)):
@@ -182,27 +195,25 @@ class CleanupRequest:
         resource_key_list = [item.key for item in self.resource_list]
         if len(resource_key_list) != len(set(resource_key_list)):
             raise TaskCleanupError("Cleanup request repeats one resource key")
-        expected_resource_fingerprint_list = tuple(sorted(item.fingerprint() for item in self.resource_list))
+        expected_resource_fingerprint_list = sorted(item.fingerprint() for item in self.resource_list)
         if (
-            not isinstance(self.approved_resource_fingerprint_list, tuple)
+            not isinstance(self.approved_resource_fingerprint_list, list)
             or self.approved_resource_fingerprint_list != expected_resource_fingerprint_list
             or len(self.approved_resource_fingerprint_list) != len(set(self.approved_resource_fingerprint_list))
         ):
             raise TaskCleanupError(
                 "Cleanup request must bind every resource to its independently approved declaration fingerprint"
             )
-        expected_terminal_consumer_node_key_list = tuple(
-            sorted(
-                {
-                    consumer_key
-                    for item in self.resource_list
-                    if item.lifetime is ResourceLifetime.ISSUE
-                    for consumer_key in item.consumer_node_key_list
-                }
-            )
+        expected_terminal_consumer_node_key_list = sorted(
+            {
+                consumer_key
+                for item in self.resource_list
+                if item.lifetime is ResourceLifetime.ISSUE
+                for consumer_key in item.consumer_node_key_list
+            }
         )
         if (
-            not isinstance(self.terminal_consumer_node_key_list, tuple)
+            not isinstance(self.terminal_consumer_node_key_list, list)
             or self.terminal_consumer_node_key_list != expected_terminal_consumer_node_key_list
             or any(_NODE_KEY_PATTERN.fullmatch(item) is None for item in self.terminal_consumer_node_key_list)
         ):
@@ -218,7 +229,7 @@ class CleanupRequest:
             raise TaskCleanupError("Attempt cleanup cannot mutate pull requests")
         if self.authority.scope != "terminal-issue" and self.terminal_consumer_node_key_list:
             raise TaskCleanupError("Only terminal issue cleanup may carry downstream consumer proof")
-        if self.project_issue_identifier_list != tuple(sorted(self.project_issue_identifier_list)) or len(
+        if self.project_issue_identifier_list != sorted(self.project_issue_identifier_list) or len(
             self.project_issue_identifier_list
         ) != len(set(self.project_issue_identifier_list)):
             raise TaskCleanupError("Project issue identifiers must be unique and sorted")
@@ -232,6 +243,24 @@ class CleanupRequest:
                 raise TaskCleanupError("Final Project cleanup requires its complete issue identifier set")
         elif self.project_issue_identifier_list:
             raise TaskCleanupError("Only final Project cleanup may carry Project issue identifiers")
+        object.__setattr__(self, "repository_list", list(self.repository_list))
+        object.__setattr__(self, "pull_request_list", list(self.pull_request_list))
+        object.__setattr__(self, "resource_list", list(self.resource_list))
+        object.__setattr__(
+            self,
+            "approved_resource_fingerprint_list",
+            list(self.approved_resource_fingerprint_list),
+        )
+        object.__setattr__(
+            self,
+            "terminal_consumer_node_key_list",
+            list(self.terminal_consumer_node_key_list),
+        )
+        object.__setattr__(
+            self,
+            "project_issue_identifier_list",
+            list(self.project_issue_identifier_list),
+        )
 
     def workspace_request(self) -> WorkspaceRequest:
         """Return the exact participating repository workspace identity.
@@ -240,7 +269,7 @@ class CleanupRequest:
             Typed workspace request.
         """
 
-        return WorkspaceRequest(self.issue_identifier, self.repository_list)
+        return WorkspaceRequest(self.issue_identifier, list(self.repository_list))
 
     @classmethod
     def from_payload(cls, payload: object) -> "CleanupRequest":
@@ -297,14 +326,12 @@ class CleanupRequest:
             return cls(
                 issue_identifier=payload["issue_identifier"],
                 authority=CleanupAuthority(**authority_payload),
-                repository_list=tuple(RepositoryRequest.from_payload(item) for item in payload["repository_list"]),
-                pull_request_list=tuple(
-                    PullRequestReference.from_payload(item) for item in payload["pull_request_list"]
-                ),
-                resource_list=tuple(ResourceDeclaration.from_payload(item) for item in payload["resource_list"]),
-                approved_resource_fingerprint_list=tuple(payload["approved_resource_fingerprint_list"]),
-                terminal_consumer_node_key_list=tuple(payload["terminal_consumer_node_key_list"]),
-                project_issue_identifier_list=tuple(payload["project_issue_identifier_list"]),
+                repository_list=[RepositoryRequest.from_payload(item) for item in payload["repository_list"]],
+                pull_request_list=[PullRequestReference.from_payload(item) for item in payload["pull_request_list"]],
+                resource_list=[ResourceDeclaration.from_payload(item) for item in payload["resource_list"]],
+                approved_resource_fingerprint_list=list(payload["approved_resource_fingerprint_list"]),
+                terminal_consumer_node_key_list=list(payload["terminal_consumer_node_key_list"]),
+                project_issue_identifier_list=list(payload["project_issue_identifier_list"]),
             )
         except (ValueError, TypeError) as error:
             raise TaskCleanupError("Cleanup request contains an unsupported enum or field value") from error

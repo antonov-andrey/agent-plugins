@@ -93,7 +93,7 @@ class DeltaProvenance:
         }
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class TaskGraphDelta:
     """Own one approved additive graph delta for an active Linear Project."""
 
@@ -197,10 +197,10 @@ class TaskGraphDelta:
                     )
                 if node.node_key in resource.consumer_node_key_list:
                     raise TaskGraphError(f"Delta resource {resource.key} repeats its implicit owner as a consumer")
-        self.existing_node_key_list = list(self.existing_node_key_list)
-        self.reverification_node_key_list = list(self.reverification_node_key_list)
-        self.node_list = list(self.node_list)
-        self.blocker_edge_list = list(self.blocker_edge_list)
+        object.__setattr__(self, "existing_node_key_list", list(self.existing_node_key_list))
+        object.__setattr__(self, "reverification_node_key_list", list(self.reverification_node_key_list))
+        object.__setattr__(self, "node_list", list(self.node_list))
+        object.__setattr__(self, "blocker_edge_list", list(self.blocker_edge_list))
 
     def fingerprint(self) -> str:
         """Return the canonical approved-delta fingerprint.

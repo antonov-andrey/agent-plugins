@@ -9,7 +9,7 @@ from task_workspace.model import (
 )
 from task_workspace.lock import IssueAttemptLock
 from task_workspace.transaction import TaskWorkspaceTransaction
-from task_workspace.submodule import recursive_submodule_snapshot_get
+from task_workspace.submodule import recursive_submodule_state_list_get
 
 __all__ = [
     "RepositoryRequest",
@@ -19,5 +19,5 @@ __all__ = [
     "WorkspaceConfig",
     "WorkspaceRequest",
     "IssueAttemptLock",
-    "recursive_submodule_snapshot_get",
+    "recursive_submodule_state_list_get",
 ]

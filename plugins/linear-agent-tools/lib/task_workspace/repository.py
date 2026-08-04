@@ -63,25 +63,25 @@ class GitCommand:
             Completed command.
         """
 
-        environment = os.environ.copy()
-        for name in tuple(environment):
+        environment_by_name_map = os.environ.copy()
+        for name in list(environment_by_name_map):
             if name in _GIT_REDIRECTION_NAME_SET or name.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")):
-                environment.pop(name, None)
-        environment["GIT_TERMINAL_PROMPT"] = "0"
-        result = subprocess.run(
+                environment_by_name_map.pop(name, None)
+        environment_by_name_map["GIT_TERMINAL_PROMPT"] = "0"
+        completed_process = subprocess.run(
             ["git", "-C", str(repository), *argument_list],
             capture_output=True,
             check=False,
-            env=environment,
+            env=environment_by_name_map,
             input=input_bytes,
         )
-        if check and result.returncode != 0:
-            detail = (result.stderr or result.stdout).decode("utf-8", errors="replace").strip()
+        if check and completed_process.returncode != 0:
+            detail = (completed_process.stderr or completed_process.stdout).decode("utf-8", errors="replace").strip()
             raise TaskWorkspaceError(
                 f"Git command failed in {repository}: git {' '.join(argument_list)}: "
-                f"{detail or f'exit status {result.returncode}'}"
+                f"{detail or f'exit status {completed_process.returncode}'}"
             )
-        return result
+        return completed_process
 
     @classmethod
     def text(cls, repository: Path, argument_list: Sequence[str], *, check: bool = True) -> str:
@@ -179,7 +179,7 @@ class WorkspaceRepository:
         GitCommand.run(self.main_root, ("check-ref-format", "--branch", request.base_branch))
 
     @classmethod
-    def discover(cls, config: WorkspaceConfig, request: RepositoryRequest) -> "WorkspaceRepository":
+    def from_config(cls, config: WorkspaceConfig, request: RepositoryRequest) -> "WorkspaceRepository":
         """Find one unique direct-child main checkout by canonical origin.
 
         Args:
@@ -218,7 +218,7 @@ class WorkspaceRepository:
             )
         return cls(candidate_list[0], request)
 
-    def state_path(self, issue_identifier: str) -> Path:
+    def state_path_get(self, issue_identifier: str) -> Path:
         """Return the private Git-admin state path for one issue.
 
         Args:
@@ -395,7 +395,7 @@ class WorkspaceRepository:
         """
 
         value = GitCommand.text(self.main_root, ("rev-parse", "--verify", f"{ref}^{{commit}}"))
-        if not re_full_commit(value):
+        if not match_full_commit(value):
             raise TaskWorkspaceError(f"Git ref did not resolve to a full commit: {ref}")
         return value
 
@@ -410,7 +410,7 @@ class WorkspaceRepository:
             Blob bytes, or absence when the path is not tracked at that commit.
         """
 
-        if not re_full_commit(commit):
+        if not match_full_commit(commit):
             raise TaskWorkspaceError("Tracked-file source must be one full Git commit")
         if (
             not relative_path
@@ -420,11 +420,11 @@ class WorkspaceRepository:
             or any(part in {"", ".", ".."} for part in relative_path.split("/"))
         ):
             raise TaskWorkspaceError("Tracked-file path is unsafe")
-        result = GitCommand.run(
+        completed_process = GitCommand.run(
             self.main_root,
             ("ls-tree", "-z", commit, "--", relative_path),
         )
-        record_list = [item for item in result.stdout.split(b"\0") if item]
+        record_list = [item for item in completed_process.stdout.split(b"\0") if item]
         if not record_list:
             return None
         if len(record_list) != 1 or b"\t" not in record_list[0]:
@@ -442,7 +442,7 @@ class WorkspaceRepository:
             ("cat-file", "blob", object_identity),
         ).stdout
 
-    def remote_branch_exists(self, branch_name: str) -> bool:
+    def exist_remote_branch(self, branch_name: str) -> bool:
         """Return whether origin has one exact branch.
 
         Args:
@@ -466,7 +466,7 @@ class WorkspaceRepository:
             == 0
         )
 
-    def local_branch_exists(self, branch_name: str) -> bool:
+    def exist_local_branch(self, branch_name: str) -> bool:
         """Return whether one local task branch exists.
 
         Args:
@@ -485,7 +485,7 @@ class WorkspaceRepository:
             == 0
         )
 
-    def remote_branch_delete_exact(self, branch_name: str, *, expected_commit: str) -> bool:
+    def remote_branch_delete_exact(self, branch_name: str, *, expected_commit: str) -> None:
         """Delete one current remote branch with an exact force-with-lease guard.
 
         Args:
@@ -493,15 +493,15 @@ class WorkspaceRepository:
             expected_commit: Durable pre-deletion remote branch head.
 
         Returns:
-            Whether an existing remote branch was deleted.
+            Nothing. Absence is already reconciled.
         """
 
         self.fetch()
-        if not self.remote_branch_exists(branch_name):
-            return False
+        if not self.exist_remote_branch(branch_name):
+            return
         if not expected_commit or self.commit_get(f"refs/remotes/origin/{branch_name}") != expected_commit:
             raise TaskWorkspaceError("Remote task branch differs from its durable cleanup snapshot")
-        result = GitCommand.run(
+        completed_process = GitCommand.run(
             self.main_root,
             (
                 "push",
@@ -511,12 +511,11 @@ class WorkspaceRepository:
             ),
             check=False,
         )
-        if result.returncode != 0:
+        if completed_process.returncode != 0:
             raise TaskWorkspaceError("Remote task branch changed during exact deletion")
         self.fetch()
-        if self.remote_branch_exists(branch_name):
+        if self.exist_remote_branch(branch_name):
             raise TaskWorkspaceError("Remote task branch remained after exact deletion")
-        return True
 
     def task_worktree_create_or_accept(self, state: RepositoryWorkspaceState) -> None:
         """Create or prove the exact state-owned branch and worktree.
@@ -531,10 +530,10 @@ class WorkspaceRepository:
         if task_root.exists():
             self.task_worktree_require(state)
             return
-        if self._branch_checked_out_elsewhere(branch_name):
+        if self._exist_branch_checkout_elsewhere(branch_name):
             raise TaskWorkspaceError("Task branch is already checked out in another worktree")
-        if not self.local_branch_exists(branch_name):
-            if self.remote_branch_exists(branch_name):
+        if not self.exist_local_branch(branch_name):
+            if self.exist_remote_branch(branch_name):
                 remote_commit = self.commit_get(f"refs/remotes/origin/{branch_name}")
                 self._ancestor_require(state.baseline_commit, remote_commit, label="Remote task branch")
                 GitCommand.run(
@@ -564,7 +563,7 @@ class WorkspaceRepository:
             task_root = Path(state.task_root).resolve(strict=True)
         except OSError as error:
             raise TaskWorkspaceError("Task worktree path is absent or unavailable") from error
-        registration = self._worktree_by_path().get(task_root)
+        registration = self._branch_name_by_worktree_path_map_get().get(task_root)
         if registration != state.branch_name:
             raise TaskWorkspaceError("Task path is absent from Git worktree registration or uses another branch")
         branch = GitCommand.text(task_root, ("symbolic-ref", "--quiet", "--short", "HEAD"))
@@ -586,7 +585,7 @@ class WorkspaceRepository:
             Registered local branch name, or absence.
         """
 
-        return self._worktree_by_path().get(task_root.resolve(strict=False))
+        return self._branch_name_by_worktree_path_map_get().get(task_root.resolve(strict=False))
 
     def task_container_require(self, *, create: bool) -> None:
         """Require the repository-local worktree container to be a physical directory.
@@ -606,7 +605,7 @@ class WorkspaceRepository:
         if container.resolve(strict=True) != container:
             raise TaskWorkspaceError("Task worktree container resolves outside its canonical repository path")
 
-    def _worktree_by_path(self) -> dict[Path, str]:
+    def _branch_name_by_worktree_path_map_get(self) -> dict[Path, str]:
         """Return registered branch by worktree path.
 
         Returns:
@@ -614,17 +613,17 @@ class WorkspaceRepository:
         """
 
         item_list = GitCommand.run(self.main_root, ("worktree", "list", "--porcelain", "-z")).stdout.split(b"\0")
-        result: dict[Path, str] = {}
+        branch_name_by_worktree_path_map: dict[Path, str] = {}
         current_path: Path | None = None
         for raw in item_list:
             if raw.startswith(b"worktree "):
                 current_path = Path(raw.removeprefix(b"worktree ").decode("utf-8")).resolve(strict=False)
             elif raw.startswith(b"branch ") and current_path is not None:
                 ref = raw.removeprefix(b"branch ").decode("utf-8")
-                result[current_path] = ref.removeprefix("refs/heads/")
-        return result
+                branch_name_by_worktree_path_map[current_path] = ref.removeprefix("refs/heads/")
+        return branch_name_by_worktree_path_map
 
-    def _branch_checked_out_elsewhere(self, branch_name: str) -> bool:
+    def _exist_branch_checkout_elsewhere(self, branch_name: str) -> bool:
         """Return whether a local branch is already attached to any worktree.
 
         Args:
@@ -634,7 +633,7 @@ class WorkspaceRepository:
             Whether branch is attached.
         """
 
-        return branch_name in set(self._worktree_by_path().values())
+        return branch_name in set(self._branch_name_by_worktree_path_map_get().values())
 
     def _ancestor_require(self, ancestor: str, descendant: str, *, label: str) -> None:
         """Require commit ancestry without changing refs.
@@ -656,7 +655,7 @@ class WorkspaceRepository:
             raise TaskWorkspaceError(f"{label} is not a descendant of its recorded baseline")
 
 
-def re_full_commit(value: str) -> bool:
+def match_full_commit(value: str) -> bool:
     """Return whether text is one supported full lowercase Git object identity.
 
     Args:

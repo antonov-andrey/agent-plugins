@@ -22,8 +22,8 @@ from task_workspace.model import (
 )
 from task_workspace.repository import GitCommand, WorkspaceRepository
 from task_workspace.submodule import (
-    recursive_submodule_prepare,
-    recursive_submodule_snapshot_get,
+    recursive_submodule_state_list_get,
+    recursive_submodule_state_list_prepare,
 )
 
 
@@ -39,7 +39,7 @@ class TaskWorkspaceTransaction:
 
         self._config = config
 
-    def prepare(self, request: WorkspaceRequest) -> tuple[RepositoryWorkspaceState, ...]:
+    def prepare(self, request: WorkspaceRequest) -> list[RepositoryWorkspaceState]:
         """Create or recover every exact issue-owned branch and worktree.
 
         Args:
@@ -50,10 +50,10 @@ class TaskWorkspaceTransaction:
         """
 
         with IssueWorkspaceLock(self._config, request.issue_identifier):
-            result = tuple(self._repository_prepare(request, repository) for repository in request.repository_list)
-            return result
+            state_list = [self._repository_prepare(request, repository) for repository in request.repository_list]
+            return state_list
 
-    def validate(self, request: WorkspaceRequest) -> tuple[RepositoryWorkspaceState, ...]:
+    def validate(self, request: WorkspaceRequest) -> list[RepositoryWorkspaceState]:
         """Prove existing workspace ownership without creating or repairing state.
 
         Args:
@@ -64,9 +64,9 @@ class TaskWorkspaceTransaction:
         """
 
         with IssueWorkspaceLock(self._config, request.issue_identifier):
-            result: list[RepositoryWorkspaceState] = []
+            state_list: list[RepositoryWorkspaceState] = []
             for repository_request in request.repository_list:
-                repository = WorkspaceRepository.discover(self._config, repository_request)
+                repository = WorkspaceRepository.from_config(self._config, repository_request)
                 state = repository.state_read(request.issue_identifier)
                 if state is None:
                     raise TaskWorkspaceError("Issue workspace has no private ownership state")
@@ -74,11 +74,11 @@ class TaskWorkspaceTransaction:
                 if state.phase != "bootstrap-ready" or any(item.phase != "ready" for item in state.resource_list):
                     raise TaskWorkspaceError("Issue workspace transaction is incomplete")
                 repository.task_worktree_require(state)
-                recursive_submodule_snapshot_get(Path(state.task_root))
+                recursive_submodule_state_list_get(Path(state.task_root))
                 for resource in _resource_list_from_state(state.resource_list):
                     resource_ready_require(resource, task_root=Path(state.task_root))
-                result.append(state)
-            return tuple(result)
+                state_list.append(state)
+            return state_list
 
     def _repository_prepare(
         self,
@@ -95,7 +95,7 @@ class TaskWorkspaceTransaction:
             Bootstrap-ready private state.
         """
 
-        repository = WorkspaceRepository.discover(self._config, repository_request)
+        repository = WorkspaceRepository.from_config(self._config, repository_request)
         state = repository.state_read(request.issue_identifier)
         if state is None:
             state = self._state_initial_create(request, repository, repository_request)
@@ -104,14 +104,16 @@ class TaskWorkspaceTransaction:
             repository.state_identity_require(request.issue_identifier, state)
         repository.task_worktree_create_or_accept(state)
         if state.phase == "planned":
-            recursive_submodule_prepare(Path(state.task_root))
+            recursive_submodule_state_list_prepare(Path(state.task_root))
             state = replace(state, phase="worktree-ready")
             repository.state_write(state)
         else:
-            recursive_submodule_snapshot_get(Path(state.task_root))
-        resource_by_path = {item.relative_path: item for item in _resource_list_from_state(state.resource_list)}
+            recursive_submodule_state_list_get(Path(state.task_root))
+        resource_by_relative_path_map = {
+            item.relative_path: item for item in _resource_list_from_state(state.resource_list)
+        }
         for index, resource_state in enumerate(state.resource_list):
-            resource = resource_by_path[resource_state.relative_path]
+            resource = resource_by_relative_path_map[resource_state.relative_path]
             if resource_state.phase == "ready":
                 resource_ready_require(resource, task_root=Path(state.task_root))
                 continue
@@ -123,9 +125,9 @@ class TaskWorkspaceTransaction:
             ready_state = replace(resource_state, phase="ready")
             state = replace(
                 state,
-                resource_list=tuple(
+                resource_list=[
                     ready_state if item_index == index else item for item_index, item in enumerate(state.resource_list)
-                ),
+                ],
             )
             repository.state_write(state)
         if state.phase != "bootstrap-ready":
@@ -163,10 +165,10 @@ class TaskWorkspaceTransaction:
             if result.returncode != 0:
                 raise TaskWorkspaceError("Expected task baseline is not reachable from the current remote base")
         branch_name = request.branch_name
-        remote_branch_exists = repository.remote_branch_exists(branch_name)
+        remote_branch_exists = repository.exist_remote_branch(branch_name)
         if remote_branch_exists and not repository_request.expected_baseline_commit:
             raise TaskWorkspaceError("Adopting an existing remote task branch requires its recorded Linear baseline")
-        if repository.local_branch_exists(branch_name):
+        if repository.exist_local_branch(branch_name):
             raise TaskWorkspaceError("Local task branch exists without private ownership state")
         if repository.tracked_file_bytes_get(baseline, "worktree-bootstrap.toml") is not None:
             raise TaskWorkspaceError("Repository baseline uses legacy worktree-bootstrap.toml and requires adoption")
@@ -187,9 +189,9 @@ class TaskWorkspaceTransaction:
             task_root=str(task_root),
             manifest_sha256=plan.manifest_sha256,
             phase="planned",
-            resource_list=tuple(item.planned_state() for item in plan.resource_list),
+            resource_list=[item.planned_state() for item in plan.resource_list],
             cleanup_argument_list=plan.cleanup_argument_list,
-            cleaned_resource_fingerprint_by_key=(),
+            cleaned_resource_fingerprint_by_resource_key_map={},
             cleanup_binding_completed=not plan.cleanup_argument_list,
             cleanup_branch_snapshot_ready=False,
             cleanup_local_branch_commit="",
@@ -202,8 +204,8 @@ class TaskWorkspaceTransaction:
 
 
 def _resource_list_from_state(
-    state_list: tuple[BootstrapResourceState, ...],
-) -> tuple[BootstrapResource, ...]:
+    state_list: list[BootstrapResourceState],
+) -> list[BootstrapResource]:
     """Reconstruct exact materialization contracts from durable state.
 
     Args:
@@ -213,7 +215,7 @@ def _resource_list_from_state(
         Exact resource contracts.
     """
 
-    return tuple(
+    return [
         BootstrapResource(
             relative_path=item.relative_path,
             kind=item.kind,
@@ -222,4 +224,4 @@ def _resource_list_from_state(
             skipped=item.skipped,
         )
         for item in state_list
-    )
+    ]

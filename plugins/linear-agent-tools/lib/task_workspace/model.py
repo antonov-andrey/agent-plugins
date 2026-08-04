@@ -76,10 +76,10 @@ class WorkspaceConfig:
             Validated workspace configuration.
         """
 
-        values = os.environ if environment is None else environment
-        if "LINEAR_AGENT_WORKSPACE_ROOT" not in values:
+        environment_by_name_map = os.environ if environment is None else environment
+        if "LINEAR_AGENT_WORKSPACE_ROOT" not in environment_by_name_map:
             raise TaskWorkspaceError("LINEAR_AGENT_WORKSPACE_ROOT is required")
-        value = values["LINEAR_AGENT_WORKSPACE_ROOT"]
+        value = environment_by_name_map["LINEAR_AGENT_WORKSPACE_ROOT"]
         if value == "":
             raise TaskWorkspaceError("LINEAR_AGENT_WORKSPACE_ROOT is present but empty")
         return cls(Path(value))
@@ -128,25 +128,52 @@ class RepositoryRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class WorkspaceSubmoduleState:
+    """Bind one recursive repository-relative submodule path to its exact commit."""
+
+    relative_path: str
+    commit: str
+
+    def __post_init__(self) -> None:
+        """Validate one exact recursive submodule snapshot entry."""
+
+        _single_line(self.relative_path, label="Submodule relative path")
+        if (
+            self.relative_path.startswith("/")
+            or "\\" in self.relative_path
+            or any(part in {"", ".", ".."} for part in self.relative_path.split("/"))
+        ):
+            raise TaskWorkspaceError("Submodule relative path is unsafe")
+        if _COMMIT_PATTERN.fullmatch(self.commit) is None:
+            raise TaskWorkspaceError("Submodule commit must be one full Git commit")
+
+    def payload(self) -> dict[str, str]:
+        """Return one JSON-ready submodule state."""
+
+        return {"commit": self.commit, "relative_path": self.relative_path}
+
+
+@dataclass(frozen=True, slots=True)
 class WorkspaceRequest:
     """Own one issue identity and all participating repository worktrees."""
 
     issue_identifier: str
-    repository_list: tuple[RepositoryRequest, ...]
+    repository_list: list[RepositoryRequest]
 
     def __post_init__(self) -> None:
         """Validate the complete cross-repository request."""
 
         issue_identifier_validate(self.issue_identifier)
-        if not isinstance(self.repository_list, tuple) or any(
+        if not isinstance(self.repository_list, list) or any(
             not isinstance(item, RepositoryRequest) for item in self.repository_list
         ):
             raise TaskWorkspaceError("Workspace repository list must contain only repository requests")
         if not self.repository_list:
             raise TaskWorkspaceError("Code-mutating task requires at least one repository")
-        origin_list = [item.origin_url for item in self.repository_list]
-        if len(origin_list) != len(set(origin_list)):
+        origin_url_list = [item.origin_url for item in self.repository_list]
+        if len(origin_url_list) != len(set(origin_url_list)):
             raise TaskWorkspaceError("Workspace request repeats one repository origin")
+        object.__setattr__(self, "repository_list", list(self.repository_list))
 
     @property
     def basename(self) -> str:
@@ -234,9 +261,9 @@ class RepositoryWorkspaceState:
     task_root: str
     manifest_sha256: str
     phase: str
-    resource_list: tuple[BootstrapResourceState, ...]
-    cleanup_argument_list: tuple[str, ...]
-    cleaned_resource_fingerprint_by_key: tuple[tuple[str, str], ...]
+    resource_list: list[BootstrapResourceState]
+    cleanup_argument_list: list[str]
+    cleaned_resource_fingerprint_by_resource_key_map: dict[str, str]
     cleanup_binding_completed: bool
     cleanup_branch_snapshot_ready: bool
     cleanup_local_branch_commit: str
@@ -270,45 +297,39 @@ class RepositoryWorkspaceState:
         expected_task_root = Path(self.main_root) / ".worktree" / self.issue_identifier.lower()
         if Path(self.task_root) != expected_task_root:
             raise TaskWorkspaceError("Workspace path differs from its issue identity")
-        if not isinstance(self.resource_list, tuple) or any(
+        if not isinstance(self.resource_list, list) or any(
             not isinstance(item, BootstrapResourceState) for item in self.resource_list
         ):
             raise TaskWorkspaceError("Workspace resource list must contain only bootstrap resource states")
         resource_path_list = [item.relative_path for item in self.resource_list]
         if len(resource_path_list) != len(set(resource_path_list)):
             raise TaskWorkspaceError("Workspace state repeats one bootstrap resource")
-        if not isinstance(self.cleanup_argument_list, tuple) or any(
+        if not isinstance(self.cleanup_argument_list, list) or any(
             not isinstance(item, str) or not item or any(character in item for character in ("\x00", "\n", "\r"))
             for item in self.cleanup_argument_list
         ):
             raise TaskWorkspaceError("Workspace cleanup binding must use direct non-empty argv")
-        if not isinstance(self.cleaned_resource_fingerprint_by_key, tuple) or any(
-            not isinstance(item, tuple) or len(item) != 2 for item in self.cleaned_resource_fingerprint_by_key
-        ):
-            raise TaskWorkspaceError("Cleaned resource declaration identities contain a malformed pair")
-        if self.cleaned_resource_fingerprint_by_key != tuple(sorted(self.cleaned_resource_fingerprint_by_key)):
-            raise TaskWorkspaceError("Cleaned resource declaration identities must be sorted")
-        cleaned_key_list = [item[0] for item in self.cleaned_resource_fingerprint_by_key]
-        if len(cleaned_key_list) != len(set(cleaned_key_list)):
-            raise TaskWorkspaceError("Cleaned resource declaration identities repeat one key")
+        if not isinstance(self.cleaned_resource_fingerprint_by_resource_key_map, dict):
+            raise TaskWorkspaceError("Cleaned resource declaration identities must be a mapping")
         if any(
-            not isinstance(key, str)
-            or not key
+            not isinstance(resource_key, str)
+            or not resource_key
             or not isinstance(fingerprint, str)
             or _SHA256_PATTERN.fullmatch(fingerprint) is None
-            for key, fingerprint in self.cleaned_resource_fingerprint_by_key
+            for resource_key, fingerprint in self.cleaned_resource_fingerprint_by_resource_key_map.items()
         ):
             raise TaskWorkspaceError("Cleaned resource declaration identities must bind text keys to SHA-256")
-        for name in (
-            "cleanup_binding_completed",
-            "cleanup_branch_snapshot_ready",
-            "cleanup_worktree_removal_ready",
-            "worktree_removed",
-            "remote_branch_removed",
-            "local_branch_removed",
-        ):
-            if not isinstance(getattr(self, name), bool):
-                raise TaskWorkspaceError(f"{name} must be boolean")
+        boolean_by_field_name_map = {
+            "cleanup_binding_completed": self.cleanup_binding_completed,
+            "cleanup_branch_snapshot_ready": self.cleanup_branch_snapshot_ready,
+            "cleanup_worktree_removal_ready": self.cleanup_worktree_removal_ready,
+            "worktree_removed": self.worktree_removed,
+            "remote_branch_removed": self.remote_branch_removed,
+            "local_branch_removed": self.local_branch_removed,
+        }
+        for field_name, value in boolean_by_field_name_map.items():
+            if not isinstance(value, bool):
+                raise TaskWorkspaceError(f"{field_name} must be boolean")
         for label, value in (
             ("cleanup local branch commit", self.cleanup_local_branch_commit),
             ("cleanup remote branch commit", self.cleanup_remote_branch_commit),
@@ -329,6 +350,13 @@ class RepositoryWorkspaceState:
             raise TaskWorkspaceError("Removed worktree requires a durable removal-ready marker")
         if self.worktree_removed and not self.cleanup_binding_completed:
             raise TaskWorkspaceError("Worktree cannot be removed before its cleanup binding completes")
+        object.__setattr__(self, "resource_list", list(self.resource_list))
+        object.__setattr__(self, "cleanup_argument_list", list(self.cleanup_argument_list))
+        object.__setattr__(
+            self,
+            "cleaned_resource_fingerprint_by_resource_key_map",
+            dict(self.cleaned_resource_fingerprint_by_resource_key_map),
+        )
 
     def payload(self) -> dict[str, object]:
         """Return the canonical JSON-ready state object.
@@ -343,7 +371,9 @@ class RepositoryWorkspaceState:
             "baseline_commit": self.baseline_commit,
             "branch_name": self.branch_name,
             "cleanup_argument_list": list(self.cleanup_argument_list),
-            "cleaned_resource_fingerprint_by_key": [list(item) for item in self.cleaned_resource_fingerprint_by_key],
+            "cleaned_resource_fingerprint_by_resource_key_map": dict(
+                sorted(self.cleaned_resource_fingerprint_by_resource_key_map.items())
+            ),
             "cleanup_binding_completed": self.cleanup_binding_completed,
             "cleanup_branch_snapshot_ready": self.cleanup_branch_snapshot_ready,
             "cleanup_local_branch_commit": self.cleanup_local_branch_commit,
@@ -378,7 +408,7 @@ class RepositoryWorkspaceState:
             "baseline_commit",
             "branch_name",
             "cleanup_argument_list",
-            "cleaned_resource_fingerprint_by_key",
+            "cleaned_resource_fingerprint_by_resource_key_map",
             "cleanup_binding_completed",
             "cleanup_branch_snapshot_ready",
             "cleanup_local_branch_commit",
@@ -400,7 +430,7 @@ class RepositoryWorkspaceState:
         if (
             not isinstance(payload["resource_list"], list)
             or not isinstance(payload["cleanup_argument_list"], list)
-            or not isinstance(payload["cleaned_resource_fingerprint_by_key"], list)
+            or not isinstance(payload["cleaned_resource_fingerprint_by_resource_key_map"], dict)
         ):
             raise TaskWorkspaceError("Workspace state collections have another shape")
         return cls(
@@ -413,11 +443,10 @@ class RepositoryWorkspaceState:
             task_root=payload["task_root"],
             manifest_sha256=payload["manifest_sha256"],
             phase=payload["phase"],
-            resource_list=tuple(BootstrapResourceState.from_payload(item) for item in payload["resource_list"]),
-            cleanup_argument_list=tuple(payload["cleanup_argument_list"]),
-            cleaned_resource_fingerprint_by_key=tuple(
-                tuple(item) if isinstance(item, list) else item
-                for item in payload["cleaned_resource_fingerprint_by_key"]
+            resource_list=[BootstrapResourceState.from_payload(item) for item in payload["resource_list"]],
+            cleanup_argument_list=list(payload["cleanup_argument_list"]),
+            cleaned_resource_fingerprint_by_resource_key_map=dict(
+                payload["cleaned_resource_fingerprint_by_resource_key_map"]
             ),
             cleanup_binding_completed=payload["cleanup_binding_completed"],
             cleanup_branch_snapshot_ready=payload["cleanup_branch_snapshot_ready"],
