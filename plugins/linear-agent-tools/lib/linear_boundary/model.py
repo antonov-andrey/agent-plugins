@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 import hashlib
 import json
 import math
 import re
 from typing import Iterable
+import uuid
 
-_UUID_PATTERN = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+_UUID_PATTERN = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+)
 _HEX_COLOR_PATTERN = re.compile(r"#[0-9a-fA-F]{6}")
 _ROLE_LABEL_SET = frozenset(
     {
@@ -102,7 +105,11 @@ def _single_line_validate(value: str, *, label: str) -> str:
         The validated text.
     """
 
-    if not isinstance(value, str) or not value or any(character in value for character in ("\x00", "\n", "\r")):
+    if (
+        not isinstance(value, str)
+        or not value
+        or any(character in value for character in ("\x00", "\n", "\r"))
+    ):
         raise LinearContractError(f"{label} must be non-empty single-line text")
     return value
 
@@ -131,8 +138,14 @@ class DestinationIdentity:
     def mutation_authority_require(self) -> None:
         """Require the authenticated viewer to be an active non-guest admin."""
 
-        if not self.viewer_is_admin or self.viewer_is_guest or not self.viewer_is_active:
-            raise LinearContractError("Authenticated Linear viewer is not an active non-guest administrator")
+        if (
+            not self.viewer_is_admin
+            or self.viewer_is_guest
+            or not self.viewer_is_active
+        ):
+            raise LinearContractError(
+                "Authenticated Linear viewer is not an active non-guest administrator"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -207,13 +220,19 @@ class WorkflowConfigurationSnapshot:
             ("Project status", self.project_status_list, StatusDefinition),
             ("label", self.label_list, LinearLabel),
         ):
-            if not isinstance(item_list, tuple) or any(not isinstance(item, expected_type) for item in item_list):
-                raise LinearContractError(f"Linear snapshot {label} list has another shape")
+            if not isinstance(item_list, tuple) or any(
+                not isinstance(item, expected_type) for item in item_list
+            ):
+                raise LinearContractError(
+                    f"Linear snapshot {label} list has another shape"
+                )
             identifier_list = [item.id for item in item_list]
             if any(not identifier for identifier in identifier_list):
                 raise LinearContractError(f"Linear snapshot {label} identity is absent")
             if len(identifier_list) != len(set(identifier_list)):
-                raise LinearContractError(f"Linear snapshot repeats one {label} identity")
+                raise LinearContractError(
+                    f"Linear snapshot repeats one {label} identity"
+                )
 
 
 @dataclass(frozen=True, slots=True)
@@ -246,7 +265,9 @@ class ConfigurationPlan:
         """Reject malformed or ambiguous definition collections."""
 
         if not isinstance(self.destination, DestinationIdentity):
-            raise LinearContractError("Configuration plan destination has another shape")
+            raise LinearContractError(
+                "Configuration plan destination has another shape"
+            )
         self.destination.mutation_authority_require()
         for label, value, expected_type in (
             ("issue status", self.issue_status_create_list, StatusDefinition),
@@ -254,10 +275,19 @@ class ConfigurationPlan:
             ("label", self.label_create_list, LinearLabel),
             ("conflict", self.conflict_list, ConfigurationConflict),
         ):
-            if not isinstance(value, tuple) or any(not isinstance(item, expected_type) for item in value):
-                raise LinearContractError(f"Configuration plan {label} list has another shape")
+            if not isinstance(value, tuple) or any(
+                not isinstance(item, expected_type) for item in value
+            ):
+                raise LinearContractError(
+                    f"Configuration plan {label} list has another shape"
+                )
             identity_list = [
-                ((item.kind, item.name) if isinstance(item, ConfigurationConflict) else item.name) for item in value
+                (
+                    (item.kind, item.name)
+                    if isinstance(item, ConfigurationConflict)
+                    else item.name
+                )
+                for item in value
             ]
             if len(identity_list) != len(set(identity_list)):
                 raise LinearContractError(f"Configuration plan repeats one {label}")
@@ -279,7 +309,9 @@ class ConfigurationPlan:
         """
 
         return self.mutation_allowed() and not (
-            self.issue_status_create_list or self.project_status_create_list or self.label_create_list
+            self.issue_status_create_list
+            or self.project_status_create_list
+            or self.label_create_list
         )
 
     def payload(self) -> dict[str, object]:
@@ -300,11 +332,18 @@ class ConfigurationPlan:
                 "workspace_id": self.destination.workspace_id,
             },
             "conflict_list": [
-                {"kind": item.kind, "name": item.name, "reason": item.reason} for item in self.conflict_list
+                {"kind": item.kind, "name": item.name, "reason": item.reason}
+                for item in self.conflict_list
             ],
-            "issue_status_create_list": [_status_payload(item) for item in self.issue_status_create_list],
-            "label_create_list": [_label_payload(item) for item in self.label_create_list],
-            "project_status_create_list": [_status_payload(item) for item in self.project_status_create_list],
+            "issue_status_create_list": [
+                _status_payload(item) for item in self.issue_status_create_list
+            ],
+            "label_create_list": [
+                _label_payload(item) for item in self.label_create_list
+            ],
+            "project_status_create_list": [
+                _status_payload(item) for item in self.project_status_create_list
+            ],
         }
 
     def fingerprint(self) -> str:
@@ -342,7 +381,11 @@ class ConfigurationPlan:
             "label_create_list",
             "project_status_create_list",
         }
-        if not isinstance(payload, dict) or set(payload) != expected or payload["schema_version"] != 1:
+        if (
+            not isinstance(payload, dict)
+            or set(payload) != expected
+            or payload["schema_version"] != 1
+        ):
             raise LinearContractError("Configuration plan has another shape")
         destination_payload = payload["destination"]
         destination_expected = {
@@ -353,12 +396,21 @@ class ConfigurationPlan:
             "viewer_is_guest",
             "workspace_id",
         }
-        if not isinstance(destination_payload, dict) or set(destination_payload) != destination_expected:
-            raise LinearContractError("Configuration plan destination has another shape")
+        if (
+            not isinstance(destination_payload, dict)
+            or set(destination_payload) != destination_expected
+        ):
+            raise LinearContractError(
+                "Configuration plan destination has another shape"
+            )
         return cls(
             destination=DestinationIdentity(**destination_payload),
-            issue_status_create_list=_status_payload_list_parse(payload["issue_status_create_list"]),
-            project_status_create_list=_status_payload_list_parse(payload["project_status_create_list"]),
+            issue_status_create_list=_status_payload_list_parse(
+                payload["issue_status_create_list"]
+            ),
+            project_status_create_list=_status_payload_list_parse(
+                payload["project_status_create_list"]
+            ),
             label_create_list=_label_payload_list_parse(payload["label_create_list"]),
             conflict_list=_conflict_payload_list_parse(payload["conflict_list"]),
         )
@@ -390,28 +442,40 @@ class TaskExecutionSnapshot:
         if self.role_label not in _ROLE_LABEL_SET:
             raise LinearContractError("Task execution role is unsupported")
         if self.delivery_kind not in _DELIVERY_BY_ROLE[self.role_label]:
-            raise LinearContractError("Task execution role and delivery kind are incompatible")
+            raise LinearContractError(
+                "Task execution role and delivery kind are incompatible"
+            )
         if (
             not isinstance(self.label_name_list, tuple)
             or len(self.label_name_list) != len(set(self.label_name_list))
             or any(
-                not isinstance(item, str) or not item or any(char in item for char in "\x00\r\n")
+                not isinstance(item, str)
+                or not item
+                or any(char in item for char in "\x00\r\n")
                 for item in self.label_name_list
             )
         ):
-            raise LinearContractError("Task execution labels must be a duplicate-free single-line tuple")
+            raise LinearContractError(
+                "Task execution labels must be a duplicate-free single-line tuple"
+            )
         actual_role_set = set(self.label_name_list) & _ROLE_LABEL_SET
         if actual_role_set != {self.role_label}:
-            raise LinearContractError("Task execution role must match the exact single Linear role label")
+            raise LinearContractError(
+                "Task execution role must match the exact single Linear role label"
+            )
         if (
             isinstance(self.unresolved_blocker_count, bool)
             or not isinstance(self.unresolved_blocker_count, int)
             or self.unresolved_blocker_count < 0
         ):
-            raise LinearContractError("Task unresolved blocker count must be non-negative")
+            raise LinearContractError(
+                "Task unresolved blocker count must be non-negative"
+            )
         if not isinstance(self.issue_contract_complete, bool):
             raise LinearContractError("Task contract completeness must be boolean")
-        assignment_id_list = [value for value in (self.assignee_id, self.delegate_id) if value]
+        assignment_id_list = [
+            value for value in (self.assignee_id, self.delegate_id) if value
+        ]
         if len(assignment_id_list) != 1:
             raise LinearContractError("Task must have exactly one assignee or delegate")
         _uuid_validate(assignment_id_list[0], label="Task execution assignment ID")
@@ -515,37 +579,68 @@ def transition_require(
         or not isinstance(project_status, ProjectStatusName)
     ):
         raise LinearContractError("Workflow transition statuses are unsupported")
-    if role_label not in _DELIVERY_BY_ROLE or delivery_kind not in _DELIVERY_BY_ROLE[role_label]:
-        raise LinearContractError("Workflow transition role and delivery kind are incompatible")
+    if (
+        role_label not in _DELIVERY_BY_ROLE
+        or delivery_kind not in _DELIVERY_BY_ROLE[role_label]
+    ):
+        raise LinearContractError(
+            "Workflow transition role and delivery kind are incompatible"
+        )
     if not isinstance(proof, TransitionProof) or not isinstance(dispatchable, bool):
-        raise LinearContractError("Workflow transition proof or dispatch decision has another shape")
+        raise LinearContractError(
+            "Workflow transition proof or dispatch decision has another shape"
+        )
     if target is IssueStatusName.CANCELED and current not in {
         IssueStatusName.DONE,
         IssueStatusName.CANCELED,
     }:
         if project_status is ProjectStatusName.COMPLETED:
-            raise LinearContractError("A completed Project cannot cancel an unfinished task")
+            raise LinearContractError(
+                "A completed Project cannot cancel an unfinished task"
+            )
         if not proof.human_decision:
-            raise LinearContractError("Canceling a non-terminal task requires an explicit human decision")
+            raise LinearContractError(
+                "Canceling a non-terminal task requires an explicit human decision"
+            )
         return
     if current is IssueStatusName.BACKLOG and target is IssueStatusName.TODO:
         if project_status not in {
             ProjectStatusName.PLANNED,
             ProjectStatusName.IN_PROGRESS,
         }:
-            raise LinearContractError("Task activation requires a planned or active Project")
+            raise LinearContractError(
+                "Task activation requires a planned or active Project"
+            )
         if not proof.task_definition_ready:
-            raise LinearContractError("Todo activation requires a complete task definition")
+            raise LinearContractError(
+                "Todo activation requires a complete task definition"
+            )
         return
     if project_status is not ProjectStatusName.IN_PROGRESS:
-        raise LinearContractError("A non-cancellation task transition requires an active Project")
-    if current in {IssueStatusName.TODO, IssueStatusName.REWORK} and target is IssueStatusName.IN_PROGRESS:
+        raise LinearContractError(
+            "A non-cancellation task transition requires an active Project"
+        )
+    if (
+        current in {IssueStatusName.TODO, IssueStatusName.REWORK}
+        and target is IssueStatusName.IN_PROGRESS
+    ):
         if not dispatchable or not proof.fresh_thread:
-            raise LinearContractError("Starting an attempt requires dispatchability and a fresh thread")
-        if current is IssueStatusName.REWORK and delivery_kind == "code" and not proof.workspace_preserved:
-            raise LinearContractError("Rework must adopt the existing candidate workspace")
+            raise LinearContractError(
+                "Starting an attempt requires dispatchability and a fresh thread"
+            )
+        if (
+            current is IssueStatusName.REWORK
+            and delivery_kind == "code"
+            and not proof.workspace_preserved
+        ):
+            raise LinearContractError(
+                "Rework must adopt the existing candidate workspace"
+            )
         return
-    if current is IssueStatusName.IN_PROGRESS and target is IssueStatusName.HUMAN_REVIEW:
+    if (
+        current is IssueStatusName.IN_PROGRESS
+        and target is IssueStatusName.HUMAN_REVIEW
+    ):
         common_ready = all(
             (
                 proof.result_ready,
@@ -555,45 +650,88 @@ def transition_require(
             )
         )
         if delivery_kind == "code":
-            common_ready = common_ready and proof.publication_ready and proof.required_ci_ready
+            common_ready = (
+                common_ready and proof.publication_ready and proof.required_ci_ready
+            )
         elif delivery_kind != "evidence":
-            raise LinearContractError("Only code or evidence delivery may enter Human Review")
+            raise LinearContractError(
+                "Only code or evidence delivery may enter Human Review"
+            )
         if not common_ready:
-            raise LinearContractError("Human Review requires every delivery-applicable result and candidate proof")
+            raise LinearContractError(
+                "Human Review requires every delivery-applicable result and candidate proof"
+            )
         return
     if current is IssueStatusName.IN_PROGRESS and target is IssueStatusName.TODO:
-        if role_label not in {"task:review", "task:acceptance"} or not proof.remediation_blocker_ready:
-            raise LinearContractError("Only review or acceptance may return to Todo with a remediation blocker")
+        if (
+            role_label not in {"task:review", "task:acceptance"}
+            or not proof.remediation_blocker_ready
+        ):
+            raise LinearContractError(
+                "Only review or acceptance may return to Todo with a remediation blocker"
+            )
         return
     if current is IssueStatusName.HUMAN_REVIEW and target is IssueStatusName.REWORK:
         if not proof.human_decision and not proof.review_finding_ready:
-            raise LinearContractError("Rework requires an explicit human decision or review finding")
+            raise LinearContractError(
+                "Rework requires an explicit human decision or review finding"
+            )
         return
     if current is IssueStatusName.HUMAN_REVIEW and target is IssueStatusName.MERGING:
-        if delivery_kind != "code" or not proof.human_decision or not proof.candidate_unchanged:
-            raise LinearContractError("Merging requires human approval of the unchanged code candidate")
+        if (
+            delivery_kind != "code"
+            or not proof.human_decision
+            or not proof.candidate_unchanged
+        ):
+            raise LinearContractError(
+                "Merging requires human approval of the unchanged code candidate"
+            )
         return
     if current is IssueStatusName.HUMAN_REVIEW and target is IssueStatusName.DONE:
-        if delivery_kind == "code" or not proof.human_decision or not proof.candidate_unchanged:
-            raise LinearContractError("Non-code completion requires human approval of the unchanged evidence candidate")
+        if (
+            delivery_kind == "code"
+            or not proof.human_decision
+            or not proof.candidate_unchanged
+        ):
+            raise LinearContractError(
+                "Non-code completion requires human approval of the unchanged evidence candidate"
+            )
         return
     if current is IssueStatusName.MERGING and target is IssueStatusName.DONE:
         if delivery_kind != "code" or role_label != "task:implementation":
-            raise LinearContractError("Only a code implementation task may complete through Merging")
+            raise LinearContractError(
+                "Only a code implementation task may complete through Merging"
+            )
         if not proof.candidate_unchanged or not proof.merge_complete:
-            raise LinearContractError("Merge completion must match the exact approved candidate")
+            raise LinearContractError(
+                "Merge completion must match the exact approved candidate"
+            )
         return
     if current is IssueStatusName.MERGING and target is IssueStatusName.REWORK:
-        if delivery_kind != "code" or role_label != "task:implementation" or not proof.candidate_mutated:
-            raise LinearContractError("A merging code task returns to Rework only after proven candidate mutation")
+        if (
+            delivery_kind != "code"
+            or role_label != "task:implementation"
+            or not proof.candidate_mutated
+        ):
+            raise LinearContractError(
+                "A merging code task returns to Rework only after proven candidate mutation"
+            )
         return
     if current is IssueStatusName.IN_PROGRESS and target is IssueStatusName.DONE:
         if role_label != "task:cleanup" or not proof.cleanup_complete:
-            raise LinearContractError("Only a successfully reconciled cleanup task may complete directly")
+            raise LinearContractError(
+                "Only a successfully reconciled cleanup task may complete directly"
+            )
         return
     if current is IssueStatusName.TODO and target is IssueStatusName.DONE:
-        if role_label != "task:human" or not proof.human_decision or not proof.evidence_ready:
-            raise LinearContractError("Human task completion requires explicit human evidence")
+        if (
+            role_label != "task:human"
+            or not proof.human_decision
+            or not proof.evidence_ready
+        ):
+            raise LinearContractError(
+                "Human task completion requires explicit human evidence"
+            )
         return
     raise LinearContractError(f"Workflow transition {current} -> {target} is forbidden")
 
@@ -647,7 +785,9 @@ ISSUE_STATUS_DESIRED = (
         "Approved exact candidate is being merged",
         600.0,
     ),
-    StatusDefinition("", "Done", IssueStatusCategory.COMPLETED, "#16A34A", "Task completed", 700.0),
+    StatusDefinition(
+        "", "Done", IssueStatusCategory.COMPLETED, "#16A34A", "Task completed", 700.0
+    ),
     StatusDefinition(
         "",
         "Canceled",
@@ -733,7 +873,9 @@ LABEL_DESIRED = (
 )
 
 
-def configuration_plan_subset_require(current: ConfigurationPlan, approved: ConfigurationPlan) -> None:
+def configuration_plan_subset_require(
+    current: ConfigurationPlan, approved: ConfigurationPlan
+) -> None:
     """Require a fresh plan to be an exact subset of one approved delta.
 
     Args:
@@ -742,11 +884,15 @@ def configuration_plan_subset_require(current: ConfigurationPlan, approved: Conf
     """
 
     if not approved.mutation_allowed():
-        raise LinearContractError("Conflicting workflow configuration was not approvable")
+        raise LinearContractError(
+            "Conflicting workflow configuration was not approvable"
+        )
     if current.destination != approved.destination:
         raise LinearContractError("Linear workflow destination changed after approval")
     if current.conflict_list:
-        raise LinearContractError("Linear workflow configuration changed to a conflicting state before apply")
+        raise LinearContractError(
+            "Linear workflow configuration changed to a conflicting state before apply"
+        )
     for label, current_list, approved_list in (
         (
             "issue status",
@@ -761,8 +907,82 @@ def configuration_plan_subset_require(current: ConfigurationPlan, approved: Conf
         ("label", current.label_create_list, approved.label_create_list),
     ):
         approved_by_name = {item.name: item for item in approved_list}
-        if any(approved_by_name.get(item.name) != item for item in current_list):
+        if label in {"issue status", "Project status"}:
+            changed = any(
+                approved_by_name.get(item.name) is None
+                or replace(approved_by_name[item.name], id="") != replace(item, id="")
+                for item in current_list
+            )
+        else:
+            changed = any(
+                approved_by_name.get(item.name) != item for item in current_list
+            )
+        if changed:
             raise LinearContractError(f"Linear {label} plan changed after approval")
+
+
+def configuration_plan_status_identifiers_allocate(
+    plan: ConfigurationPlan,
+) -> ConfigurationPlan:
+    """Allocate UUID v4 identities once for every planned status mutation.
+
+    The returned plan is the durable retry identity. Re-reading current Linear
+    state must not allocate replacement identities during apply or recovery.
+
+    Args:
+        plan: Fresh destination-bound configuration plan.
+
+    Returns:
+        The same plan semantics with exact create identities assigned.
+    """
+
+    def identifier_allocate(status: StatusDefinition) -> StatusDefinition:
+        if status.id:
+            _uuid_v4_validate(status.id, label=f"Status {status.name} create ID")
+            return status
+        return replace(status, id=str(uuid.uuid4()))
+
+    return replace(
+        plan,
+        issue_status_create_list=tuple(
+            identifier_allocate(item) for item in plan.issue_status_create_list
+        ),
+        project_status_create_list=tuple(
+            identifier_allocate(item) for item in plan.project_status_create_list
+        ),
+    )
+
+
+def configuration_plan_status_identifiers_require(plan: ConfigurationPlan) -> None:
+    """Require exact UUID v4 create identities in an approved mutation plan.
+
+    Args:
+        plan: Approved plan used by apply or recovery.
+    """
+
+    for status in (*plan.issue_status_create_list, *plan.project_status_create_list):
+        _uuid_v4_validate(status.id, label=f"Status {status.name} create ID")
+
+
+def _uuid_v4_validate(value: str, *, label: str) -> str:
+    """Return one canonical UUID v4 accepted by Linear create inputs.
+
+    Args:
+        value: Candidate identifier.
+        label: Diagnostic owner label.
+
+    Returns:
+        The validated identifier.
+    """
+
+    _uuid_validate(value, label=label)
+    try:
+        identifier = uuid.UUID(value)
+    except ValueError as error:
+        raise LinearContractError(f"{label} must be one UUID v4") from error
+    if identifier.version != 4 or str(identifier) != value:
+        raise LinearContractError(f"{label} must be one UUID v4")
+    return value
 
 
 def _status_payload(status: StatusDefinition) -> dict[str, object]:
@@ -815,7 +1035,9 @@ def _object_list_parse(value: object, *, label: str) -> list[dict[str, object]]:
     """
 
     if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
-        raise LinearContractError(f"Configuration plan {label} must be a list of objects")
+        raise LinearContractError(
+            f"Configuration plan {label} must be a list of objects"
+        )
     return value
 
 
@@ -889,7 +1111,9 @@ def configuration_plan_build(
     """
 
     snapshot.destination.mutation_authority_require()
-    issue_create, issue_conflicts = _status_reconcile(snapshot.issue_status_list, ISSUE_STATUS_DESIRED, "issue-status")
+    issue_create, issue_conflicts = _status_reconcile(
+        snapshot.issue_status_list, ISSUE_STATUS_DESIRED, "issue-status"
+    )
     project_create, project_conflicts = _status_reconcile(
         snapshot.project_status_list,
         PROJECT_STATUS_DESIRED,
@@ -931,9 +1155,15 @@ def _status_reconcile(
         if not matching:
             missing.append(expected)
         elif len(matching) > 1:
-            conflict_list.append(ConfigurationConflict(kind, expected.name, "ambiguous duplicate name"))
+            conflict_list.append(
+                ConfigurationConflict(kind, expected.name, "ambiguous duplicate name")
+            )
         elif matching[0].name != expected.name:
-            conflict_list.append(ConfigurationConflict(kind, expected.name, "same name uses different casing"))
+            conflict_list.append(
+                ConfigurationConflict(
+                    kind, expected.name, "same name uses different casing"
+                )
+            )
         elif matching[0].category != expected.category:
             conflict_list.append(
                 ConfigurationConflict(
@@ -969,10 +1199,21 @@ def _label_reconcile(
         if not matching:
             missing.append(expected)
         elif len(matching) > 1:
-            conflict_list.append(ConfigurationConflict("label", expected.name, "ambiguous duplicate name"))
+            conflict_list.append(
+                ConfigurationConflict(
+                    "label", expected.name, "ambiguous duplicate name"
+                )
+            )
         elif matching[0].name != expected.name:
-            conflict_list.append(ConfigurationConflict("label", expected.name, "same name uses different casing"))
-        elif matching[0].description != expected.description or matching[0].color.lower() != expected.color.lower():
+            conflict_list.append(
+                ConfigurationConflict(
+                    "label", expected.name, "same name uses different casing"
+                )
+            )
+        elif (
+            matching[0].description != expected.description
+            or matching[0].color.lower() != expected.color.lower()
+        ):
             conflict_list.append(
                 ConfigurationConflict(
                     "label",

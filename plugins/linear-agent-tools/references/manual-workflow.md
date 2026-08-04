@@ -46,6 +46,7 @@ Project statuses are `Planned`, `In Progress`, `Completed` and `Canceled`. `Plan
 - Repository origins, base branches, worktrees and branch ownership are verified before mutation.
 - Secrets stay in user-level provider storage or one no-echo host process. They never enter issues, argv, files, logs, receipts or child-agent environments.
 - The first read-only configuration plan may discover the workspace UUID from the authenticated destination. Its approved fingerprint binds workspace, viewer and team; every apply requires those same exact IDs.
+- The plan allocates Linear-required UUID v4 identities for every missing issue or Project status before approval. Apply and recovery reuse those exact plan identities; a fresh provider read may reduce the remaining delta but never replaces its create IDs.
 - Configuration apply proves and creates the credential-gated status delta before the official MCP creates approved missing labels. An absent admin credential therefore cannot leave a labels-only partial configuration; any later provider failure is resumed by the same destination-bound reconciliation plan.
 - Review and acceptance never hide Product fixes. Findings create remediation implementation blockers and force a fresh complete pass after correction.
 
