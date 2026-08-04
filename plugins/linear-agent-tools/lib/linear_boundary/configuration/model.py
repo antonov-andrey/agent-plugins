@@ -307,45 +307,6 @@ class ConfigurationConflict:
         return conflict_list
 
 
-def _label_plan_subset_require(
-    current_label_list: list[LinearLabel],
-    approved_label_list: list[LinearLabel],
-) -> None:
-    """Require one fresh label delta to remain inside its approved delta.
-
-    Args:
-        current_label_list: Missing labels from the latest read.
-        approved_label_list: Exact previously approved missing labels.
-    """
-
-    approved_label_by_name_map = {item.name: item for item in approved_label_list}
-    if any(approved_label_by_name_map.get(item.name) != item for item in current_label_list):
-        raise LinearContractError("Linear label plan changed after approval")
-
-
-def _status_plan_subset_require(
-    current_status_list: list[StatusDefinition],
-    approved_status_list: list[StatusDefinition],
-    *,
-    label: str,
-) -> None:
-    """Require one fresh status delta to remain inside its approved delta.
-
-    Args:
-        current_status_list: Missing statuses from the latest read.
-        approved_status_list: Exact previously approved missing statuses.
-        label: Diagnostic status family.
-    """
-
-    approved_status_by_name_map = {item.name: item for item in approved_status_list}
-    if any(
-        approved_status_by_name_map.get(item.name) is None
-        or replace(approved_status_by_name_map[item.name], id="") != replace(item, id="")
-        for item in current_status_list
-    ):
-        raise LinearContractError(f"Linear {label} plan changed after approval")
-
-
 @dataclass(frozen=True, slots=True)
 class ConfigurationPlan:
     """Describe the exact missing global configuration and conflicts."""
@@ -440,17 +401,23 @@ class ConfigurationPlan:
             raise LinearContractError("Linear workflow destination changed after approval")
         if self.conflict_list:
             raise LinearContractError("Linear workflow configuration changed to a conflicting state before apply")
-        _status_plan_subset_require(
-            self.issue_status_create_list,
-            approved.issue_status_create_list,
-            label="issue status",
-        )
-        _status_plan_subset_require(
-            self.project_status_create_list,
-            approved.project_status_create_list,
-            label="Project status",
-        )
-        _label_plan_subset_require(self.label_create_list, approved.label_create_list)
+        approved_issue_status_by_name_map = {item.name: item for item in approved.issue_status_create_list}
+        if any(
+            approved_issue_status_by_name_map.get(item.name) is None
+            or replace(approved_issue_status_by_name_map[item.name], id="") != replace(item, id="")
+            for item in self.issue_status_create_list
+        ):
+            raise LinearContractError("Linear issue status plan changed after approval")
+        approved_project_status_by_name_map = {item.name: item for item in approved.project_status_create_list}
+        if any(
+            approved_project_status_by_name_map.get(item.name) is None
+            or replace(approved_project_status_by_name_map[item.name], id="") != replace(item, id="")
+            for item in self.project_status_create_list
+        ):
+            raise LinearContractError("Linear Project status plan changed after approval")
+        approved_label_by_name_map = {item.name: item for item in approved.label_create_list}
+        if any(approved_label_by_name_map.get(item.name) != item for item in self.label_create_list):
+            raise LinearContractError("Linear label plan changed after approval")
 
     def payload(self) -> dict[str, object]:
         """Return the canonical approved-delta payload.

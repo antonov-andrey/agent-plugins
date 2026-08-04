@@ -5,7 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from task_workspace.model import TaskWorkspaceError, WorkspaceSubmoduleState
-from task_workspace.repository import GitCommand, match_full_commit
+from task_workspace.repository import (
+    git_command_run,
+    git_command_text_get,
+    match_full_commit,
+)
 
 
 class WorkspaceSubmoduleReader:
@@ -29,8 +33,8 @@ class WorkspaceSubmoduleReader:
 
         if not _direct_gitlink_by_path_get(self._repository_root):
             return []
-        GitCommand.run(self._repository_root, ("submodule", "sync", "--recursive"))
-        GitCommand.run(
+        git_command_run(self._repository_root, ("submodule", "sync", "--recursive"))
+        git_command_run(
             self._repository_root,
             (
                 "-c",
@@ -59,7 +63,7 @@ class WorkspaceSubmoduleReader:
                 child = root / relative_path
                 if child.is_symlink() or not child.is_dir():
                     raise TaskWorkspaceError(f"Recursive submodule is not initialized: {full_path}")
-                top_level = GitCommand.text(child, ("rev-parse", "--show-toplevel"), check=False)
+                top_level = git_command_text_get(child, ("rev-parse", "--show-toplevel"), check=False)
                 if not top_level:
                     raise TaskWorkspaceError(f"Recursive submodule is not a Git checkout: {full_path}")
                 try:
@@ -69,12 +73,12 @@ class WorkspaceSubmoduleReader:
                     raise TaskWorkspaceError(f"Recursive submodule path is unavailable: {full_path}") from error
                 if resolved_top_level != resolved_child:
                     raise TaskWorkspaceError(f"Recursive submodule checkout has another root: {full_path}")
-                current_commit = GitCommand.text(child, ("rev-parse", "--verify", "HEAD^{commit}"))
+                current_commit = git_command_text_get(child, ("rev-parse", "--verify", "HEAD^{commit}"))
                 if current_commit != expected_commit:
                     raise TaskWorkspaceError(f"Recursive submodule differs from its exact index gitlink: {full_path}")
-                if GitCommand.run(child, ("symbolic-ref", "--quiet", "HEAD"), check=False).returncode == 0:
+                if git_command_run(child, ("symbolic-ref", "--quiet", "HEAD"), check=False).returncode == 0:
                     raise TaskWorkspaceError(f"Recursive submodule must remain detached at its gitlink: {full_path}")
-                if GitCommand.run(
+                if git_command_run(
                     child,
                     ("status", "--porcelain=v1", "-z", "--ignore-submodules=none"),
                 ).stdout:
@@ -90,7 +94,7 @@ def _direct_gitlink_by_path_get(repository_root: Path) -> dict[str, str]:
     """Read exact stage-zero direct gitlinks from one repository index."""
 
     commit_by_relative_path_map: dict[str, str] = {}
-    payload = GitCommand.run(repository_root, ("ls-files", "--stage", "-z")).stdout
+    payload = git_command_run(repository_root, ("ls-files", "--stage", "-z")).stdout
     for record in payload.split(b"\0"):
         if not record:
             continue

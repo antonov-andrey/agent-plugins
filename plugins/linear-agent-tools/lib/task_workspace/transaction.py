@@ -17,7 +17,7 @@ from task_workspace.model import (
     WorkspaceConfig,
     WorkspaceRequest,
 )
-from task_workspace.repository import GitCommand, WorkspaceRepository
+from task_workspace.repository import git_command_run, WorkspaceRepository
 from task_workspace.submodule import WorkspaceSubmoduleReader
 
 
@@ -151,7 +151,7 @@ class TaskWorkspaceTransaction:
         base_commit = repository.commit_get(f"refs/remotes/origin/{repository_request.base_branch}")
         baseline = repository_request.expected_baseline_commit or base_commit
         if repository_request.expected_baseline_commit:
-            result = GitCommand.run(
+            result = git_command_run(
                 repository.main_root,
                 ("merge-base", "--is-ancestor", baseline, base_commit),
                 check=False,

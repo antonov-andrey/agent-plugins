@@ -10,6 +10,8 @@ import json
 import re
 from urllib.parse import unquote, urlsplit
 
+from task_graph.topology import exist_ordered_role_path, exist_path
+
 _KEY_PATTERN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 _UUID_PATTERN = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 _COMMIT_PATTERN = re.compile(r"[0-9a-f]{40,64}")
@@ -687,8 +689,6 @@ class TaskGraph:
     def __post_init__(self) -> None:
         """Validate graph identity, topology and mandatory terminal roles."""
 
-        from task_graph.topology import exist_ordered_role_path, exist_path
-
         if not isinstance(self.team_id, str) or _UUID_PATTERN.fullmatch(self.team_id) is None:
             raise TaskGraphError("Graph team_id must be one lowercase Linear UUID")
         _text_validate(self.project_name, label="Linear Project name")
@@ -713,7 +713,7 @@ class TaskGraph:
                     )
                 if node.node_key in resource.consumer_node_key_list:
                     raise TaskGraphError(f"Resource {resource.key} repeats its implicit owner as a consumer")
-        _acyclic_require(node_by_key_map)
+        self._acyclic_require(node_by_key_map)
         review_list = [node for node in self.node_list if node.role is TaskRole.REVIEW]
         acceptance_list = [node for node in self.node_list if node.role is TaskRole.ACCEPTANCE]
         cleanup_list = [node for node in self.node_list if node.role is TaskRole.CLEANUP]
@@ -771,6 +771,26 @@ class TaskGraph:
                     for consumer_key in resource.consumer_node_key_list
                 ):
                     raise TaskGraphError(f"Resource {resource.key} consumer must be downstream from its owning task")
+
+    def _acyclic_require(self, node_by_key_map: dict[str, TaskNode]) -> None:
+        """Reject a dependency cycle in this exact graph."""
+
+        visiting_node_key_set: set[str] = set()
+        visited_node_key_set: set[str] = set()
+
+        def visit(key: str) -> None:
+            if key in visiting_node_key_set:
+                raise TaskGraphError(f"Task graph contains a blocker cycle at {key}")
+            if key in visited_node_key_set:
+                return
+            visiting_node_key_set.add(key)
+            for blocker in node_by_key_map[key].blocker_key_list:
+                visit(blocker)
+            visiting_node_key_set.remove(key)
+            visited_node_key_set.add(key)
+
+        for node in sorted(self.node_list, key=lambda item: item.node_key):
+            visit(node.node_key)
 
     def source_fingerprint(self) -> str:
         """Return the exact immutable source fingerprint.
@@ -850,31 +870,6 @@ class TaskGraph:
             )
         except (TypeError, ValueError) as error:
             raise TaskGraphError("Task graph contains an unsupported enum or field value") from error
-
-
-def _acyclic_require(node_by_key_map: dict[str, TaskNode]) -> None:
-    """Reject one graph containing a dependency cycle.
-
-    Args:
-        node_by_key_map: Complete node mapping.
-    """
-
-    visiting_node_key_set: set[str] = set()
-    visited_node_key_set: set[str] = set()
-
-    def visit(key: str) -> None:
-        if key in visiting_node_key_set:
-            raise TaskGraphError(f"Task graph contains a blocker cycle at {key}")
-        if key in visited_node_key_set:
-            return
-        visiting_node_key_set.add(key)
-        for blocker in node_by_key_map[key].blocker_key_list:
-            visit(blocker)
-        visiting_node_key_set.remove(key)
-        visited_node_key_set.add(key)
-
-    for node_key in sorted(node_by_key_map):
-        visit(node_key)
 
 
 def canonical_sha256(payload: object) -> str:

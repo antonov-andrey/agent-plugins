@@ -41,63 +41,40 @@ _GIT_REDIRECTION_NAME_SET = frozenset(
 )
 
 
-class GitCommand:
+def git_command_run(
+    repository: Path,
+    argument_list: Sequence[str],
+    *,
+    check: bool = True,
+    input_bytes: bytes | None = None,
+) -> subprocess.CompletedProcess[bytes]:
     """Run Git without inherited repository-redirection variables."""
 
-    @staticmethod
-    def run(
-        repository: Path,
-        argument_list: Sequence[str],
-        *,
-        check: bool = True,
-        input_bytes: bytes | None = None,
-    ) -> subprocess.CompletedProcess[bytes]:
-        """Run one direct Git command.
-
-        Args:
-            repository: Exact repository path.
-            argument_list: Direct Git arguments.
-            check: Whether to reject nonzero exit.
-            input_bytes: Optional standard input bytes.
-
-        Returns:
-            Completed command.
-        """
-
-        environment_by_name_map = os.environ.copy()
-        for name in list(environment_by_name_map):
-            if name in _GIT_REDIRECTION_NAME_SET or name.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")):
-                environment_by_name_map.pop(name, None)
-        environment_by_name_map["GIT_TERMINAL_PROMPT"] = "0"
-        completed_process = subprocess.run(
-            ["git", "-C", str(repository), *argument_list],
-            capture_output=True,
-            check=False,
-            env=environment_by_name_map,
-            input=input_bytes,
+    environment_by_name_map = os.environ.copy()
+    for name in list(environment_by_name_map):
+        if name in _GIT_REDIRECTION_NAME_SET or name.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")):
+            environment_by_name_map.pop(name, None)
+    environment_by_name_map["GIT_TERMINAL_PROMPT"] = "0"
+    completed_process = subprocess.run(
+        ["git", "-C", str(repository), *argument_list],
+        capture_output=True,
+        check=False,
+        env=environment_by_name_map,
+        input=input_bytes,
+    )
+    if check and completed_process.returncode != 0:
+        detail = (completed_process.stderr or completed_process.stdout).decode("utf-8", errors="replace").strip()
+        raise TaskWorkspaceError(
+            f"Git command failed in {repository}: git {' '.join(argument_list)}: "
+            f"{detail or f'exit status {completed_process.returncode}'}"
         )
-        if check and completed_process.returncode != 0:
-            detail = (completed_process.stderr or completed_process.stdout).decode("utf-8", errors="replace").strip()
-            raise TaskWorkspaceError(
-                f"Git command failed in {repository}: git {' '.join(argument_list)}: "
-                f"{detail or f'exit status {completed_process.returncode}'}"
-            )
-        return completed_process
+    return completed_process
 
-    @classmethod
-    def text(cls, repository: Path, argument_list: Sequence[str], *, check: bool = True) -> str:
-        """Return strict UTF-8 output from one Git command.
 
-        Args:
-            repository: Exact repository path.
-            argument_list: Direct Git arguments.
-            check: Whether to reject nonzero exit.
+def git_command_text_get(repository: Path, argument_list: Sequence[str], *, check: bool = True) -> str:
+    """Return strict UTF-8 output from one Git command."""
 
-        Returns:
-            Stripped output text.
-        """
-
-        return cls.run(repository, argument_list, check=check).stdout.decode("utf-8", errors="strict").strip()
+    return git_command_run(repository, argument_list, check=check).stdout.decode("utf-8", errors="strict").strip()
 
 
 def origin_identity_get(value: str) -> str:
@@ -169,15 +146,19 @@ class WorkspaceRepository:
         metadata_directory = self.main_root / ".git"
         if metadata_directory.is_symlink() or not metadata_directory.is_dir():
             raise TaskWorkspaceError(f"Canonical checkout must own one .git directory: {self.main_root}")
-        discovered_root = Path(GitCommand.text(self.main_root, ("rev-parse", "--show-toplevel"))).resolve(strict=True)
+        discovered_root = Path(git_command_text_get(self.main_root, ("rev-parse", "--show-toplevel"))).resolve(
+            strict=True
+        )
         if discovered_root != self.main_root:
             raise TaskWorkspaceError("Canonical checkout discovery returned another root")
         if metadata_directory.resolve(strict=True) != self._common_directory_get():
             raise TaskWorkspaceError("Canonical checkout must own its physical Git common directory")
-        self.origin_identity = origin_identity_get(GitCommand.text(self.main_root, ("remote", "get-url", "origin")))
+        self.origin_identity = origin_identity_get(
+            git_command_text_get(self.main_root, ("remote", "get-url", "origin"))
+        )
         if self.origin_identity != origin_identity_get(request.origin_url):
             raise TaskWorkspaceError("Canonical checkout origin differs from the approved issue contract")
-        GitCommand.run(self.main_root, ("check-ref-format", "--branch", request.base_branch))
+        git_command_run(self.main_root, ("check-ref-format", "--branch", request.base_branch))
 
     @classmethod
     def from_config(cls, config: WorkspaceConfig, request: RepositoryRequest) -> "WorkspaceRepository":
@@ -201,7 +182,7 @@ class WorkspaceRepository:
             metadata_directory = candidate / ".git"
             if metadata_directory.is_symlink() or not metadata_directory.is_dir():
                 continue
-            origin = GitCommand.text(candidate, ("remote", "get-url", "origin"), check=False)
+            origin = git_command_text_get(candidate, ("remote", "get-url", "origin"), check=False)
             if not origin:
                 continue
             try:
@@ -325,7 +306,7 @@ class WorkspaceRepository:
         """Return one physical canonical Git common directory."""
 
         candidate = Path(
-            GitCommand.text(
+            git_command_text_get(
                 self.main_root,
                 ("rev-parse", "--path-format=absolute", "--git-common-dir"),
             )
@@ -383,7 +364,7 @@ class WorkspaceRepository:
     def fetch(self) -> None:
         """Fetch current origin refs without changing a checked-out branch."""
 
-        GitCommand.run(self.main_root, ("fetch", "--prune", "origin"))
+        git_command_run(self.main_root, ("fetch", "--prune", "origin"))
 
     def commit_get(self, ref: str) -> str:
         """Resolve one ref to a full commit.
@@ -395,7 +376,7 @@ class WorkspaceRepository:
             Full lowercase commit.
         """
 
-        value = GitCommand.text(self.main_root, ("rev-parse", "--verify", f"{ref}^{{commit}}"))
+        value = git_command_text_get(self.main_root, ("rev-parse", "--verify", f"{ref}^{{commit}}"))
         if not match_full_commit(value):
             raise TaskWorkspaceError(f"Git ref did not resolve to a full commit: {ref}")
         return value
@@ -421,7 +402,7 @@ class WorkspaceRepository:
             or any(part in {"", ".", ".."} for part in relative_path.split("/"))
         ):
             raise TaskWorkspaceError("Tracked-file path is unsafe")
-        completed_process = GitCommand.run(
+        completed_process = git_command_run(
             self.main_root,
             ("ls-tree", "-z", commit, "--", relative_path),
         )
@@ -438,7 +419,7 @@ class WorkspaceRepository:
             raise TaskWorkspaceError("Tracked-file lookup returned malformed metadata") from error
         if decoded_path != relative_path or mode not in {"100644", "100755"} or object_kind != "blob":
             raise TaskWorkspaceError("Tracked bootstrap manifest must be one ordinary committed file")
-        return GitCommand.run(
+        return git_command_run(
             self.main_root,
             ("cat-file", "blob", object_identity),
         ).stdout
@@ -454,7 +435,7 @@ class WorkspaceRepository:
         """
 
         return (
-            GitCommand.run(
+            git_command_run(
                 self.main_root,
                 (
                     "show-ref",
@@ -478,7 +459,7 @@ class WorkspaceRepository:
         """
 
         return (
-            GitCommand.run(
+            git_command_run(
                 self.main_root,
                 ("show-ref", "--verify", "--quiet", f"refs/heads/{branch_name}"),
                 check=False,
@@ -502,7 +483,7 @@ class WorkspaceRepository:
             return
         if not expected_commit or self.commit_get(f"refs/remotes/origin/{branch_name}") != expected_commit:
             raise TaskWorkspaceError("Remote task branch differs from its durable cleanup snapshot")
-        completed_process = GitCommand.run(
+        completed_process = git_command_run(
             self.main_root,
             (
                 "push",
@@ -537,7 +518,7 @@ class WorkspaceRepository:
             if self.exist_remote_branch(branch_name):
                 remote_commit = self.commit_get(f"refs/remotes/origin/{branch_name}")
                 self._ancestor_require(state.baseline_commit, remote_commit, label="Remote task branch")
-                GitCommand.run(
+                git_command_run(
                     self.main_root,
                     (
                         "branch",
@@ -547,9 +528,9 @@ class WorkspaceRepository:
                     ),
                 )
             else:
-                GitCommand.run(self.main_root, ("branch", branch_name, state.baseline_commit))
+                git_command_run(self.main_root, ("branch", branch_name, state.baseline_commit))
         task_root.parent.mkdir(parents=True, exist_ok=True)
-        GitCommand.run(self.main_root, ("worktree", "add", str(task_root), branch_name))
+        git_command_run(self.main_root, ("worktree", "add", str(task_root), branch_name))
         self.task_worktree_require(state)
 
     def task_worktree_require(self, state: RepositoryWorkspaceState) -> None:
@@ -567,10 +548,10 @@ class WorkspaceRepository:
         registration = self._branch_name_by_worktree_path_map_get().get(task_root)
         if registration != state.branch_name:
             raise TaskWorkspaceError("Task path is absent from Git worktree registration or uses another branch")
-        branch = GitCommand.text(task_root, ("symbolic-ref", "--quiet", "--short", "HEAD"))
+        branch = git_command_text_get(task_root, ("symbolic-ref", "--quiet", "--short", "HEAD"))
         if branch != state.branch_name:
             raise TaskWorkspaceError("Task worktree checked out another branch")
-        origin = origin_identity_get(GitCommand.text(task_root, ("remote", "get-url", "origin")))
+        origin = origin_identity_get(git_command_text_get(task_root, ("remote", "get-url", "origin")))
         if origin != state.origin_identity:
             raise TaskWorkspaceError("Task worktree origin differs from private ownership state")
         head = self.commit_get(state.branch_name)
@@ -613,7 +594,7 @@ class WorkspaceRepository:
             Registration mapping.
         """
 
-        item_list = GitCommand.run(self.main_root, ("worktree", "list", "--porcelain", "-z")).stdout.split(b"\0")
+        item_list = git_command_run(self.main_root, ("worktree", "list", "--porcelain", "-z")).stdout.split(b"\0")
         branch_name_by_worktree_path_map: dict[Path, str] = {}
         current_path: Path | None = None
         for raw in item_list:
@@ -646,7 +627,7 @@ class WorkspaceRepository:
         """
 
         if (
-            GitCommand.run(
+            git_command_run(
                 self.main_root,
                 ("merge-base", "--is-ancestor", ancestor, descendant),
                 check=False,

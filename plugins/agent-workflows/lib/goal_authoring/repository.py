@@ -35,6 +35,45 @@ _GIT_REDIRECTION_NAME_SET = frozenset(
 )
 
 
+def _git_command_run(
+    repository: Path,
+    argument_list: Sequence[str],
+    *,
+    check: bool = True,
+    input_bytes: bytes | None = None,
+    extra_environment: Mapping[str, str] | None = None,
+) -> subprocess.CompletedProcess[bytes]:
+    """Run Git at one explicit path without inherited repository redirection."""
+
+    environment = os.environ.copy()
+    for name in list(environment):
+        if name in _GIT_REDIRECTION_NAME_SET or name.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")):
+            environment.pop(name, None)
+    environment["GIT_TERMINAL_PROMPT"] = "0"
+    if extra_environment:
+        environment.update(extra_environment)
+    result = subprocess.run(
+        ["git", "-C", str(repository), *argument_list],
+        capture_output=True,
+        check=False,
+        env=environment,
+        input=input_bytes,
+    )
+    if check and result.returncode != 0:
+        detail = (result.stderr or result.stdout).decode("utf-8", errors="replace").strip()
+        raise GoalAuthoringError(
+            f"Git command failed in {repository}: git {' '.join(argument_list)}: "
+            f"{detail or f'exit status {result.returncode}'}"
+        )
+    return result
+
+
+def _git_command_text_get(repository: Path, argument_list: Sequence[str], *, check: bool = True) -> str:
+    """Run Git at one explicit path and return strict UTF-8 output."""
+
+    return _git_command_run(repository, argument_list, check=check).stdout.decode("utf-8", errors="strict").strip()
+
+
 class GitRepository:
     """Run checked Git operations without inherited repository redirection."""
 
@@ -45,70 +84,11 @@ class GitRepository:
             root: Candidate repository path.
         """
 
-        discovered = self.text(root, ("rev-parse", "--show-toplevel"))
+        discovered = _git_command_text_get(root, ("rev-parse", "--show-toplevel"))
         try:
             self.root = Path(discovered).resolve(strict=True)
         except OSError as error:
             raise GoalAuthoringError(f"Repository root is unavailable: {root}") from error
-
-    @staticmethod
-    def run_at(
-        repository: Path,
-        argument_list: Sequence[str],
-        *,
-        check: bool = True,
-        input_bytes: bytes | None = None,
-        extra_environment: Mapping[str, str] | None = None,
-    ) -> subprocess.CompletedProcess[bytes]:
-        """Run Git at one explicit path.
-
-        Args:
-            repository: Exact Git repository root or candidate path.
-            argument_list: Direct Git arguments.
-            check: Whether to reject a nonzero result.
-            input_bytes: Optional standard input bytes.
-            extra_environment: Explicit environment additions.
-
-        Returns:
-            The completed command.
-        """
-
-        environment = os.environ.copy()
-        for name in list(environment):
-            if name in _GIT_REDIRECTION_NAME_SET or name.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")):
-                environment.pop(name, None)
-        environment["GIT_TERMINAL_PROMPT"] = "0"
-        if extra_environment:
-            environment.update(extra_environment)
-        result = subprocess.run(
-            ["git", "-C", str(repository), *argument_list],
-            capture_output=True,
-            check=False,
-            env=environment,
-            input=input_bytes,
-        )
-        if check and result.returncode != 0:
-            detail = (result.stderr or result.stdout).decode("utf-8", errors="replace").strip()
-            raise GoalAuthoringError(
-                f"Git command failed in {repository}: git {' '.join(argument_list)}: "
-                f"{detail or f'exit status {result.returncode}'}"
-            )
-        return result
-
-    @classmethod
-    def text(cls, repository: Path, argument_list: Sequence[str], *, check: bool = True) -> str:
-        """Run Git and decode UTF-8 standard output.
-
-        Args:
-            repository: Exact repository path.
-            argument_list: Direct Git arguments.
-            check: Whether to reject a nonzero result.
-
-        Returns:
-            The stripped command output.
-        """
-
-        return cls.run_at(repository, argument_list, check=check).stdout.decode("utf-8", errors="strict").strip()
 
     def run(
         self,
@@ -130,7 +110,7 @@ class GitRepository:
             The completed command.
         """
 
-        return self.run_at(
+        return _git_command_run(
             self.root,
             argument_list,
             check=check,

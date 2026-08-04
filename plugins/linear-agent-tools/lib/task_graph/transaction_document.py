@@ -57,7 +57,7 @@ class TransactionDocumentReader:
             )
             if marker is None:
                 continue
-            payload = self._transaction_payload_get(document, marker=marker)
+            payload = _transaction_payload_get(document.content, marker=marker)
             node_list = payload.get("node_list")
             if not isinstance(node_list, list):
                 raise TaskGraphError("Linear transaction document omits its normalized node list")
@@ -73,21 +73,21 @@ class TransactionDocumentReader:
                     resource_key_set.add(key)
         return frozenset(resource_key_set)
 
-    @staticmethod
-    def _transaction_payload_get(document: TransactionDocument, *, marker: str) -> dict[str, object]:
-        """Decode the one canonical JSON block from a provider transaction document."""
 
-        if not document.content.startswith(marker):
-            raise TaskGraphError("Linear transaction document title collides with foreign content")
-        start = document.content.find(_JSON_START)
-        end = document.content.find(_JSON_END, start + len(_JSON_START)) if start >= 0 else -1
-        if start < 0 or end < 0 or document.content.find(_JSON_START, start + len(_JSON_START)) >= 0:
-            raise TaskGraphError("Linear transaction document has no unique normalized payload")
-        encoded = document.content[start + len(_JSON_START) : end]
-        try:
-            payload = json_load_strict(encoded)
-        except JsonContractError as error:
-            raise TaskGraphError("Linear transaction document contains malformed normalized JSON") from error
-        if not isinstance(payload, dict):
-            raise TaskGraphError("Linear transaction document normalized payload must be an object")
-        return payload
+def _transaction_payload_get(content: str, *, marker: str) -> dict[str, object]:
+    """Decode the one canonical JSON block from provider transaction text."""
+
+    if not content.startswith(marker):
+        raise TaskGraphError("Linear transaction document title collides with foreign content")
+    start = content.find(_JSON_START)
+    end = content.find(_JSON_END, start + len(_JSON_START)) if start >= 0 else -1
+    if start < 0 or end < 0 or content.find(_JSON_START, start + len(_JSON_START)) >= 0:
+        raise TaskGraphError("Linear transaction document has no unique normalized payload")
+    encoded = content[start + len(_JSON_START) : end]
+    try:
+        payload = json_load_strict(encoded)
+    except JsonContractError as error:
+        raise TaskGraphError("Linear transaction document contains malformed normalized JSON") from error
+    if not isinstance(payload, dict):
+        raise TaskGraphError("Linear transaction document normalized payload must be an object")
+    return payload

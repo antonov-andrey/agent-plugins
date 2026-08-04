@@ -14,9 +14,11 @@ if str(LIBRARY_ROOT) not in sys.path:
     sys.path.insert(0, str(LIBRARY_ROOT))
 
 from git_host.model import GitHubContractError
+from git_host.pull_request import GitHubPullRequestBoundary
 from json_contract import JsonContractError, json_load_strict
 from task_cleanup.model import CleanupRequest, TaskCleanupError
 from task_cleanup.reconciliation import TaskCleanupReconciler
+from task_cleanup.resource import ResourceCleaner
 from task_workspace.model import TaskWorkspaceError, WorkspaceConfig
 
 
@@ -63,7 +65,11 @@ def main(argv: list[str] | None = None) -> int:
 
     args = _parser_get().parse_args(argv)
     try:
-        result = TaskCleanupReconciler(WorkspaceConfig.from_environment()).cleanup(_request_load(args.request_input))
+        result = TaskCleanupReconciler(
+            WorkspaceConfig.from_environment(),
+            github=GitHubPullRequestBoundary(),
+            resources=ResourceCleaner(),
+        ).cleanup(_request_load(args.request_input))
     except (GitHubContractError, TaskCleanupError, TaskWorkspaceError) as error:
         print(str(error), file=sys.stderr)
         return 2

@@ -21,7 +21,7 @@ from task_workspace.model import (
     TaskWorkspaceError,
     WorkspaceConfig,
 )
-from task_workspace.repository import GitCommand, WorkspaceRepository
+from task_workspace.repository import git_command_run, WorkspaceRepository
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,8 +58,8 @@ class TaskCleanupReconciler:
         self,
         config: WorkspaceConfig,
         *,
-        github: GitHubPullRequestBoundary | None = None,
-        resources: ResourceCleaner | None = None,
+        github: GitHubPullRequestBoundary,
+        resources: ResourceCleaner,
     ) -> None:
         """Initialize explicit external boundaries.
 
@@ -70,8 +70,8 @@ class TaskCleanupReconciler:
         """
 
         self._config = config
-        self._github = github or GitHubPullRequestBoundary()
-        self._resources = resources or ResourceCleaner()
+        self._github = github
+        self._resources = resources
 
     def cleanup(self, request: CleanupRequest) -> CleanupResult:
         """Reconcile every exact requested cleanup target idempotently.
@@ -228,7 +228,7 @@ class TaskCleanupReconciler:
                     if request.authority.issue_status != "Canceled":
                         if not task_root.is_dir():
                             raise TaskCleanupError("Successful task worktree disappeared before dirty-state proof")
-                        dirty = GitCommand.run(
+                        dirty = git_command_run(
                             task_root,
                             (
                                 "status",
@@ -242,7 +242,7 @@ class TaskCleanupReconciler:
                     state = replace(state, cleanup_worktree_removal_ready=True)
                     repository.state_write(state)
                 if not state.worktree_removed and (task_root.exists() or registered_branch is not None):
-                    GitCommand.run(
+                    git_command_run(
                         repository.main_root,
                         ("worktree", "remove", "--force", str(task_root)),
                     )
@@ -271,7 +271,7 @@ class TaskCleanupReconciler:
                 if not state.local_branch_removed and local_exists:
                     if repository.commit_get(state.branch_name) != state.cleanup_local_branch_commit:
                         raise TaskCleanupError("Local task branch changed after the durable cleanup snapshot")
-                    GitCommand.run(repository.main_root, ("branch", "-D", state.branch_name))
+                    git_command_run(repository.main_root, ("branch", "-D", state.branch_name))
                     removed_local_branch_count += 1
                 if not state.local_branch_removed:
                     state = replace(state, local_branch_removed=True)
@@ -383,7 +383,7 @@ class TaskCleanupReconciler:
         """Require one local or remote task head to be integrated into its base."""
 
         if (
-            GitCommand.run(
+            git_command_run(
                 repository.main_root,
                 ("merge-base", "--is-ancestor", branch_commit, base_commit),
                 check=False,
@@ -408,7 +408,7 @@ class TaskCleanupReconciler:
             ):
                 merge_commit = repository.commit_get(snapshot.merge_commit)
                 if (
-                    GitCommand.run(
+                    git_command_run(
                         repository.main_root,
                         ("merge-base", "--is-ancestor", merge_commit, base_commit),
                         check=False,

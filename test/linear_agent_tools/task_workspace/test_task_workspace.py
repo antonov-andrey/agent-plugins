@@ -16,6 +16,7 @@ if str(LIBRARY_ROOT) not in sys.path:
     sys.path.insert(0, str(LIBRARY_ROOT))
 
 import task_workspace.lock as lock_module
+from git_host.pull_request import GitHubPullRequestBoundary
 from task_cleanup.model import (
     CleanupAuthority,
     CleanupRequest,
@@ -63,6 +64,21 @@ def _git(repository: Path, *argument_list: str) -> str:
         capture_output=True,
         text=True,
     ).stdout.strip()
+
+
+def _task_cleanup_reconciler(
+    config: WorkspaceConfig,
+    *,
+    github: GitHubPullRequestBoundary | None = None,
+    resources: ResourceCleaner | None = None,
+) -> TaskCleanupReconciler:
+    """Build the cleanup workflow with explicit production-equivalent boundaries."""
+
+    return TaskCleanupReconciler(
+        config,
+        github=github or GitHubPullRequestBoundary(),
+        resources=resources or ResourceCleaner(),
+    )
 
 
 def _repository_create(workspace: Path, *, resources: bool = True) -> RepositoryFixture:
@@ -835,8 +851,8 @@ def test_terminal_cleanup_removes_exact_workspace_and_is_idempotent(
         resource_list=[],
     )
 
-    first = TaskCleanupReconciler(config).cleanup(cleanup_request)
-    second = TaskCleanupReconciler(config).cleanup(cleanup_request)
+    first = _task_cleanup_reconciler(config).cleanup(cleanup_request)
+    second = _task_cleanup_reconciler(config).cleanup(cleanup_request)
 
     assert first.removed_worktree_count == 1
     assert first.removed_local_branch_count == 1
@@ -874,7 +890,7 @@ def test_done_cleanup_rejects_unintegrated_branch_commits(tmp_path: Path) -> Non
     )
 
     with pytest.raises(TaskCleanupError, match="absent from its remote base"):
-        TaskCleanupReconciler(config).cleanup(cleanup_request)
+        _task_cleanup_reconciler(config).cleanup(cleanup_request)
 
     assert task_root.exists()
     assert _git(task_root, "rev-parse", "HEAD") != _git(task_root, "rev-parse", "origin/main")
@@ -907,7 +923,7 @@ def test_canceled_cleanup_may_remove_dirty_exact_task_state(tmp_path: Path) -> N
         resource_list=[],
     )
 
-    result = TaskCleanupReconciler(config).cleanup(cleanup_request)
+    result = _task_cleanup_reconciler(config).cleanup(cleanup_request)
 
     assert result.removed_worktree_count == 1
     assert (root / "README.md").exists()
@@ -941,10 +957,10 @@ def test_cleanup_recovers_after_worktree_removal_before_state_commit(
     monkeypatch.setattr(WorkspaceRepository, "state_write", interrupt_after_removal)
 
     with pytest.raises(RuntimeError, match="post-worktree-removal"):
-        TaskCleanupReconciler(config).cleanup(cleanup_request)
+        _task_cleanup_reconciler(config).cleanup(cleanup_request)
 
     assert not Path(state.task_root).exists()
-    recovered = TaskCleanupReconciler(config).cleanup(cleanup_request)
+    recovered = _task_cleanup_reconciler(config).cleanup(cleanup_request)
 
     assert recovered.removed_worktree_count == 0
     assert recovered.removed_local_branch_count == 1
@@ -982,9 +998,9 @@ def test_cleanup_recovers_after_branch_removal_before_state_commit(
     monkeypatch.setattr(WorkspaceRepository, "state_write", interrupt_after_branch_removal)
 
     with pytest.raises(RuntimeError, match=interruption_field):
-        TaskCleanupReconciler(config).cleanup(cleanup_request)
+        _task_cleanup_reconciler(config).cleanup(cleanup_request)
 
-    recovered = TaskCleanupReconciler(config).cleanup(cleanup_request)
+    recovered = _task_cleanup_reconciler(config).cleanup(cleanup_request)
 
     assert recovered.removed_worktree_count == 0
     assert not Path(state.task_root).exists()
@@ -1021,7 +1037,7 @@ def test_cleanup_rejects_remote_branch_mutation_after_durable_snapshot(
 
     monkeypatch.setattr(WorkspaceRepository, "state_write", interrupt_after_removal_proof)
     with pytest.raises(RuntimeError, match="pre-removal"):
-        TaskCleanupReconciler(config).cleanup(cleanup_request)
+        _task_cleanup_reconciler(config).cleanup(cleanup_request)
 
     competing_root = tmp_path / "competing"
     subprocess.run(
@@ -1038,7 +1054,7 @@ def test_cleanup_rejects_remote_branch_mutation_after_durable_snapshot(
     _git(competing_root, "push", "origin", state.branch_name)
 
     with pytest.raises(TaskCleanupError, match="Remote task branch changed"):
-        TaskCleanupReconciler(config).cleanup(cleanup_request)
+        _task_cleanup_reconciler(config).cleanup(cleanup_request)
 
     assert task_root.exists()
     assert _git(root, "show-ref", "--verify", f"refs/heads/{state.branch_name}")
@@ -1099,7 +1115,7 @@ def test_cleanup_rejects_changed_resource_declaration_after_durable_success(
 
     monkeypatch.setattr(WorkspaceRepository, "state_write", interrupt_after_resource_receipt)
     with pytest.raises(RuntimeError, match="post-resource"):
-        TaskCleanupReconciler(config, resources=ResourceCleaner(runner)).cleanup(cleanup_request)
+        _task_cleanup_reconciler(config, resources=ResourceCleaner(runner)).cleanup(cleanup_request)
 
     changed = ResourceDeclaration(
         key=resource.key,
@@ -1110,7 +1126,7 @@ def test_cleanup_rejects_changed_resource_declaration_after_durable_success(
         consumer_node_key_list=[],
     )
     with pytest.raises(TaskCleanupError, match="declaration changed"):
-        TaskCleanupReconciler(config, resources=ResourceCleaner(runner)).cleanup(
+        _task_cleanup_reconciler(config, resources=ResourceCleaner(runner)).cleanup(
             CleanupRequest(
                 issue_identifier=cleanup_request.issue_identifier,
                 authority=cleanup_request.authority,
@@ -1175,7 +1191,7 @@ def test_cleanup_never_executes_project_command_through_replaced_worktree_symlin
     )
 
     with pytest.raises(TaskCleanupError, match="unavailable before project-owned cleanup"):
-        TaskCleanupReconciler(config, resources=ResourceCleaner(runner)).cleanup(cleanup_request)
+        _task_cleanup_reconciler(config, resources=ResourceCleaner(runner)).cleanup(cleanup_request)
 
     assert not called
     assert list(outside.iterdir()) == []
@@ -1209,7 +1225,7 @@ def test_cleanup_requires_complete_exact_pull_request_set(tmp_path: Path) -> Non
     )
 
     with pytest.raises(TaskCleanupError, match="omits or substitutes"):
-        TaskCleanupReconciler(
+        _task_cleanup_reconciler(
             WorkspaceConfig(tmp_path.resolve()),
             github=GitHub(),  # type: ignore[arg-type]
         )._pull_request_contract_require(
@@ -1277,8 +1293,8 @@ def test_project_final_cleanup_requires_acceptance_other_terminal_nodes_and_no_r
         project_issue_identifier_list=["AND-110"],
     )
 
-    first = TaskCleanupReconciler(config, resources=ResourceCleaner(runner)).cleanup(cleanup_request)
-    second = TaskCleanupReconciler(config, resources=ResourceCleaner(runner)).cleanup(cleanup_request)
+    first = _task_cleanup_reconciler(config, resources=ResourceCleaner(runner)).cleanup(cleanup_request)
+    second = _task_cleanup_reconciler(config, resources=ResourceCleaner(runner)).cleanup(cleanup_request)
 
     assert first.cleaned_resource_count == 1
     assert second.cleaned_resource_count == 1
@@ -1361,10 +1377,10 @@ def test_project_final_cleanup_proves_all_project_issue_workspaces_absent(
     )
 
     with pytest.raises(TaskCleanupError, match="AND-120.*private task-workspace state"):
-        TaskCleanupReconciler(config).cleanup(project_cleanup)
+        _task_cleanup_reconciler(config).cleanup(project_cleanup)
 
-    TaskCleanupReconciler(config).cleanup(_canceled_cleanup_request(other_request, issue="AND-120"))
-    result = TaskCleanupReconciler(config).cleanup(project_cleanup)
+    _task_cleanup_reconciler(config).cleanup(_canceled_cleanup_request(other_request, issue="AND-120"))
+    result = _task_cleanup_reconciler(config).cleanup(project_cleanup)
 
     assert result.removed_worktree_count == 0
 
@@ -1422,8 +1438,8 @@ def test_attempt_cleanup_repeats_idempotent_resource_without_removing_workspace(
         approved_resource_fingerprint_list=[resource.fingerprint()],
     )
 
-    first = TaskCleanupReconciler(config, resources=ResourceCleaner(runner)).cleanup(cleanup_request)
-    second = TaskCleanupReconciler(config, resources=ResourceCleaner(runner)).cleanup(cleanup_request)
+    first = _task_cleanup_reconciler(config, resources=ResourceCleaner(runner)).cleanup(cleanup_request)
+    second = _task_cleanup_reconciler(config, resources=ResourceCleaner(runner)).cleanup(cleanup_request)
 
     assert first.cleaned_resource_count == second.cleaned_resource_count == 1
     assert len(captured_argument_list) == 2
