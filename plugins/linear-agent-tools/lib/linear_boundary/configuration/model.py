@@ -9,7 +9,11 @@ import math
 import re
 import uuid
 
-from linear_boundary.contract import LinearContractError, single_line_text_validate, uuid_validate
+from linear_boundary.contract import (
+    LinearContractError,
+    single_line_text_validate,
+    uuid_validate,
+)
 
 _HEX_COLOR_PATTERN = re.compile(r"#[0-9a-fA-F]{6}")
 
@@ -43,8 +47,14 @@ class DestinationIdentity:
     def mutation_authority_require(self) -> None:
         """Require the authenticated viewer to be an active non-guest admin."""
 
-        if not self.viewer_is_admin or self.viewer_is_guest or not self.viewer_is_active:
-            raise LinearContractError("Authenticated Linear viewer is not an active non-guest administrator")
+        if (
+            not self.viewer_is_admin
+            or self.viewer_is_guest
+            or not self.viewer_is_active
+        ):
+            raise LinearContractError(
+                "Authenticated Linear viewer is not an active non-guest administrator"
+            )
 
 
 def _uuid_v4_validate(value: str, *, label: str) -> str:
@@ -114,6 +124,41 @@ class StatusDefinition:
 
         _uuid_v4_validate(self.id, label=f"Status {self.name} create ID")
 
+    def payload(self) -> dict[str, object]:
+        """Return one canonical status payload.
+
+        Returns:
+            JSON-ready status object.
+        """
+
+        return {
+            "id": self.id,
+            "name": self.name,
+            "category": self.category,
+            "color": self.color,
+            "description": self.description,
+            "position": self.position,
+        }
+
+    @classmethod
+    def list_from_payload(cls, value: object) -> list["StatusDefinition"]:
+        """Parse one strict status list.
+
+        Args:
+            value: Candidate JSON value.
+
+        Returns:
+            Typed status definitions.
+        """
+
+        expected = {"id", "name", "category", "color", "description", "position"}
+        status_list: list[StatusDefinition] = []
+        for item in _object_list_parse(value, label="status list"):
+            if set(item) != expected:
+                raise LinearContractError("Configuration plan status has another shape")
+            status_list.append(cls(**item))
+        return status_list
+
 
 @dataclass(frozen=True, slots=True)
 class LinearLabel:
@@ -137,8 +182,43 @@ class LinearLabel:
         ):
             raise LinearContractError("Label description must be single-line text")
 
+    def payload(self) -> dict[str, str]:
+        """Return one canonical label payload.
 
-def _snapshot_definition_list_validate(value: object, *, expected_type: type[object], label: str) -> None:
+        Returns:
+            JSON-ready label object.
+        """
+
+        return {
+            "id": self.id,
+            "name": self.name,
+            "color": self.color,
+            "description": self.description,
+        }
+
+    @classmethod
+    def list_from_payload(cls, value: object) -> list["LinearLabel"]:
+        """Parse one strict label list.
+
+        Args:
+            value: Candidate JSON value.
+
+        Returns:
+            Typed labels.
+        """
+
+        expected = {"id", "name", "color", "description"}
+        label_list: list[LinearLabel] = []
+        for item in _object_list_parse(value, label="label list"):
+            if set(item) != expected:
+                raise LinearContractError("Configuration plan label has another shape")
+            label_list.append(cls(**item))
+        return label_list
+
+
+def _snapshot_definition_list_validate(
+    value: object, *, expected_type: type[object], label: str
+) -> None:
     """Validate one complete external definition list.
 
     Args:
@@ -147,7 +227,9 @@ def _snapshot_definition_list_validate(value: object, *, expected_type: type[obj
         label: Diagnostic collection name.
     """
 
-    if not isinstance(value, list) or any(not isinstance(item, expected_type) for item in value):
+    if not isinstance(value, list) or any(
+        not isinstance(item, expected_type) for item in value
+    ):
         raise LinearContractError(f"Linear snapshot {label} list has another shape")
     identifier_list = [item.id for item in value]
     if any(not identifier for identifier in identifier_list):
@@ -156,7 +238,9 @@ def _snapshot_definition_list_validate(value: object, *, expected_type: type[obj
         raise LinearContractError(f"Linear snapshot repeats one {label} identity")
 
 
-def _plan_definition_list_validate(value: object, *, expected_type: type[object], label: str) -> None:
+def _plan_definition_list_validate(
+    value: object, *, expected_type: type[object], label: str
+) -> None:
     """Validate one unambiguous planned definition list.
 
     Args:
@@ -165,10 +249,17 @@ def _plan_definition_list_validate(value: object, *, expected_type: type[object]
         label: Diagnostic collection name.
     """
 
-    if not isinstance(value, list) or any(not isinstance(item, expected_type) for item in value):
+    if not isinstance(value, list) or any(
+        not isinstance(item, expected_type) for item in value
+    ):
         raise LinearContractError(f"Configuration plan {label} list has another shape")
     identity_list = [
-        f"{item.kind}\x00{item.name}" if isinstance(item, ConfigurationConflict) else item.name for item in value
+        (
+            f"{item.kind}\x00{item.name}"
+            if isinstance(item, ConfigurationConflict)
+            else item.name
+        )
+        for item in value
     ]
     if len(identity_list) != len(set(identity_list)):
         raise LinearContractError(f"Configuration plan repeats one {label}")
@@ -188,13 +279,17 @@ class WorkflowConfigurationSnapshot:
 
         if not isinstance(self.destination, DestinationIdentity):
             raise LinearContractError("Linear snapshot destination has another shape")
-        _snapshot_definition_list_validate(self.issue_status_list, expected_type=StatusDefinition, label="issue status")
+        _snapshot_definition_list_validate(
+            self.issue_status_list, expected_type=StatusDefinition, label="issue status"
+        )
         _snapshot_definition_list_validate(
             self.project_status_list,
             expected_type=StatusDefinition,
             label="Project status",
         )
-        _snapshot_definition_list_validate(self.label_list, expected_type=LinearLabel, label="label")
+        _snapshot_definition_list_validate(
+            self.label_list, expected_type=LinearLabel, label="label"
+        )
         object.__setattr__(self, "issue_status_list", list(self.issue_status_list))
         object.__setattr__(self, "project_status_list", list(self.project_status_list))
         object.__setattr__(self, "label_list", list(self.label_list))
@@ -215,6 +310,27 @@ class ConfigurationConflict:
         single_line_text_validate(self.name, label="Conflict name")
         single_line_text_validate(self.reason, label="Conflict reason")
 
+    @classmethod
+    def list_from_payload(cls, value: object) -> list["ConfigurationConflict"]:
+        """Parse one strict conflict list.
+
+        Args:
+            value: Candidate JSON value.
+
+        Returns:
+            Typed conflicts.
+        """
+
+        expected = {"kind", "name", "reason"}
+        conflict_list: list[ConfigurationConflict] = []
+        for item in _object_list_parse(value, label="conflict list"):
+            if set(item) != expected:
+                raise LinearContractError(
+                    "Configuration plan conflict has another shape"
+                )
+            conflict_list.append(cls(**item))
+        return conflict_list
+
 
 def _label_plan_subset_require(
     current_label_list: list[LinearLabel],
@@ -228,7 +344,9 @@ def _label_plan_subset_require(
     """
 
     approved_label_by_name_map = {item.name: item for item in approved_label_list}
-    if any(approved_label_by_name_map.get(item.name) != item for item in current_label_list):
+    if any(
+        approved_label_by_name_map.get(item.name) != item for item in current_label_list
+    ):
         raise LinearContractError("Linear label plan changed after approval")
 
 
@@ -249,7 +367,8 @@ def _status_plan_subset_require(
     approved_status_by_name_map = {item.name: item for item in approved_status_list}
     if any(
         approved_status_by_name_map.get(item.name) is None
-        or replace(approved_status_by_name_map[item.name], id="") != replace(item, id="")
+        or replace(approved_status_by_name_map[item.name], id="")
+        != replace(item, id="")
         for item in current_status_list
     ):
         raise LinearContractError(f"Linear {label} plan changed after approval")
@@ -269,7 +388,9 @@ class ConfigurationPlan:
         """Reject malformed or ambiguous definition collections."""
 
         if not isinstance(self.destination, DestinationIdentity):
-            raise LinearContractError("Configuration plan destination has another shape")
+            raise LinearContractError(
+                "Configuration plan destination has another shape"
+            )
         self.destination.mutation_authority_require()
         _plan_definition_list_validate(
             self.issue_status_create_list,
@@ -281,14 +402,20 @@ class ConfigurationPlan:
             expected_type=StatusDefinition,
             label="Project status",
         )
-        _plan_definition_list_validate(self.label_create_list, expected_type=LinearLabel, label="label")
+        _plan_definition_list_validate(
+            self.label_create_list, expected_type=LinearLabel, label="label"
+        )
         _plan_definition_list_validate(
             self.conflict_list,
             expected_type=ConfigurationConflict,
             label="conflict",
         )
-        object.__setattr__(self, "issue_status_create_list", list(self.issue_status_create_list))
-        object.__setattr__(self, "project_status_create_list", list(self.project_status_create_list))
+        object.__setattr__(
+            self, "issue_status_create_list", list(self.issue_status_create_list)
+        )
+        object.__setattr__(
+            self, "project_status_create_list", list(self.project_status_create_list)
+        )
         object.__setattr__(self, "label_create_list", list(self.label_create_list))
         object.__setattr__(self, "conflict_list", list(self.conflict_list))
 
@@ -309,7 +436,9 @@ class ConfigurationPlan:
         """
 
         return self.can_mutate() and not (
-            self.issue_status_create_list or self.project_status_create_list or self.label_create_list
+            self.issue_status_create_list
+            or self.project_status_create_list
+            or self.label_create_list
         )
 
     def status_identifier_allocate(self) -> "ConfigurationPlan":
@@ -321,16 +450,23 @@ class ConfigurationPlan:
 
         return replace(
             self,
-            issue_status_create_list=[status.create_identifier_allocate() for status in self.issue_status_create_list],
+            issue_status_create_list=[
+                status.create_identifier_allocate()
+                for status in self.issue_status_create_list
+            ],
             project_status_create_list=[
-                status.create_identifier_allocate() for status in self.project_status_create_list
+                status.create_identifier_allocate()
+                for status in self.project_status_create_list
             ],
         )
 
     def status_identifier_require(self) -> None:
         """Require retry-stable UUID v4 identities for all status creates."""
 
-        for status in [*self.issue_status_create_list, *self.project_status_create_list]:
+        for status in [
+            *self.issue_status_create_list,
+            *self.project_status_create_list,
+        ]:
             status.create_identifier_require()
 
     def subset_require(self, approved: "ConfigurationPlan") -> None:
@@ -341,11 +477,17 @@ class ConfigurationPlan:
         """
 
         if not approved.can_mutate():
-            raise LinearContractError("Conflicting workflow configuration was not approvable")
+            raise LinearContractError(
+                "Conflicting workflow configuration was not approvable"
+            )
         if self.destination != approved.destination:
-            raise LinearContractError("Linear workflow destination changed after approval")
+            raise LinearContractError(
+                "Linear workflow destination changed after approval"
+            )
         if self.conflict_list:
-            raise LinearContractError("Linear workflow configuration changed to a conflicting state before apply")
+            raise LinearContractError(
+                "Linear workflow configuration changed to a conflicting state before apply"
+            )
         _status_plan_subset_require(
             self.issue_status_create_list,
             approved.issue_status_create_list,
@@ -376,11 +518,16 @@ class ConfigurationPlan:
                 "workspace_id": self.destination.workspace_id,
             },
             "conflict_list": [
-                {"kind": item.kind, "name": item.name, "reason": item.reason} for item in self.conflict_list
+                {"kind": item.kind, "name": item.name, "reason": item.reason}
+                for item in self.conflict_list
             ],
-            "issue_status_create_list": [_status_payload(item) for item in self.issue_status_create_list],
-            "label_create_list": [_label_payload(item) for item in self.label_create_list],
-            "project_status_create_list": [_status_payload(item) for item in self.project_status_create_list],
+            "issue_status_create_list": [
+                item.payload() for item in self.issue_status_create_list
+            ],
+            "label_create_list": [item.payload() for item in self.label_create_list],
+            "project_status_create_list": [
+                item.payload() for item in self.project_status_create_list
+            ],
         }
 
     def fingerprint(self) -> str:
@@ -418,7 +565,11 @@ class ConfigurationPlan:
             "label_create_list",
             "project_status_create_list",
         }
-        if not isinstance(payload, dict) or set(payload) != expected or payload["schema_version"] != 1:
+        if (
+            not isinstance(payload, dict)
+            or set(payload) != expected
+            or payload["schema_version"] != 1
+        ):
             raise LinearContractError("Configuration plan has another shape")
         destination_payload = payload["destination"]
         destination_expected = {
@@ -429,53 +580,28 @@ class ConfigurationPlan:
             "viewer_is_guest",
             "workspace_id",
         }
-        if not isinstance(destination_payload, dict) or set(destination_payload) != destination_expected:
-            raise LinearContractError("Configuration plan destination has another shape")
+        if (
+            not isinstance(destination_payload, dict)
+            or set(destination_payload) != destination_expected
+        ):
+            raise LinearContractError(
+                "Configuration plan destination has another shape"
+            )
         return cls(
             destination=DestinationIdentity(**destination_payload),
-            issue_status_create_list=_status_payload_list_parse(payload["issue_status_create_list"]),
-            project_status_create_list=_status_payload_list_parse(payload["project_status_create_list"]),
-            label_create_list=_label_payload_list_parse(payload["label_create_list"]),
-            conflict_list=_conflict_payload_list_parse(payload["conflict_list"]),
+            issue_status_create_list=StatusDefinition.list_from_payload(
+                payload["issue_status_create_list"]
+            ),
+            project_status_create_list=StatusDefinition.list_from_payload(
+                payload["project_status_create_list"]
+            ),
+            label_create_list=LinearLabel.list_from_payload(
+                payload["label_create_list"]
+            ),
+            conflict_list=ConfigurationConflict.list_from_payload(
+                payload["conflict_list"]
+            ),
         )
-
-
-def _status_payload(status: StatusDefinition) -> dict[str, object]:
-    """Return one canonical status payload.
-
-    Args:
-        status: Typed status definition.
-
-    Returns:
-        JSON-ready status object.
-    """
-
-    return {
-        "id": status.id,
-        "name": status.name,
-        "category": status.category,
-        "color": status.color,
-        "description": status.description,
-        "position": status.position,
-    }
-
-
-def _label_payload(label: LinearLabel) -> dict[str, str]:
-    """Return one canonical label payload.
-
-    Args:
-        label: Typed label definition.
-
-    Returns:
-        JSON-ready label object.
-    """
-
-    return {
-        "id": label.id,
-        "name": label.name,
-        "color": label.color,
-        "description": label.description,
-    }
 
 
 def _object_list_parse(value: object, *, label: str) -> list[dict[str, object]]:
@@ -490,62 +616,7 @@ def _object_list_parse(value: object, *, label: str) -> list[dict[str, object]]:
     """
 
     if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
-        raise LinearContractError(f"Configuration plan {label} must be a list of objects")
+        raise LinearContractError(
+            f"Configuration plan {label} must be a list of objects"
+        )
     return value
-
-
-def _status_payload_list_parse(value: object) -> list[StatusDefinition]:
-    """Parse one strict status list.
-
-    Args:
-        value: Candidate JSON value.
-
-    Returns:
-        Typed status definitions.
-    """
-
-    expected = {"id", "name", "category", "color", "description", "position"}
-    status_list: list[StatusDefinition] = []
-    for item in _object_list_parse(value, label="status list"):
-        if set(item) != expected:
-            raise LinearContractError("Configuration plan status has another shape")
-        status_list.append(StatusDefinition(**item))
-    return status_list
-
-
-def _label_payload_list_parse(value: object) -> list[LinearLabel]:
-    """Parse one strict label list.
-
-    Args:
-        value: Candidate JSON value.
-
-    Returns:
-        Typed labels.
-    """
-
-    expected = {"id", "name", "color", "description"}
-    label_list: list[LinearLabel] = []
-    for item in _object_list_parse(value, label="label list"):
-        if set(item) != expected:
-            raise LinearContractError("Configuration plan label has another shape")
-        label_list.append(LinearLabel(**item))
-    return label_list
-
-
-def _conflict_payload_list_parse(value: object) -> list[ConfigurationConflict]:
-    """Parse one strict conflict list.
-
-    Args:
-        value: Candidate JSON value.
-
-    Returns:
-        Typed conflicts.
-    """
-
-    expected = {"kind", "name", "reason"}
-    conflict_list: list[ConfigurationConflict] = []
-    for item in _object_list_parse(value, label="conflict list"):
-        if set(item) != expected:
-            raise LinearContractError("Configuration plan conflict has another shape")
-        conflict_list.append(ConfigurationConflict(**item))
-    return conflict_list
