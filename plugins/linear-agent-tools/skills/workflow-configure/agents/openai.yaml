@@ -1,0 +1,4 @@
+interface:
+  display_name: "Configure Linear Workflow"
+  short_description: "Prepare and verify one Linear workflow"
+  default_prompt: "Use $workflow-configure to prepare this Linear team workflow."

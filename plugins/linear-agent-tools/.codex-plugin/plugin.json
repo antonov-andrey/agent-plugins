@@ -1,0 +1,33 @@
+{
+  "name": "linear-agent-tools",
+  "version": "0.1.0+codex.20260804192740",
+  "description": "Source-independent Linear task graphs, local task execution, review, acceptance, merge, and exact cleanup workflows.",
+  "author": {
+    "name": "Andrey Antonov",
+    "url": "https://github.com/antonov-andrey"
+  },
+  "repository": "https://github.com/antonov-andrey/agent-plugins",
+  "license": "MIT",
+  "keywords": [
+    "codex",
+    "linear",
+    "development-workflow"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Linear Agent Tools",
+    "shortDescription": "Run a complete Linear-owned development workflow.",
+    "longDescription": "Linear Agent Tools configures a closed Linear workflow, publishes source-independent task graphs, and drives fresh-thread implementation, review, acceptance, merge, and exact cleanup without Symphony.",
+    "developerName": "Andrey Antonov",
+    "category": "Productivity",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Configure the Linear development workflow.",
+      "Turn this approved source into a Linear task graph.",
+      "Run the next ready Linear task in a fresh thread."
+    ]
+  }
+}

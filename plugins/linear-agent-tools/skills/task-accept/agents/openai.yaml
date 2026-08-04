@@ -1,0 +1,4 @@
+interface:
+  display_name: "Accept Linear Outcome"
+  short_description: "Accept the complete current Linear outcome"
+  default_prompt: "Use $task-accept to verify this Linear outcome."

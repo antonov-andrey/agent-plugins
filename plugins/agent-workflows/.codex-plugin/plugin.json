@@ -1,7 +1,7 @@
 {
   "name": "agent-workflows",
-  "version": "0.1.0+codex.20260804075240",
-  "description": "Reusable audits, explanations, tracked goal lifecycle, instruction migration, publication, and subagent orchestration.",
+  "version": "0.1.0+codex.20260804192740",
+  "description": "Reusable audits, explanations, source-contract authoring, instruction migration, Git publication, and subagent orchestration.",
   "author": {
     "name": "Andrey Antonov",
     "url": "https://github.com/antonov-andrey"
@@ -17,7 +17,7 @@
   "interface": {
     "displayName": "Agent Workflows",
     "shortDescription": "Run reusable agent task workflows.",
-    "longDescription": "Agent Workflows provides reusable procedures for audits, explanations, Git publication, tracked goal authoring, checkpoints, merge, deletion, instruction migration, review, and sequential subagent batches.",
+    "longDescription": "Agent Workflows provides reusable procedures for audits, explanations, Git publication, freely revisable source-contract authoring, instruction migration, and sequential subagent batches.",
     "developerName": "Andrey Antonov",
     "category": "Productivity",
     "capabilities": [
@@ -26,7 +26,7 @@
     ],
     "defaultPrompt": [
       "Audit this code change.",
-      "Clarify this design and prepare a specification and goal.",
+      "Clarify this design and publish a freely revisable specification and goal source pair.",
       "Commit and publish the current repository changes."
     ]
   }

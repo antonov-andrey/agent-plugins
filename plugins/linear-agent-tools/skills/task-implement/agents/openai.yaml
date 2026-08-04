@@ -1,0 +1,4 @@
+interface:
+  display_name: "Implement Linear Task"
+  short_description: "Implement one ready Linear issue safely"
+  default_prompt: "Use $task-implement to implement this ready Linear issue."

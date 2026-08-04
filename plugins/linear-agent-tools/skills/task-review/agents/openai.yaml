@@ -1,0 +1,4 @@
+interface:
+  display_name: "Review Linear Task"
+  short_description: "Review one Linear task in a fresh thread"
+  default_prompt: "Use $task-review to review this ready Linear issue."

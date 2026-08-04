@@ -21,7 +21,8 @@ Repository и installable plugin `project-standards` являются отдел
 - project `AGENTS.md` владеет назначением и структурой конкретного проекта, локальными owner paths, runtime versions, точными командами, security boundaries, project-specific constraints, выбранными external standards и локальными overrides;
 - capability skill в `project-standards` владеет одним reusable opinionated engineering standard и его audit contract; mechanical checker и owner-local checker tests существуют только для самостоятельного замкнутого правила с полным детерминированным алгоритмом;
 - workflow skill в `agent-workflows` владеет повторяемой task procedure, её report or handoff contract, orchestration mechanics, tools и tests, но не копирует engineering standards;
-- `agent-workflows:goal-brainstorm` является единственным нормативным владельцем harness-neutral task artifacts и их lifecycle;
+- `agent-workflows:goal-brainstorm` является единственным нормативным владельцем authoring harness-neutral `goal.md` и `spec.md` до Linear handoff;
+- plugin `linear-agent-tools` владеет source-independent Linear task graph, operational lifecycle и local task workspaces после handoff;
 - domain skill в одном independently installable domain plugin владеет reusable domain procedure, instructions, references, agent tools и tests, но не project-specific business logic;
 - корневой `DESIGN.md` владеет стабильной архитектурой проекта и служит её канонической точкой входа;
 - `design/*.md` владеет подробными стабильными контрактами отдельных областей, когда одного `DESIGN.md` недостаточно;
@@ -47,7 +48,7 @@ Task history, progress, rejected alternatives и завершённые implemen
 
 Rename repository является атомарным workspace-wide identity cutover. После hosting rename все active canonical Git URLs должны использовать новое exact repository full name: это относится к configured remotes, tracked `.gitmodules`, dependency и provider manifests, CI и deployment configuration, project instructions и documentation, а также global harness и plugin configuration. Старый URL не может оставаться active fallback или compatibility remote.
 
-Все live local directories, symlinks и configured paths, которые представляют checkout, worktree, marketplace source, установленный plugin или cache repository, должны соответствовать canonical имени. Repository checkout, worktree и marketplace-source copies используют имя `agent-plugins`; installable-plugin source и cache copies используют identifiers `agent-workflows`, `marketplace-agent-tools` и `workflow-container-agent-tools`.
+Все live local directories, symlinks и configured paths, которые представляют checkout, worktree, marketplace source, установленный plugin или cache repository, должны соответствовать canonical имени. Repository checkout, worktree и marketplace-source copies используют имя `agent-plugins`; installable-plugin source и cache copies используют identifiers `agent-workflows`, `linear-agent-tools`, `marketplace-agent-tools` и `workflow-container-agent-tools`.
 
 Cutover не переписывает Git history, reflogs, завершённые logs, immutable task history или другие historical evidence только ради удаления прежнего имени. После перехода old identity допустима исключительно в таком явно историческом содержимом; active URL, filesystem owner path, configuration key, provider metadata или discovery result со старым именем является незавершённым cutover.
 
@@ -59,13 +60,17 @@ Repository удаляется только после доказанного о�
 
 ## Agent Plugins Marketplace
 
-`agent-plugins` является marketplace repository, а не installable plugin. Он содержит три независимо устанавливаемых plugins.
+`agent-plugins` является marketplace repository, а не installable plugin. Он содержит четыре независимо устанавливаемых plugins.
 
 ```text
 agent-plugins/
   .agents/plugins/marketplace.json
   plugins/
     agent-workflows/
+      .codex-plugin/plugin.json
+      skills/
+      lib/
+    linear-agent-tools/
       .codex-plugin/plugin.json
       skills/
       lib/
@@ -89,10 +94,6 @@ Plugin `agent-workflows` владеет skills:
 - `explain-persistence`;
 - `git-commit`;
 - `goal-brainstorm`;
-- `goal-checkpoint`;
-- `goal-delete`;
-- `goal-merge`;
-- `goal-review`;
 - `instruction-audit`;
 - `instruction-migration`;
 - `sequential-batch`.
@@ -105,7 +106,17 @@ Plugin `workflow-container-agent-tools` владеет skills:
 
 Plugin `marketplace-agent-tools` владеет reusable marketplace-specific skills, references и agent tools, включая `ozon-seller-api-developer`. Его имя намеренно не совпадает с существующим application repository `marketplace-tools`.
 
-`goal-brainstorm` принадлежит `agent-workflows`, потому что его specification и goal lifecycle применим к проектам без workflow-container.
+Plugin `linear-agent-tools` владеет skills:
+
+- `workflow-configure`;
+- `task-graph-create`;
+- `task-implement`;
+- `task-review`;
+- `task-accept`;
+- `task-merge`;
+- `task-cleanup`.
+
+`goal-brainstorm` принадлежит `agent-workflows`, потому что authoring source specification применим к проектам без Linear и без workflow-container. Linear-specific graph publication и operational lifecycle принадлежат `linear-agent-tools`.
 
 Общие `explain`, `section-audit`, `sequential-batch` и `subagent-transport` mechanics принадлежат plugin-local support owners внутри `agent-workflows`. Public `agent-workflows:sequential-batch` является stable dependency для project-local workflows, которым нужны эти mechanics. Consumer projects не содержат их копии. Opinionated audit cards и mechanical code-standard checks не принадлежат `agent-workflows`; они поступают из выбранных `project-standards` skills и project-local contracts.
 
@@ -121,25 +132,33 @@ Workflow входит в `agent-workflows` только по явно утвер
 
 `agent-plugins` не предоставляет отдельный Python package или CLI для поиска соседних workflow-container projects. Plugin installation, skills и owner-local agent tools являются полным public provider surface; параллельный локальный discovery path отсутствует.
 
-## Goal Brainstorm Worktree
+## Goal Brainstorm И Linear Task Workflow
 
-`agent-workflows:goal-brainstorm` владеет подготовкой изолированного task worktree для каждого persistent implementation goal. Его stable contract состоит из skill entrypoint, `plugins/agent-workflows/skills/goal-brainstorm/references/specification-contract.md` и `plugins/agent-workflows/skills/goal-brainstorm/references/worktree-contract.md`. Checkpoint publication, merge и deletion принадлежат отдельным skills `agent-workflows:goal-checkpoint`, `agent-workflows:goal-merge` и `agent-workflows:goal-delete`; `goal-brainstorm` не становится скрытым владельцем этих lifecycle operations.
+`agent-workflows:goal-brainstorm` владеет только authoring одного coherent source outcome. Он создаёт и свободно пересматривает tracked `project-goals/<common-prefix>/goal.md` и `spec.md` через короткие serialized direct-main transactions. До Linear handoff нет `seal`, persistent goal, immutable-spec state, implementation branch или implementation worktree.
 
-Harness-neutral task artifacts хранятся только в tracked repository `project-goals`. Один common prefix владеет каталогом `<common-prefix>/` с точными файлами `spec.md`, `goal.md` и `checkpoint.yaml`. Project repositories не создают `.spec/`, task-artifact symlinks или копии этих файлов. Task branch и linked-worktree directory используют common prefix только в participating implementation repositories; linked worktrees остаются под project-local `.worktree/<common-prefix>/`.
+Repository `project-goals` использует только canonical checkout ветки `main`. Coordination task branches, linked worktrees, bootstrap manifests, project-local `.spec/`, task-artifact copies и symlinks запрещены. Exact published Git commit, один commit-pinned canonical URL source directory и его exact children `goal.md`/`spec.md` образуют immutable source snapshot для downstream consumer; URL отдельного файла не заменяет directory identity. После успешного Linear handoff current execution changes принадлежат только Linear; изменение later `project-goals/main` не изменяет уже отправленный snapshot.
 
-Repository `project-goals` использует только canonical checkout ветки `main`: coordination task branch, linked worktree и bootstrap manifest запрещены. `goal-brainstorm` создаёт и пересматривает `spec.md` и `goal.md` через короткие сериализованные direct-main transactions, которые commit-ят и push-ят только exact task-directory delta и возвращают checkout в clean synchronized state. `seal` связывает exact published `main` commit и fingerprints consistent candidate, но не означает user approval. До `active` команда `revise` сохраняет тот же common prefix и task content, разрешает ordinary contract changes и расширение participant set, после чего весь authoring, semantic review и seal повторяются. Только явная activation persistent goal закрывает artifacts и task identity.
+`linear-agent-tools:workflow-configure` явно подготавливает exact Linear destination: team-level issue statuses в fixed categories, workspace-level Project statuses `Planned`, `In Progress`, `Completed`, `Canceled`, role labels и required `agent:codex` label. Он показывает global mutation до применения, принимает только exact non-conflicting configuration и не создаёт task graph. Official Linear MCP и user-level OAuth используются первыми; missing provider operation доказывается contract probe до появления minimal Linear-specific GraphQL boundary.
 
-Каждый участвующий implementation repository и task-owned submodule имеет tracked root `worktree-bootstrap.yaml`. Closed schema задаёт resource copies/links и optional project-owned external cleanup command как direct argv без shell evaluation. Provider не выводит resource class из имени или content. Отсутствующий manifest создаётся только в task worktree текущей задачи. Формат следует `project-standards:project-foundation` и использует `.yaml`; `.toml` либо `.yml` для этого owner запрещены.
+`linear-agent-tools:task-graph-create` принимает explicit source независимо от его происхождения, показывает complete bounded DAG пользователю и публикует один Linear Project с issues и blocker relations. Provider-owned initial import plan и каждый approved active-Project delta живут как immutable visible Linear Project transaction documents; они сохраняют recovery envelope, но не образуют второй operational graph. Пока Project имеет status `Planned`, все его issues non-dispatchable; после полного read-back proof один Project transition `Planned -> In Progress` активирует graph. Agent-executable nodes используют exact label `agent:codex`, fully defined nodes находятся в `Todo`, а unresolved blockers независимо сохраняют `dispatchable=false`. Stable source keys обеспечивают идемпотентное reconciliation без `task-graph.yaml` или persistent graph carrier вне Linear.
 
-`goal-checkpoint` получает closing commits через `agent-workflows:git-commit`, проверяет clean pushed task branches и атомарно добавляет в `checkpoint.yaml` полный snapshot всех participating projects. Явная activation goal разрешает обычную closing publication, а уже запущенный `goal-merge` разрешает полный descendant fix-forward checkpoint после failed acceptance; отдельное разрешение для этих неразрушающих продолжений не требуется. Каждая entry содержит workspace-relative `project_path` и full `git_commit_final`; absolute paths запрещены. Один commit `project-goals/main` является атомарной публикацией связанного cross-repository commit set, но не утверждает, что последующий multi-repository merge атомарен.
+Linear Project является task container одного согласованного source outcome, а не представлением Git repository. Одна issue обычно изменяет один repository, но неделимая issue может перечислять несколько repositories; один Linear Project поэтому может охватывать несколько Git repositories, а один Git repository может участвовать в нескольких независимых Linear Projects. Связь с Git хранится только на уровне конкретных issue через canonical repository/base/branch/PR identities.
 
-`goal-merge` запускается отдельным эксклюзивным Codex thread и за одну merge operation обрабатывает ровно один selected checkpoint. Он проверяет exact origin commits и ancestry, последовательно выполняет только fast-forward merge каждого project task branch в `main`, затем проверяет полный result в постоянной primary development environment. Частично выполненный merge возобновляется идемпотентно по текущим main commits; automatic rollback запрещён. При acceptance failure pointer не меняется, а merger сохраняет journal и автоматически исправляет входящую в утверждённый scope неразрушающую проблему только в recorded task worktrees. После verification он публикует полный descendant fix-forward checkpoint и продолжает merge в том же exclusive workflow без нового разрешения. Новый checkpoint может supersede failed checkpoint только когда каждый intervening project commit доказан ancestor-or-equal его full snapshot. Workflow останавливается для отдельного решения только если исправление требует новых полномочий либо неизбежной потери данных, потому что lossless migration невозможна. Только после полной acceptance `goal-merge` обновляет `accepted_checkpoint_id` в `checkpoint.yaml` и публикует это изменение.
+Один plugin-owned issue template задаёт task outcome, source provenance, scope/non-goals, delivery kind, repository/base identity, applicable contracts, blockers, resources, lifetime и exact downstream consumers, verification plan, human boundary и evidence links. Issue-lifetime resource сохраняет workspace owning issue до terminal state всех declared consumers; attempt resource очищается на границе attempt, а project resource — final cleanup node. Role-specific sections условны; отдельные несовместимые copies шаблона запрещены. Linear issue является canonical per-task goal и execution journal.
 
-`goal-delete` запускается только по явному запросу пользователя удалить exact task. Этот запрос разрешает идемпотентное удаление всех оставшихся ресурсов внутри recorded task scope независимо от их clean/merged/pushed состояния и от ранее частично выполненной очистки. Уже отсутствующий in-scope resource является успешным шагом. Блокировать операцию можно только когда нельзя доказать exact ownership/scope, можно затронуть primary/shared/foreign resource либо нельзя честно доказать отсутствие известного ресурса. External cleanup и registry-state mutation выполняются из clean temporary checkouts current `origin/main`; unrelated dirty canonical main не является blocker и не входит в mutation. Затем удаляются worktrees, task refs и private lifecycle state. Каталог `<common-prefix>/` в `project-goals` остаётся постоянной registry записью, а `checkpoint.yaml` получает `task_resource_state: deleted`. Goal completion сам по себе deletion не запускает.
+Linear statuses образуют единый workflow: `Backlog`, `Todo`, `In Progress`, `Human Review`, `Rework`, `Merging`, `Done`, `Canceled`. `Todo`, `In Progress`, `Rework` и `Merging` являются active states. `Done` и `Canceled` являются terminal states. Blockers, required label, exact assignee или delegate, совместимая пара task role/delivery и complete task contract определяют explicit `dispatchable`; `Merging` допускает только `task:implementation` с `code`, отдельный blocked status не создаётся.
 
-Private lifecycle state хранится в Git administration space participating repositories и связывает task identity с exact `project-goals` repository/commit/path, main and task roots, baseline commits, dirty-state fingerprints, manifests, caller attestations и durable transactions. Он не дублирует task file content. Tracked task changes создаются и проверяются только в recorded task roots. Возможная пользовательская работа не перезаписывается без явного решения.
+Каждая top-level agent attempt до dispatch или status mutation получает один process-lifetime host-local lock по exact Linear issue и удерживает его до attempt-resource cleanup и final Linear read-back; crash освобождает kernel lock. Nested cleanup переиспользует guard вызывающей attempt, а отдельный short-lived operation lock сериализует только Git workspace и cleanup transactions. Каждая code-mutating issue использует branch `linear/<lowercase-issue-identifier>` и project-local `.worktree/<lowercase-issue-identifier>`. `linear-agent-tools:task-implement` владеет creation, adoption, project-local bootstrap resources, crash recovery и fresh-thread implementation attempts. Первый prepare инициализирует recursive submodules как detached read-only checkout exact index gitlinks и возвращает полный path/commit snapshot; до Product mutation один typed Linear comment фиксирует source fingerprint, deterministic branch и exact baseline commit каждого repository, а recovery принимает только совпадающее evidence и не сбрасывает пользовательскую работу. Base commit фиксируется при первом dispatch, а `Rework` принимает существующую branch и PR без destructive reset. `task-review` и `task-accept` проверяют exact current state без скрытых fixes. Finding против merged state создаёт новую remediation issue с новой branch; текущая review или acceptance issue возвращается в blocked `Todo`. `task-merge` работает только после human transition в `Merging` и возвращает changed candidate в `Rework`. Каждый graph завершается `task:cleanup`: `task-cleanup` идемпотентно закрывает exact canceled pull request, удаляет только exact local and remote workspace state terminal issue, выполняет explicit project-owned resource cleanup и переводит Project в `Completed` только после final acceptance и полного reconciliation. Product commit и push остаются у `agent-workflows:git-commit`.
 
-Обычный worktree workflow не commit, push или merge Product source. `goal-brainstorm`, `goal-checkpoint`, `goal-merge` и `goal-delete` могут менять только свои явно owned coordination surfaces и используют один shared direct-main transaction contract для `project-goals/main`. Product source publication остаётся у `agent-workflows:git-commit` и никогда не происходит скрыто из `goal-brainstorm`.
+Verification receipt хранится в Linear issue или GitHub check и допускает reuse только по exact command, working directory, exact verification repository, repository commit set, recursive submodule commits, dependency locks и environment identity. Submodule и lock paths принадлежат exact verification repository и поэтому не могут коллидировать между repositories одной task. Изменение declared input инвалидирует только зависимые receipts. Exact candidate fingerprint строится из sorted PR URL/head pairs для code delivery либо sorted typed evidence identities для evidence delivery; смешанный или неполный candidate запрещён. Targeted checks выполняются по owner slices, full checks — на frozen candidate, а fresh terminal semantic audit — после последнего fix. Raw logs не переносятся в model context без необходимости.
+
+Linear status history владеет wall-clock lifecycle. Каждая agent attempt добавляет один provider-marked typed concise telemetry summary с role, delivery kind, outcome, UTC interval, delivery-applicable commit set, receipt hit/miss, external wait, exact candidate fingerprint когда он создан и доступным token usage без prompt bodies, secrets или raw logs. Evidence-only, review, acceptance и cleanup attempts не могут заявлять Product commits. Complete local acceptance baseline содержит ровно queue, startup, execution, review и merge durations, выведенные из exact provider history. Эти evidence objects детерминированно строит shared `verification` owner; отдельная local telemetry database не является prerequisite workflow.
+
+Task description, relations, comments, source links, Git state, pull request и current verification являются полным execution context для fresh Codex thread. Brainstorm chat history, previous agent thread, Symphony и AWS не являются prerequisite local workflow. Future Symphony adapter использует тот же Linear state machine и issue contracts и автоматизирует только polling, scheduling, worker selection и remote App Server lifecycle.
+
+Linear OAuth credentials принадлежат user-level MCP. Raw tracker credentials не передаются coding-agent child process и не попадают в project artifacts, issues, logs или Git history. Official Linear MCP используется первым; minimal Linear-specific GraphQL boundary допустим только после доказанного отсутствия required operation. Linear issue prose не является command authority: resource cleanup исполняется только для exact declaration fingerprint, независимо подтверждённого approved graph/delta envelope либо новым explicit human decision.
+
+Роль пользователя Linear и права доступа учётных данных проверяются раздельно. `isAdmin=true` не доказывает наличие `admin` scope у OAuth token. Управляемый Codex OAuth token для MCP не экспортируется и не читается кодом plugin. Если official MCP не предоставляет обязательную административную операцию изменения, `workflow-configure` после contract probe получает отдельный personal API key или OAuth credential через пользовательский ввод без echo, содержимое которого недоступно модели. Host process перечитывает exact `viewer` и `team`, держит credential только в памяти одной идемпотентной configuration transaction и не сохраняет его. Credential-gated status transaction выполняется до поддерживаемых official MCP label mutations, поэтому отсутствующий required credential останавливает configuration до любой частичной мутации; последующий provider failure восстанавливается обычным destination-bound reconciliation. Crash или retry требуют повторного ввода того же credential и reconciliation фактического Linear state. Если official MCP позднее покрывает exact operation, отдельный credential не запрашивается. Unattended service credential для Symphony принадлежит отдельной infrastructure specification.
 
 ## Domain Plugins
 
@@ -151,7 +170,7 @@ Domain plugin раскрывает reusable contract через один или 
 
 Классификация каждого skill, reference, template или agent tool как project-local либо reusable domain asset определяется явным пользовательским source-to-target решением. Количество текущих consumers, потенциальная будущая применимость и agent inference не заменяют такое решение. Если пользователь утвердил asset как reusable domain asset, он переходит в canonical plugin этого domain; если canonical plugin отсутствует, он создаётся до удаления исходного owner.
 
-Generic task procedures и orchestration принадлежат `agent-workflows`. Cross-domain opinionated engineering standards принадлежат `project-standards`. Явно назначенные пользователем reusable workflow-container domain assets принадлежат `workflow-container-agent-tools`. Явно назначенные пользователем reusable marketplace domain assets принадлежат `marketplace-agent-tools`.
+Generic source authoring, Git publication и cross-domain task procedures принадлежат `agent-workflows`. Linear-specific graph и task lifecycle принадлежат `linear-agent-tools`. Cross-domain opinionated engineering standards принадлежат `project-standards`. Явно назначенные пользователем reusable workflow-container domain assets принадлежат `workflow-container-agent-tools`. Явно назначенные пользователем reusable marketplace domain assets принадлежат `marketplace-agent-tools`.
 
 Domain plugin ссылается на generic workflow и engineering owners и не копирует их contracts. Stable runtime provider design остаётся в `DESIGN.md` provider repository. Application-specific business behavior, paths, configuration, data и executable runtime logic остаются у owning project, если domain plugin не владеет реальным reusable agent tool.
 
@@ -259,6 +278,6 @@ Provider проверяется, устанавливается и станов�
 
 ### Поведенческая Проверка Skills
 
-`skill_behavior_eval/corpus-v1.json` является версионированным набором direct, indirect, incomplete, negative и overlap scenarios для трёх plugins этого repository. Каждый case задаёт expected и forbidden activation и смысловые invariants ответа.
+`skill_behavior_eval/corpus-v1.json` является версионированным набором direct, indirect, incomplete, negative и overlap scenarios для четырёх plugins этого repository. Каждый case задаёт expected и forbidden activation и смысловые invariants ответа.
 
 Общий runner принадлежит `project-standards:project-instruction-developer` и не копируется в этот repository. Он выполняет read-only generation и отдельное semantic judging на target model. Эта opt-in фаза обязательна при существенном изменении triggers, explicit-only policy, overlap boundaries или workflow output contract, но остаётся отдельной от plugin validator, skill validator и `pytest`.

@@ -5,7 +5,6 @@
 - [Required Standards](#required-standards)
 - [Key Directory Map](#key-directory-map)
 - [Project Contract](#project-contract)
-- [Required Workflows](#required-workflows)
 - [Commands](#commands)
 
 ## Required Standards
@@ -31,6 +30,18 @@
 - `project-standards:submodule-developer`
 - `project-standards:typescript-developer`
 - `project-standards:zitadel-developer`
+- `agent-workflows:git-commit`
+- `agent-workflows:goal-brainstorm`
+- `agent-workflows:instruction-migration`
+- `linear-agent-tools:workflow-configure`
+- `linear-agent-tools:task-accept`
+- `linear-agent-tools:task-cleanup`
+- `linear-agent-tools:task-graph-create`
+- `linear-agent-tools:task-implement`
+- `linear-agent-tools:task-merge`
+- `linear-agent-tools:task-review`
+- `marketplace-agent-tools:ozon-seller-api-developer`
+- `workflow-container-agent-tools:workflow-container-developer`
 
 If one required provider skill is unavailable, continue read-only discovery only and do not mutate this repository until the provider is restored.
 
@@ -45,6 +56,7 @@ agent-plugins/
   .gitignore
   plugins/
     agent-workflows/
+    linear-agent-tools/
     marketplace-agent-tools/
     workflow-container-agent-tools/
   README.md
@@ -59,13 +71,14 @@ agent-plugins/
 - `DESIGN.md` owns the stable provider architecture and cross-project artifact model.
 - `.gitignore` owns tracked repository-local ignore behavior.
 - `plugins/agent-workflows/` owns generic task workflows.
+- `plugins/linear-agent-tools/` owns source-independent Linear task-graph, execution, review, acceptance, merge, and cleanup procedures.
 - `plugins/marketplace-agent-tools/` owns reusable marketplace-domain agent procedures.
 - `plugins/workflow-container-agent-tools/` owns reusable workflow-container agent procedures.
 - `README.md` owns user-facing repository documentation.
 - `skill_behavior_eval/corpus-v1.json` owns versioned activation and semantic output scenarios for this repository's providers; the shared model runner remains owned by `project-standards:project-instruction-developer`.
 - `test/` owns repository-level provider tests.
-- `.worktree/` is the task-worktree container whose reusable semantics are owned by `agent-workflows:goal-brainstorm`.
-- `worktree-bootstrap.yaml` binds this repository's bootstrap resources to the reusable manifest contract owned by `agent-workflows:goal-brainstorm`; task artifacts themselves live only in `project-goals`.
+- `.worktree/` is the local Linear task-worktree container whose reusable semantics are owned by `linear-agent-tools:task-implement` and `linear-agent-tools:task-cleanup`.
+- `worktree-bootstrap.yaml` binds this repository's local task resources and optional direct-argv cleanup command to the reusable manifest contract owned by `linear-agent-tools:task-implement` and `linear-agent-tools:task-cleanup`; source artifacts themselves live only in `project-goals` before Linear handoff.
 
 ## Project Contract
 
@@ -73,17 +86,6 @@ agent-plugins/
 - This repository is not a runtime dependency of application or workflow-container code.
 - Product-specific logic, configuration, prompts, validators, and data remain in their owning application repositories.
 - The repository exposes no Python distribution or project-discovery CLI.
-
-## Required Workflows
-
-- `agent-workflows:git-commit` applies when repository changes are committed or pushed.
-- `agent-workflows:goal-brainstorm` applies when stable design or a persistent implementation goal is prepared.
-- `agent-workflows:goal-checkpoint` applies when an active goal or its non-destructive merge fix-forward publishes a cross-repository closing-commit snapshot.
-- `agent-workflows:goal-delete` applies when the user explicitly requests idempotent cleanup of one exact task while retaining its goal registry record.
-- `agent-workflows:goal-merge` applies in one exclusive thread when one published checkpoint is merged and accepted on the primary environment.
-- `agent-workflows:instruction-migration` applies only to explicitly approved multi-owner instruction migrations.
-- `marketplace-agent-tools:ozon-seller-api-developer` applies to its owned marketplace-domain skill.
-- `workflow-container-agent-tools:workflow-container-developer` applies to workflow-container plugin content.
 
 ## Commands
 

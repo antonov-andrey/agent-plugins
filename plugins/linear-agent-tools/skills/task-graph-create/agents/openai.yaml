@@ -1,0 +1,4 @@
+interface:
+  display_name: "Publish Linear Task Graph"
+  short_description: "Publish one source as a Linear task graph"
+  default_prompt: "Use $task-graph-create to publish this source into Linear."

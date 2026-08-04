@@ -1,0 +1,4 @@
+interface:
+  display_name: "Clean Linear Task Resources"
+  short_description: "Clean resources owned by one Linear task"
+  default_prompt: "Use $task-cleanup to clean this terminal Linear task."

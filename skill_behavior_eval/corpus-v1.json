@@ -11,8 +11,7 @@
         "agent-workflows:code-audit"
       ],
       "forbidden_skill_list": [
-        "agent-workflows:code-antipattern-audit",
-        "agent-workflows:goal-review"
+        "agent-workflows:code-antipattern-audit"
       ],
       "semantic_invariant_list": [
         {
@@ -235,155 +234,205 @@
       "id": "direct-goal-brainstorm",
       "working_directory": "..",
       "working_directory_mode": "same-branch",
-      "prompt": "Use $agent-workflows:goal-brainstorm to turn a proposed multi-repository architecture change with common prefix 2026-07-30-multi-repository-architecture into approved stable contracts and a persistent spec/goal pair. The canonical coordination repository is /workspace/project-goals and the approved implementation roots are /workspace/architecture-owner and /workspace/runtime-owner. One implementation repository has no worktree bootstrap manifest and one clean initialized submodule has drifted from its recorded gitlink. Explain the required sequence among design approval, central specification publication, isolated worktree preparation, stable-owner document updates, paired goal creation, sealing, and later goal activation. Do not implement it.",
-      "expected_skill_list": [
-        "agent-workflows:goal-brainstorm"
-      ],
-      "forbidden_skill_list": [
-        "agent-workflows:instruction-migration",
-        "agent-workflows:git-commit"
-      ],
+      "prompt": "Use $agent-workflows:goal-brainstorm to clarify a coherent multi-repository architecture outcome and publish 2026-08-10-example/goal.md plus spec.md in /workspace/project-goals. Explain the approval and publication boundary without implementing it.",
+      "expected_skill_list": ["agent-workflows:goal-brainstorm"],
+      "forbidden_skill_list": ["linear-agent-tools:task-graph-create", "agent-workflows:git-commit"],
       "semantic_invariant_list": [
         {
-          "id": "approval-before-contract-write",
-          "text": "The response obtains design approval, publishes the central specification through the serialized direct-main project-goals transaction, prepares every implementation worktree before stable-owner changes, explicitly records contracts_authored after validated authoring and before semantic review or goal sealing, and asks separately about later goal activation; only after successful persistent-goal creation does it record and freshly validate active state."
+          "id": "freely-revisable-source",
+          "text": "The response iterates design with the user, then writes and validates the exact goal.md/spec.md pair through one serialized atomic direct-main project-goals transaction; the pair remains freely revisable before Linear handoff."
         },
         {
-          "id": "worktree-isolation",
-          "text": "In one explicit handoff, the response names /workspace/project-goals, its 2026-07-30-multi-repository-architecture/spec.md, goal.md, and checkpoint.yaml, branch 2026-07-30-multi-repository-architecture, and both exact implementation worktree roots. It states that project-goals has no task branch, linked worktree, bootstrap manifest, local .spec copy, or task-artifact symlink and binds implementation commands to those roots until goal-merge."
-        },
-        {
-          "id": "repair-before-question",
-          "text": "The response treats the missing initial manifest and clean submodule drift as deterministic preparation repairs, then repeats complete validation instead of stopping or asking the user to choose an unambiguous correction."
-        },
-        {
-          "id": "no-implementation",
-          "text": "The response does not begin Product implementation, checkpoint, merge, or deletion; it distinguishes the authorized exact project-goals direct-main contract commits and pushes from forbidden implementation-repository publication."
+          "id": "authoring-boundary",
+          "text": "The response creates no task graph, checkpoint, branch, worktree, persistent harness goal, seal, implementation change, or hidden lifecycle state."
         }
       ]
     },
     {
-      "id": "direct-goal-brainstorm-accepted-main-commit-drift",
+      "id": "indirect-goal-brainstorm-revision",
       "working_directory": "..",
       "working_directory_mode": "same-branch",
-      "prompt": "Use $agent-workflows:goal-brainstorm for an active task coordinated by /workspace/project-goals and rooted at /workspace/architecture-owner/.worktree/2026-07-30-multi-repository-architecture. Validation reports committed main overlap in /workspace/architecture-owner at exact current commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa for AGENTS.md and DESIGN.md. I explicitly confirm that this commit is independent main work that must be preserved. Explain and perform the next workflow action conceptually; do not change real files.",
-      "expected_skill_list": [
-        "agent-workflows:goal-brainstorm"
-      ],
-      "forbidden_skill_list": [
-        "agent-workflows:git-commit",
-        "agent-workflows:instruction-migration"
-      ],
+      "prompt": "Revise the still-unsubmitted project-goals source 2026-08-10-example after our new design decision, keeping goal.md and spec.md coherent. Do not create implementation tasks yet.",
+      "expected_skill_list": ["agent-workflows:goal-brainstorm"],
+      "forbidden_skill_list": ["linear-agent-tools:task-graph-create", "linear-agent-tools:task-implement"],
       "semantic_invariant_list": [
         {
-          "id": "exact-attested-command",
-          "text": "Because the user already confirmed the ambiguity, the response does not ask again. It invokes or names accept-main-commit-drift with goals repository /workspace/project-goals, common prefix 2026-07-30-multi-repository-architecture, main repository /workspace/architecture-owner, full commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, and both exact paths AGENTS.md and DESIGN.md."
-        },
-        {
-          "id": "preserve-and-revalidate",
-          "text": "The response preserves both main and task content, does not edit private state directly, and requires complete active validation after the durable attestation."
-        },
-        {
-          "id": "no-git-transition",
-          "text": "The response does not reset, checkout, rebase, commit, merge, push, remove a worktree, or treat the attestation as authorization for later drift."
+          "id": "same-write-path",
+          "text": "Initial authoring and pre-handoff revision use the same pair-level write transaction; there is no revise command, immutable-spec gate, branch, or activation state."
         }
       ]
     },
     {
-      "id": "direct-goal-checkpoint",
+      "id": "direct-linear-workflow-configure",
       "working_directory": "..",
       "working_directory_mode": "same-branch",
-      "prompt": "Use $agent-workflows:goal-checkpoint to publish the next closing snapshot for approved task 2026-07-30-multi-repository-architecture coordinated by /workspace/project-goals. Explain the validation and publication boundary without changing real files.",
-      "expected_skill_list": [
-        "agent-workflows:git-commit",
-        "agent-workflows:goal-checkpoint"
-      ],
-      "forbidden_skill_list": [
-        "agent-workflows:goal-brainstorm",
-        "agent-workflows:goal-merge"
-      ],
+      "prompt": "Use $linear-agent-tools:workflow-configure for exact Linear workspace 11111111-1111-4111-8111-111111111111 and team 22222222-2222-4222-8222-222222222222. Explain preview, credential, reconciliation, and GitHub-integration gates without mutating this evaluation workspace.",
+      "expected_skill_list": ["linear-agent-tools:workflow-configure"],
+      "forbidden_skill_list": ["linear-agent-tools:task-graph-create", "agent-workflows:goal-brainstorm"],
       "semantic_invariant_list": [
         {
-          "id": "complete-snapshot",
-          "text": "The response first uses the separate git-commit workflow to create and push logical closing commits for every sealed participant, validates the resulting task branches as clean, fully pushed, and descendant of their baselines, then appends one sorted complete project_path and full git_commit_final snapshot through the serialized project-goals main transaction."
+          "id": "exact-global-delta",
+          "text": "The response fully reads exact destination state, previews only missing statuses and labels, requires explicit approval, proves the no-echo in-memory admin credential and applies only proven GraphQL status gaps before any global mutation, uses official MCP for supported label operations, then performs exact read-back."
         },
         {
-          "id": "publication-boundary",
-          "text": "The response does not merge implementation main, accept the checkpoint, delete resources, or infer authorization from goal completion."
+          "id": "no-graph",
+          "text": "The workflow creates no task Project and does not claim GitHub integration from a pasted URL."
         }
       ]
     },
     {
-      "id": "direct-goal-merge",
+      "id": "direct-linear-task-graph-create",
       "working_directory": "..",
       "working_directory_mode": "same-branch",
-      "prompt": "Use $agent-workflows:goal-merge to merge checkpoint-0002 of task 2026-07-30-multi-repository-architecture coordinated by /workspace/project-goals, then describe the separate primary acceptance update. Explain what happens if acceptance finds one in-scope non-destructive issue and when another user decision is required. This evaluation is read-only.",
-      "expected_skill_list": [
-        "agent-workflows:goal-merge"
-      ],
-      "forbidden_skill_list": [
-        "agent-workflows:goal-brainstorm",
-        "agent-workflows:goal-delete"
-      ],
+      "prompt": "Use $linear-agent-tools:task-graph-create to decompose an agreed incident report into implementation, review, acceptance, and cleanup issues. Explain idempotent publication and activation; do not mutate Linear in this evaluation.",
+      "expected_skill_list": ["linear-agent-tools:task-graph-create"],
+      "forbidden_skill_list": ["agent-workflows:goal-brainstorm", "linear-agent-tools:task-implement"],
       "semantic_invariant_list": [
         {
-          "id": "exclusive-resumable-merge",
-          "text": "The response obtains the exclusive workspace merge lock, preflights the complete selected snapshot before the first mutation, resumes exact fast-forward-only main publication from a durable journal, and never substitutes a later task commit."
+          "id": "linear-owned-dag",
+          "text": "The response previews a complete source-independent DAG whose Linear issues and blocker relations become canonical, with no task-graph.yaml or per-task goal artifact."
         },
         {
-          "id": "acceptance-boundary",
-          "text": "The response runs primary acceptance only after all main refs exactly match the checkpoint and updates accepted_checkpoint_id separately through project-goals main only after success."
-        },
-        {
-          "id": "non-destructive-fix-forward",
-          "text": "If primary acceptance fails, the response keeps the journal and accepted pointer unchanged, fixes in-scope non-destructive fallout only in recorded task worktrees, publishes one complete descendant checkpoint, and resumes the same exclusive workflow without requesting separate approval. It stops only for new authority or unavoidable data loss when no lossless migration exists."
+          "id": "activation-barrier",
+          "text": "The response stages Project Planned and issues Backlog, establishes exact metadata and relations, fully rereads the graph, and activates dispatch only with the single Project transition to In Progress."
         }
       ]
     },
     {
-      "id": "direct-goal-delete",
+      "id": "overlap-linear-active-delta-review",
       "working_directory": "..",
       "working_directory_mode": "same-branch",
-      "prompt": "Use $agent-workflows:goal-delete for explicitly requested deletion of accepted task 2026-07-30-multi-repository-architecture coordinated by /workspace/project-goals. Explain the resumable order and authorization checks without deleting real state.",
-      "expected_skill_list": [
-        "agent-workflows:goal-delete"
-      ],
-      "forbidden_skill_list": [
-        "agent-workflows:goal-brainstorm",
-        "agent-workflows:goal-merge"
-      ],
+      "prompt": "A fresh semantic review found a defect in already merged work. Use the Linear workflow to add remediation to the active Project without bypassing review, acceptance, or cleanup. This is read-only.",
+      "expected_skill_list": ["linear-agent-tools:task-graph-create", "linear-agent-tools:task-review"],
+      "forbidden_skill_list": ["linear-agent-tools:task-implement", "agent-workflows:goal-brainstorm"],
       "semantic_invariant_list": [
         {
-          "id": "ordered-cleanup",
-          "text": "The response requires explicit deletion authority for one exact common prefix, treats missing in-scope resources as completed cleanup steps, and resumes external resources, worktrees, remote refs, local refs, retained registry-state update, and private state in that order without pristine, merged, or accepted-checkpoint preservation gates."
-        },
-        {
-          "id": "history-retained",
-          "text": "The response retains the central task directory as the permanent goal registry, marks its task resources deleted, and does not infer cleanup from completion or abandonment."
+          "id": "linear-native-remediation",
+          "text": "The review reports rather than fixes, and the approved Linear-native delta creates a new implementation blocker in Backlog, proves relations and mandatory downstream gates, returns the explicitly declared running review to blocked Todo without reopening terminal nodes, then activates the new issue with label and final Todo transition without reimporting source."
         }
       ]
     },
     {
-      "id": "indirect-spec-artifact-audit",
+      "id": "direct-linear-task-implement",
       "working_directory": "..",
       "working_directory_mode": "same-branch",
-      "prompt": "Inspect the canonical project-goals repository's harness-neutral tracked task directories: verify central main ownership, exact spec.md, goal.md, and checkpoint.yaml boundaries, preserve every retained task, and report lifecycle violations without changing files.",
-      "expected_skill_list": [
-        "agent-workflows:goal-brainstorm",
-        "project-standards:project-foundation"
-      ],
-      "forbidden_skill_list": [
-        "project-standards:project-documentation-developer",
-        "project-standards:project-standard-audit"
-      ],
+      "prompt": "Use $linear-agent-tools:task-implement for ready issue AND-17. It is a code task in Todo with no blockers and a complete contract. Explain the fresh-thread path through exact worktrees, verification, commits, PR, CI, candidate evidence, and Human Review without changing files.",
+      "expected_skill_list": ["linear-agent-tools:task-implement"],
+      "forbidden_skill_list": ["linear-agent-tools:task-merge", "linear-agent-tools:task-review", "agent-workflows:git-commit"],
       "semantic_invariant_list": [
         {
-          "id": "exclusive-owner",
-          "text": "The response applies the goal lifecycle task-artifact contract rather than treating project-goals task directories as maintained Product documentation or a generic project-standard audit concern."
+          "id": "exact-attempt",
+          "text": "The response proves dispatchability, records the first remote-base baseline, creates or adopts deterministic linear/and-17 worktrees without touching main, implements only the issue, verifies owner slices and the frozen candidate, and immediately pushes logical green commits."
         },
         {
-          "id": "retention-boundary",
-          "text": "The response checks canonical project-goals main, tracked task-directory shape, and absence of project-local copies or links, preserves every retained task, and does not infer deletion authority from lifecycle state."
+          "id": "human-boundary",
+          "text": "It creates or adopts exact linked PRs, waits for applicable required CI, publishes receipts, a deterministic candidate fingerprint and concise structured attempt summary, moves to Human Review, stops, and preserves workspace."
+        },
+        {
+          "id": "exclusive-attempt",
+          "text": "Before dispatch or status mutation it acquires the exact issue process-lifetime host-local attempt guard, holds that same guard through final readback and nested cleanup, and relies on process exit to release ownership."
+        }
+      ]
+    },
+    {
+      "id": "direct-linear-task-review",
+      "working_directory": "..",
+      "working_directory_mode": "same-branch",
+      "prompt": "Use $linear-agent-tools:task-review for a ready post-merge review issue. Explain both a finding path and the required later zero-finding pass; do not edit product code.",
+      "expected_skill_list": ["linear-agent-tools:task-review"],
+      "forbidden_skill_list": ["linear-agent-tools:task-implement"],
+      "semantic_invariant_list": [
+        {
+          "id": "independent-review",
+          "text": "The fresh review derives complete coverage from current owners rather than prior reports and creates a new remediation implementation blocker for merged findings instead of modifying Product code."
+        },
+        {
+          "id": "fresh-zero-pass",
+          "text": "After remediation the review restarts from scratch in a fresh thread and reaches Human Review only with a new zero-finding evidence fingerprint and structured attempt comment."
+        },
+        {
+          "id": "exclusive-attempt",
+          "text": "The review acquires the exact issue process-lifetime host-local attempt guard before dispatch or mutation and keeps it through final provider readback so a second local attempt cannot overlap it."
+        }
+      ]
+    },
+    {
+      "id": "direct-linear-task-accept",
+      "working_directory": "..",
+      "working_directory_mode": "same-branch",
+      "prompt": "Use $linear-agent-tools:task-accept to verify the complete current outcome after all review blockers close. Explain the finding loop, exact receipts, local phase baseline, and human boundary without changing state.",
+      "expected_skill_list": ["linear-agent-tools:task-accept"],
+      "forbidden_skill_list": ["linear-agent-tools:task-implement", "linear-agent-tools:task-merge"],
+      "semantic_invariant_list": [
+        {
+          "id": "whole-outcome",
+          "text": "Acceptance audits the whole current outcome from source and stable owners, never substitutes checklists or cached partial checks, and routes every finding through a remediation blocker followed by a fresh complete pass."
+        },
+        {
+          "id": "baseline-and-approval",
+          "text": "It publishes exact evidence fingerprint and attempt telemetry, and when required records queue, startup, execution, review, and merge durations from provider history before stopping at Human Review."
+        },
+        {
+          "id": "exclusive-attempt",
+          "text": "The acceptance attempt acquires and holds the exact issue process-lifetime host-local attempt guard from dispatch proof through its final provider readback."
+        }
+      ]
+    },
+    {
+      "id": "direct-linear-task-merge",
+      "working_directory": "..",
+      "working_directory_mode": "same-branch",
+      "prompt": "Use $linear-agent-tools:task-merge for AND-17 after a human moved its exact code candidate to Merging. Explain exact-head checks, mutation handling, ordered merge recovery, and terminal handoff without executing it.",
+      "expected_skill_list": ["linear-agent-tools:task-merge"],
+      "forbidden_skill_list": ["linear-agent-tools:task-implement"],
+      "semantic_invariant_list": [
+        {
+          "id": "exact-approved-candidate",
+          "text": "The response verifies exact PR heads, bases, Linear links, branch protection and required checks; any candidate mutation returns the issue to Rework instead of being fixed in the merge attempt."
+        },
+        {
+          "id": "ordered-recovery",
+          "text": "It follows the explicit merge order, records rather than hides partial merge state, proves final commits and links, publishes structured attempt evidence, marks only this issue Done, and starts issue-local cleanup."
+        },
+        {
+          "id": "exclusive-attempt",
+          "text": "The merge attempt acquires the exact issue process-lifetime host-local attempt guard before dispatch or mutation and retains it across ordered recovery, final readback, and nested cleanup."
+        }
+      ]
+    },
+    {
+      "id": "direct-linear-task-cleanup",
+      "working_directory": "..",
+      "working_directory_mode": "same-branch",
+      "prompt": "Use $linear-agent-tools:task-cleanup for one canceled issue and then describe the final cleanup-node completion gate. Missing owned resources are expected. Do not delete real state.",
+      "expected_skill_list": ["linear-agent-tools:task-cleanup"],
+      "forbidden_skill_list": ["linear-agent-tools:task-merge"],
+      "semantic_invariant_list": [
+        {
+          "id": "idempotent-exact-cleanup",
+          "text": "The response treats already absent owned state as success, closes only exact linked open canceled PRs, removes only proven worktrees/branches/private state and declared direct-argv resources, and preserves all Linear history and foreign state."
+        },
+        {
+          "id": "project-completion-gate",
+          "text": "An active Project becomes Completed only after terminal acceptance, every other node terminal, no unresolved remediation blockers, cleanup Done, and exact reconciliation; a canceled Project remains Canceled."
+        },
+        {
+          "id": "cleanup-guard-ownership",
+          "text": "Standalone cleanup owns the exact issue process-lifetime host-local attempt guard, while cleanup invoked inside another task reuses the already-held caller guard and never tries to acquire a second one."
+        }
+      ]
+    },
+    {
+      "id": "negative-linear-observation",
+      "working_directory": "..",
+      "working_directory_mode": "same-branch",
+      "prompt": "Read the title and current status of Linear issue AND-17 and summarize them. Do not configure workflow, create tasks, implement, review, accept, merge, or clean anything.",
+      "expected_skill_list": ["project-standards:project-foundation"],
+      "forbidden_skill_list": ["linear-agent-tools:workflow-configure", "linear-agent-tools:task-graph-create", "linear-agent-tools:task-implement", "linear-agent-tools:task-review", "linear-agent-tools:task-accept", "linear-agent-tools:task-merge", "linear-agent-tools:task-cleanup"],
+      "semantic_invariant_list": [
+        {
+          "id": "read-only-is-not-workflow",
+          "text": "The response treats a bounded read as observation and does not invoke a mutating Linear workflow skill."
         }
       ]
     },
@@ -410,7 +459,7 @@
     {
       "id": "indirect-explain-internal-api",
       "working_directory": "../../project-standards",
-      "working_directory_mode": "same-branch",
+      "working_directory_mode": "synchronized-main",
       "prompt": "Show the current internal classes, functions, signatures, decorators, and owned fields of plugins/project-standards/skills/project-instruction-developer/scripts/skill_behavior_eval.py as declaration-style Python blocks. Do not change files.",
       "expected_skill_list": [
         "agent-workflows:explain-internal-api",
@@ -457,33 +506,12 @@
         "project-standards:project-foundation"
       ],
       "forbidden_skill_list": [
-        "github:yeet",
-        "agent-workflows:goal-review"
+        "github:yeet"
       ],
       "semantic_invariant_list": [
         {
           "id": "publication-order",
           "text": "The response inventories the complete visible worktree, creates logical commits, and pushes submodule commits before a superproject commit that references them."
-        }
-      ]
-    },
-    {
-      "id": "indirect-goal-review",
-      "working_directory": "..",
-      "working_directory_mode": "same-branch",
-      "prompt": "Run a non-interactive Codex review of the current branch against main, fix every finding, and repeat until a fresh review is clean. This evaluation is read-only, so state the exact target-selection and loop contract without executing it.",
-      "expected_skill_list": [
-        "agent-workflows:goal-review",
-        "project-standards:project-foundation"
-      ],
-      "forbidden_skill_list": [
-        "agent-workflows:code-audit",
-        "agent-workflows:code-antipattern-audit"
-      ],
-      "semantic_invariant_list": [
-        {
-          "id": "review-loop",
-          "text": "The response selects non-interactive branch-relative review, requires a clean worktree for that mode, and repeats fix, verification, and the same review until a fresh run has no findings."
         }
       ]
     },

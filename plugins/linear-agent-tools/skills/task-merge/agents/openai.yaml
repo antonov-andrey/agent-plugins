@@ -1,0 +1,4 @@
+interface:
+  display_name: "Merge Linear Task"
+  short_description: "Merge one human-approved Linear candidate"
+  default_prompt: "Use $task-merge to merge this approved Linear issue."

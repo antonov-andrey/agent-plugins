@@ -21,6 +21,7 @@ def test_marketplace_exposes_only_canonical_plugins() -> None:
 
     assert [plugin["name"] for plugin in marketplace["plugins"]] == [
         "agent-workflows",
+        "linear-agent-tools",
         "marketplace-agent-tools",
         "workflow-container-agent-tools",
     ]

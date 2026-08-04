@@ -1,75 +1,49 @@
 ---
 name: goal-brainstorm
-description: Clarify implementation ideas or design changes, prepare central project-goals task contracts and isolated task worktrees, revise an inactive candidate, and prepare a persistent goal without starting implementation.
+description: Clarify a coherent implementation idea or architecture change, author or revise its project-goals goal.md and spec.md source pair, and publish that pair for a later Linear handoff without starting implementation.
 ---
 
 # Goal Brainstorm
 
-Turn an implementation idea into approved stable contracts, one tracked `project-goals` task directory, one isolated implementation-worktree set, and one persistent-goal candidate. Do not start implementation, checkpoint, merge, or delete a task during this workflow.
+Turn one coherent outcome into a reviewable source contract. This workflow ends at a published `goal.md`/`spec.md` pair; it does not create a task graph, task workspace, branch, persistent harness goal, checkpoint, or implementation change.
 
-**REQUIRED REFERENCES:** Read both references completely before changing any instruction, design, specification, goal, or task-worktree state:
-
-- `references/specification-contract.md`
-- `references/worktree-contract.md`
+Read `references/specification-contract.md` completely before changing a specification, goal, instruction, or design contract.
 
 ## Workflow
 
-1. Inspect persistent goal state, the canonical `project-goals` repository, every affected repository, applicable `AGENTS.md`, relevant design/task artifacts, and enough current code and tests to verify facts. If goal state cannot be inspected, stop before changing an existing candidate or creating a replacement for the same objective.
-2. Identify the real requirement owners and complete participant set. Before editing, show the user the direct-owner or dedicated-specification choice, common prefix, central task directory, implementation task branch, every planned implementation worktree, and why each owner belongs.
-3. Resolve outcome, scope, non-goals, ownership, interfaces, data and state transitions, failure and recovery, compatibility, and verification. Ask only about material decisions that cannot be discovered. Offer alternatives only when a real choice remains and recommend one with its tradeoff.
-4. Present the design and verification obligations in reviewable sections. Obtain explicit approval before writing the corresponding contracts.
-5. Create or revise `project-goals/<common-prefix>/spec.md` through the serialized direct-main transaction, then prepare every participating implementation repository through `Preparation Lifecycle` in `worktree-contract.md`. A missing initial bootstrap manifest and a clean read-only submodule checkout that differs from its recorded gitlink are deterministic preparation repairs: create the empty current manifest or restore the exact gitlink after collision checks without reopening an already approved participant classification. After the complete repair set, rerun complete preparation validation across every participant and boundary. Reach `repository_prepared` everywhere before tracked stable-owner authoring.
-6. Bind every implementation-repository command to the recorded task roots and update its approved stable owners only there. Apply an approved `project-goals` stable-owner change only through the direct-main transaction. Revalidate isolation before and after each authoring phase, then run `contracts-authored`; do not begin semantic review or seal while state is `repository_prepared`.
-7. Apply `Semantic Review` from `specification-contract.md` to the complete changed contract set and resolve every finding. Prepare the approved goal input; `seal` creates the initial `checkpoint.yaml` and publishes both files through the direct-main transaction. Require `Terminal Completion Audit` in the goal and persistent objective.
-8. Run complete validation and `seal`. Sealing commits and pushes only the exact final task-directory delta to `project-goals/main`, binds the published commit and fingerprints, and never publishes implementation repositories. Show the published candidate, stable-source changes, and task-root diff. `goal_ready` means internally consistent review candidate, not user approval.
-9. Before activation, handle every correction or scope addition as an ordinary revision of the same task. Inspect goal state, run `revise`, preserve task content and worktrees, extend participants through `prepare` when needed, then repeat authoring, `contracts-authored`, semantic review, and `seal`. Never create a prerequisite or replacement goal merely because a candidate was sealed.
-10. Ask separately whether to activate the displayed candidate. After explicit confirmation, inspect goal state and rerun sealed validation:
-    - If an unfinished goal exists, do not activate another one.
-    - If no unfinished goal exists and a goal-creation tool is available, require successful persistent-goal creation before recording `active`, then freshly validate the complete newly active state across the whole participant set.
-    - If state cannot be inspected or automatic creation is unavailable, report the exact limitation and provide the semantic `/goal` command below.
+1. Inspect the exact affected repositories, applicable `AGENTS.md`, current design, code and tests needed to distinguish verified facts from proposals. Inspect the canonical `project-goals` checkout and any existing pair for the chosen common prefix.
+2. Establish one coherent outcome, stable owners, source scope, non-goals, interfaces, state transitions, failure and recovery behavior, compatibility, and observable verification. The outcome may span repositories and decompose into independently executable tasks; do not force it into one implementation boundary.
+3. Choose direct owner updates or a dedicated implementation specification according to the reference. During brainstorming, proposed stable-owner changes are source requirements for later Linear tasks, not implementation edits in Product repositories.
+4. Present the complete proposed design and verification contract in reviewable sections. Ask only about material choices that cannot be discovered and obtain explicit user approval before publication.
+5. Author both complete temporary input files and reread them together with every directly affected stable owner. Resolve every semantic finding, open question, contradiction, placeholder, duplicate owner and unverified observable behavior.
+6. Run `scripts/source.py write` with the explicit canonical `project-goals` root, common prefix and both input paths. The command publishes exactly the pair through one serialized direct-main transaction and pushes it immediately.
+7. Run `scripts/source.py validate`, report the exact source commit, fingerprint and root-relative paths, and stop. Recommend a fresh thread with `linear-agent-tools:task-graph-create` for handoff.
 
-Checkpoint publication belongs to `agent-workflows:goal-checkpoint`, merge and primary acceptance to `agent-workflows:goal-merge`, and deletion to `agent-workflows:goal-delete`. Activation authorizes non-destructive closing checkpoints. Merge still requires an explicit workflow start, and deletion still requires an explicit request.
+## Revision Boundary
 
-## Mandatory Identity Handoff
+Before successful Linear handoff, a correction is an ordinary revision of the same pair. Repeat semantic review and `write` with both complete files. There is no seal, active state or special revision command.
 
-Before a proposed-design or sealed-candidate handoff, provide one contiguous block:
+After handoff, the Linear Project and its issues own operational changes. The dispatched source remains the exact historical Git commit even if `project-goals/main` later advances. Do not use `goal-brainstorm` to mutate an active Linear graph; use a Linear-native graph delta or create a new independent source.
+
+## Publication Boundary
+
+- `project-goals` uses only its canonical clean `main` checkout and has no goal branch, linked worktree, `.spec`, bootstrap manifest, checkpoint or unpublished source state.
+- Initial authoring and revision always publish the complete pair atomically. A spec-only directory or one locally approved but unpushed revision is invalid.
+- The skill may commit and push only the exact approved `project-goals/<common-prefix>/goal.md` and `spec.md` paths. It does not commit, push or mutate implementation repositories.
+- Preserve existing historical goal directories. Do not add compatibility state or reinterpret historical `checkpoint.yaml` files as current workflow input.
+
+## Required Handoff
+
+Report one contiguous source identity block:
 
 ```text
-Coordination repository: <project-goals-root>
-Task directory: <project-goals-root>/<common-prefix>
-Specification: <common-prefix>/spec.md
+Coordination repository: <exact-project-goals-root>
+Source directory: <exact-project-goals-root>/<common-prefix>
 Goal: <common-prefix>/goal.md
-Checkpoint: <common-prefix>/checkpoint.yaml
-Implementation branch: <common-prefix>
-Task roots:
-- <repository-one>/.worktree/<common-prefix>
-- <repository-two>/.worktree/<common-prefix>
-Execution boundary: every implementation-repository command stays in the exact task roots above until an explicitly invoked goal-merge operation.
+Specification: <common-prefix>/spec.md
+Source commit: <full-git-commit>
+Source fingerprint: <sha256>
+Next owner: linear-agent-tools:task-graph-create in a fresh Codex thread
 ```
 
-List every participant in that block with exact resolved paths when known. Do not scatter identity facts or refer back to an earlier list.
-
-The same contiguous handoff MUST say that `project-goals` has no task branch, linked worktree, bootstrap manifest, project-local `.spec` copy, or task-artifact symlink. Those absences are part of the identity, not implied implementation detail.
-
-## Read-Only Task Artifact Audit
-
-When the request is to inspect rather than create or revise a task, apply the same lifecycle owner without mutating state. Verify canonical `project-goals/main` ownership and the exact tracked `spec.md`, `goal.md`, and `checkpoint.yaml` shape. Inspect every participant for forbidden project-local task-artifact copies or links, including `.spec`; report violations, preserve every retained task, and never infer deletion authority from completion, merge, acceptance, age, or any other lifecycle state.
-
-## Terminal Rules
-
-- Preserve unrelated user work and diagnose deterministic repairs before declaring a blocker.
-- Do not ask the user to choose an unambiguous repair already owned by the approved task contract. Apply the complete deterministic repair set, then rerun complete preparation validation rather than a narrower isolation recheck.
-- Never infer participants from workspace proximity, repository names, or dirty state.
-- If this agent leaked a task patch into a participating main worktree, use recorded caller provenance and `recover-main-leak`; matching bytes alone are not provenance.
-- Accept overlapping committed main drift only after explicit user confirmation of the exact owner, commit, and complete overlap set.
-- Once prepared, all tracked implementation work and verification stay in recorded task roots until `goal-merge`.
-- A sealed inactive candidate changes only after `revise`; an active task identity and `spec.md`/`goal.md` are immutable.
-- `goal-brainstorm` may commit and push only its exact approved coordination path set directly to `project-goals/main` but never publishes, merges, or deletes implementation source.
-- Reread the identity block field by field before every required handoff.
-- Never weaken `Terminal Completion Audit` into one checklist, test run, self-review, or separately generated evidence artifact.
-
-For a `/goal` fallback, print this semantic command in the user's language:
-
-```text
-/goal When no other goal is unfinished, implement the objective in <project-goals-goal-path>. Treat that file, its sibling spec.md, and their source contracts as the complete completion contract. Perform implementation work only in the exact sealed task-worktree roots until an explicit goal-merge operation. After presumed completion, repeatedly audit the complete current scope from scratch and fix every incomplete finding until a new full audit finds none; only then finish the goal.
-```
+Do not claim that publication activated implementation. Linear handoff occurs only after the next workflow has fully published, reread and activated one Linear Project graph.
