@@ -25,11 +25,19 @@ def issue_identifier_in_title_require(issue_identifier: str, title: str) -> None
 
     if _ISSUE_IDENTIFIER_PATTERN.fullmatch(issue_identifier) is None:
         raise GitHubContractError("Linear issue identifier has another shape")
-    if not isinstance(title, str) or not title or any(character in title for character in ("\x00", "\n", "\r")):
-        raise GitHubContractError("Pull request title must be non-empty single-line text")
+    if (
+        not isinstance(title, str)
+        or not title
+        or any(character in title for character in ("\x00", "\n", "\r"))
+    ):
+        raise GitHubContractError(
+            "Pull request title must be non-empty single-line text"
+        )
     token_pattern = rf"(?<![A-Z0-9-]){re.escape(issue_identifier)}(?![A-Z0-9-])"
     if re.search(token_pattern, title) is None:
-        raise GitHubContractError("Pull request title omits the exact Linear issue token")
+        raise GitHubContractError(
+            "Pull request title omits the exact Linear issue token"
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,7 +50,9 @@ class RepositoryIdentity:
         """Validate one canonical GitHub repository identity."""
 
         if _REPOSITORY_PATTERN.fullmatch(self.value) is None:
-            raise GitHubContractError("GitHub repository must use exact owner/name form")
+            raise GitHubContractError(
+                "GitHub repository must use exact owner/name form"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,7 +112,11 @@ class PullRequestSnapshot:
 
         if not isinstance(self.repository, RepositoryIdentity):
             raise GitHubContractError("Pull request repository identity is unsupported")
-        if isinstance(self.number, bool) or not isinstance(self.number, int) or self.number < 1:
+        if (
+            isinstance(self.number, bool)
+            or not isinstance(self.number, int)
+            or self.number < 1
+        ):
             raise GitHubContractError("Pull request number must be positive")
         for label, value in (
             ("URL", self.url),
@@ -113,12 +127,22 @@ class PullRequestSnapshot:
             ("merge state", self.merge_state),
             ("review decision", self.review_decision),
         ):
-            if not isinstance(value, str) or not value or any(character in value for character in ("\x00", "\n", "\r")):
-                raise GitHubContractError(f"Pull request {label} must be non-empty single-line text")
+            if (
+                not isinstance(value, str)
+                or not value
+                or any(character in value for character in ("\x00", "\n", "\r"))
+            ):
+                raise GitHubContractError(
+                    f"Pull request {label} must be non-empty single-line text"
+                )
         if _COMMIT_PATTERN.fullmatch(self.head_commit) is None:
-            raise GitHubContractError("Pull request head must be one full lowercase commit")
+            raise GitHubContractError(
+                "Pull request head must be one full lowercase commit"
+            )
         if self.merge_commit and _COMMIT_PATTERN.fullmatch(self.merge_commit) is None:
-            raise GitHubContractError("Pull request merge commit must be empty or one full lowercase commit")
+            raise GitHubContractError(
+                "Pull request merge commit must be empty or one full lowercase commit"
+            )
         if not isinstance(self.draft, bool):
             raise GitHubContractError("Pull request draft flag must be boolean")
         if not isinstance(self.required_check_list, list) or any(
@@ -130,10 +154,89 @@ class PullRequestSnapshot:
             raise GitHubContractError("Pull request repeats one required check name")
         if self.merged_at is not None:
             if self.merged_at.tzinfo is None or self.merged_at.utcoffset() is None:
-                raise GitHubContractError("Pull request merged_at must be timezone-aware")
+                raise GitHubContractError(
+                    "Pull request merged_at must be timezone-aware"
+                )
             if self.merged_at.utcoffset() != timezone.utc.utcoffset(self.merged_at):
-                raise GitHubContractError("Pull request merged_at must be normalized to UTC")
+                raise GitHubContractError(
+                    "Pull request merged_at must be normalized to UTC"
+                )
         object.__setattr__(self, "required_check_list", list(self.required_check_list))
+
+    @classmethod
+    def from_gh_payload(
+        cls,
+        repository: RepositoryIdentity,
+        payload: object,
+        *,
+        required_check_list: list[RequiredCheck],
+    ) -> "PullRequestSnapshot":
+        """Parse one exact ``gh`` pull-request payload.
+
+        Args:
+            repository: Exact repository identity.
+            payload: Candidate decoded response.
+            required_check_list: Separately read required checks.
+
+        Returns:
+            Typed pull-request snapshot.
+        """
+
+        expected = {
+            "number",
+            "url",
+            "title",
+            "state",
+            "isDraft",
+            "baseRefName",
+            "headRefName",
+            "headRefOid",
+            "mergeStateStatus",
+            "reviewDecision",
+            "mergedAt",
+            "mergeCommit",
+        }
+        if not isinstance(payload, dict) or set(payload) != expected:
+            raise GitHubContractError("GitHub PR response has another shape")
+        merged_at = payload["mergedAt"]
+        if merged_at is not None:
+            if not isinstance(merged_at, str):
+                raise GitHubContractError("GitHub mergedAt has another shape")
+            try:
+                merged_instant = datetime.fromisoformat(
+                    merged_at.replace("Z", "+00:00")
+                ).astimezone(timezone.utc)
+            except ValueError as error:
+                raise GitHubContractError("GitHub mergedAt is malformed") from error
+        else:
+            merged_instant = None
+        merge_commit = payload["mergeCommit"]
+        if merge_commit is None:
+            merge_commit_value = ""
+        elif (
+            isinstance(merge_commit, dict)
+            and set(merge_commit) >= {"oid"}
+            and isinstance(merge_commit["oid"], str)
+        ):
+            merge_commit_value = merge_commit["oid"]
+        else:
+            raise GitHubContractError("GitHub mergeCommit has another shape")
+        return cls(
+            repository=repository,
+            number=payload["number"],
+            url=payload["url"],
+            title=payload["title"],
+            state=payload["state"],
+            draft=payload["isDraft"],
+            base_branch=payload["baseRefName"],
+            head_branch=payload["headRefName"],
+            head_commit=payload["headRefOid"],
+            merge_state=payload["mergeStateStatus"],
+            review_decision=payload["reviewDecision"] or "REVIEW_REQUIRED",
+            merged_at=merged_instant,
+            merge_commit=merge_commit_value,
+            required_check_list=required_check_list,
+        )
 
     def integration_identity_require(self, issue_identifier: str) -> None:
         """Require the issue identity that lets GitHub integration create a Linear link.
@@ -145,7 +248,9 @@ class PullRequestSnapshot:
         issue_identifier_in_title_require(issue_identifier, self.title)
         expected_branch = f"linear/{issue_identifier.lower()}"
         if self.head_branch != expected_branch:
-            raise GitHubContractError("Pull request lacks the exact Linear issue title and branch identity")
+            raise GitHubContractError(
+                "Pull request lacks the exact Linear issue title and branch identity"
+            )
 
     def target_require(self, *, base_branch: str, head_branch: str) -> None:
         """Require the PR to target the exact approved Git refs.
@@ -156,7 +261,9 @@ class PullRequestSnapshot:
         """
 
         if self.base_branch != base_branch or self.head_branch != head_branch:
-            raise GitHubContractError("Pull request base or head differs from the approved repository target")
+            raise GitHubContractError(
+                "Pull request base or head differs from the approved repository target"
+            )
 
     def merge_preconditions_require(self, *, approved_head_commit: str) -> None:
         """Require the exact approved candidate and all provider merge gates.
@@ -172,12 +279,18 @@ class PullRequestSnapshot:
         if self.state != "OPEN" or self.draft:
             raise GitHubContractError("Pull request must be open and ready for review")
         if self.merge_state not in {"CLEAN", "HAS_HOOKS"}:
-            raise GitHubContractError(f"Pull request is not mergeable: {self.merge_state}")
+            raise GitHubContractError(
+                f"Pull request is not mergeable: {self.merge_state}"
+            )
         if self.review_decision == "CHANGES_REQUESTED":
             raise GitHubContractError("Pull request has requested changes")
-        failed_check_name_list = [item.name for item in self.required_check_list if not item.is_passed()]
+        failed_check_name_list = [
+            item.name for item in self.required_check_list if not item.is_passed()
+        ]
         if failed_check_name_list:
-            raise GitHubContractError(f"Required GitHub checks are not passing: {sorted(failed_check_name_list)}")
+            raise GitHubContractError(
+                f"Required GitHub checks are not passing: {sorted(failed_check_name_list)}"
+            )
 
     def merged_result_require(self, *, approved_head_commit: str) -> None:
         """Require one exact already-merged human-approved candidate.
@@ -194,7 +307,13 @@ class PullRequestSnapshot:
         if self.head_commit != approved_head_commit:
             raise GitHubContractError("Pull request head changed after human approval")
         if self.state != "MERGED" or self.merged_at is None or not self.merge_commit:
-            raise GitHubContractError("Pull request does not expose one complete merged result")
-        failed_check_name_list = [item.name for item in self.required_check_list if not item.is_passed()]
+            raise GitHubContractError(
+                "Pull request does not expose one complete merged result"
+            )
+        failed_check_name_list = [
+            item.name for item in self.required_check_list if not item.is_passed()
+        ]
         if failed_check_name_list:
-            raise GitHubContractError(f"Required GitHub checks are not passing: {sorted(failed_check_name_list)}")
+            raise GitHubContractError(
+                f"Required GitHub checks are not passing: {sorted(failed_check_name_list)}"
+            )
