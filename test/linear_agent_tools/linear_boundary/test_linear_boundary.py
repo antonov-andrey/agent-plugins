@@ -22,20 +22,19 @@ if str(LIBRARY_ROOT) not in sys.path:
     sys.path.insert(0, str(LIBRARY_ROOT))
 
 from linear_boundary.configuration.graphql import LinearWorkflowConfigurationGraphQL
-from linear_boundary.configuration.model import (
+from linear_boundary.configuration.catalog import (
     ISSUE_STATUS_DESIRED,
     LABEL_DESIRED,
     PROJECT_STATUS_DESIRED,
+)
+from linear_boundary.configuration.model import (
     ConfigurationPlan,
     DestinationIdentity,
     LinearLabel,
     StatusDefinition,
     WorkflowConfigurationSnapshot,
-    configuration_plan_build,
-    configuration_plan_status_identifiers_allocate,
-    configuration_plan_status_identifiers_require,
-    configuration_plan_subset_require,
 )
+from linear_boundary.configuration.reconciliation import WorkflowConfigurationReconciler
 from linear_boundary.contract import LinearContractError
 from linear_boundary.status import IssueStatusName, ProjectStatusName
 from linear_boundary.task.model import TaskExecutionSnapshot, TransitionProof
@@ -149,8 +148,10 @@ def test_status_apply_precedes_still_missing_official_mcp_labels(
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    approved = configuration_plan_status_identifiers_allocate(
-        configuration_plan_build(WorkflowConfigurationSnapshot(_destination(), [], [], []))
+    approved = (
+        WorkflowConfigurationReconciler()
+        .plan_get(WorkflowConfigurationSnapshot(_destination(), [], [], []))
+        .status_identifier_allocate()
     )
     labels_path = tmp_path / "labels.json"
     labels_path.write_text("[]\n", encoding="utf-8")
@@ -162,7 +163,7 @@ def test_status_apply_precedes_still_missing_official_mcp_labels(
     call_list: list[ConfigurationPlan] = []
 
     class _Service:
-        def __init__(self, _transport: object) -> None:
+        def __init__(self, _transport: object, _reconciler: object) -> None:
             pass
 
         def plan(self, **_argument_by_name: object) -> ConfigurationPlan:
@@ -218,7 +219,7 @@ def _status_node(item: StatusDefinition, index: int) -> dict[str, object]:
 
 
 def _workflow_response(
-    status_list: tuple[StatusDefinition, ...],
+    status_list: list[StatusDefinition],
     *,
     has_next: bool = False,
     end_cursor: str | None = None,
@@ -252,7 +253,7 @@ def _workflow_response(
 
 
 def _project_status_response(
-    status_list: tuple[StatusDefinition, ...],
+    status_list: list[StatusDefinition],
 ) -> dict[str, object]:
     """Return one complete workspace Project-status GraphQL page.
 
@@ -305,7 +306,7 @@ def test_configuration_plan_is_exact_and_idempotent() -> None:
         label_list=[],
     )
 
-    plan = configuration_plan_build(partial)
+    plan = WorkflowConfigurationReconciler().plan_get(partial)
 
     assert [item.name for item in plan.issue_status_create_list] == [item.name for item in ISSUE_STATUS_DESIRED[3:]]
     assert plan.project_status_create_list == list(PROJECT_STATUS_DESIRED)
@@ -321,20 +322,22 @@ def test_configuration_plan_is_exact_and_idempotent() -> None:
         label_list=list(_existing_label(item, index) for index, item in enumerate(LABEL_DESIRED, 1)),
     )
 
-    assert configuration_plan_build(current).is_current()
+    assert WorkflowConfigurationReconciler().plan_get(current).is_current()
 
 
 def test_configuration_plan_roundtrip_and_fresh_subset_guard() -> None:
     """One approved fingerprint authorizes only an exact remaining subset."""
 
-    approved = configuration_plan_status_identifiers_allocate(
-        configuration_plan_build(WorkflowConfigurationSnapshot(_destination(), [], [], []))
+    approved = (
+        WorkflowConfigurationReconciler()
+        .plan_get(WorkflowConfigurationSnapshot(_destination(), [], [], []))
+        .status_identifier_allocate()
     )
     parsed = ConfigurationPlan.from_payload(approved.payload())
 
     assert parsed == approved
     assert parsed.fingerprint() == approved.fingerprint()
-    configuration_plan_status_identifiers_require(approved)
+    approved.status_identifier_require()
     assert all(
         uuid.UUID(item.id).version == 4
         for item in (
@@ -342,7 +345,7 @@ def test_configuration_plan_roundtrip_and_fresh_subset_guard() -> None:
             *approved.project_status_create_list,
         )
     )
-    assert configuration_plan_status_identifiers_allocate(approved) == approved
+    assert approved.status_identifier_allocate() == approved
     current = ConfigurationPlan(
         destination=approved.destination,
         issue_status_create_list=[replace(item, id="") for item in approved.issue_status_create_list[1:]],
@@ -350,31 +353,25 @@ def test_configuration_plan_roundtrip_and_fresh_subset_guard() -> None:
         label_create_list=[],
         conflict_list=[],
     )
-    configuration_plan_subset_require(current, approved)
+    current.subset_require(approved)
 
     changed = replace(current.issue_status_create_list[0], color="#000000")
     with pytest.raises(LinearContractError, match="changed after approval"):
-        configuration_plan_subset_require(
-            replace(
-                current,
-                issue_status_create_list=[
-                    changed,
-                    *current.issue_status_create_list[1:],
-                ],
-            ),
-            approved,
-        )
+        replace(
+            current,
+            issue_status_create_list=[
+                changed,
+                *current.issue_status_create_list[1:],
+            ],
+        ).subset_require(approved)
     with pytest.raises(LinearContractError, match="destination changed"):
-        configuration_plan_subset_require(
-            replace(
-                current,
-                destination=replace(
-                    current.destination,
-                    workspace_id="44444444-4444-4444-8444-444444444444",
-                ),
+        replace(
+            current,
+            destination=replace(
+                current.destination,
+                workspace_id="44444444-4444-4444-8444-444444444444",
             ),
-            approved,
-        )
+        ).subset_require(approved)
 
 
 def test_configuration_rejects_wrong_category_and_foreign_label() -> None:
@@ -391,7 +388,9 @@ def test_configuration_rejects_wrong_category_and_foreign_label() -> None:
     )
     foreign_label = _existing_label(LABEL_DESIRED[0], 2)
     foreign_label = LinearLabel(foreign_label.id, foreign_label.name, foreign_label.color, "foreign owner")
-    plan = configuration_plan_build(WorkflowConfigurationSnapshot(_destination(), [wrong_status], [], [foreign_label]))
+    plan = WorkflowConfigurationReconciler().plan_get(
+        WorkflowConfigurationSnapshot(_destination(), [wrong_status], [], [foreign_label])
+    )
 
     assert not plan.can_mutate()
     assert {(item.kind, item.name) for item in plan.conflict_list} == {
@@ -403,12 +402,14 @@ def test_configuration_rejects_wrong_category_and_foreign_label() -> None:
         _existing_label(LABEL_DESIRED[0], 3),
         color="#000000",
     )
-    color_plan = configuration_plan_build(WorkflowConfigurationSnapshot(_destination(), [], [], [wrong_color]))
+    color_plan = WorkflowConfigurationReconciler().plan_get(
+        WorkflowConfigurationSnapshot(_destination(), [], [], [wrong_color])
+    )
     assert ("label", "task:implementation") in {(item.kind, item.name) for item in color_plan.conflict_list}
 
     wrong_case_status = replace(_existing_status(ISSUE_STATUS_DESIRED[1], 4), name="todo")
     wrong_case_label = replace(_existing_label(LABEL_DESIRED[0], 5), name="TASK:IMPLEMENTATION")
-    casing_plan = configuration_plan_build(
+    casing_plan = WorkflowConfigurationReconciler().plan_get(
         WorkflowConfigurationSnapshot(_destination(), [wrong_case_status], [], [wrong_case_label])
     )
     assert {(item.kind, item.name, item.reason) for item in casing_plan.conflict_list} == {
@@ -883,7 +884,7 @@ def test_graphql_configuration_fully_paginates_and_guards_exact_destination() ->
             _project_status_response(PROJECT_STATUS_DESIRED),
         ]
     )
-    service = LinearWorkflowConfigurationGraphQL(transport)
+    service = LinearWorkflowConfigurationGraphQL(transport, WorkflowConfigurationReconciler())
 
     current = service.read(
         expected_workspace_id=WORKSPACE_ID,
@@ -909,7 +910,7 @@ def test_graphql_configuration_plan_can_discover_workspace_but_binds_its_fingerp
             _project_status_response(PROJECT_STATUS_DESIRED),
         ]
     )
-    service = LinearWorkflowConfigurationGraphQL(transport)
+    service = LinearWorkflowConfigurationGraphQL(transport, WorkflowConfigurationReconciler())
 
     plan = service.plan(
         expected_workspace_id=None,
@@ -938,7 +939,7 @@ def test_graphql_configuration_rereads_approved_destination_before_status_mutati
         ),
         label_list=list(_existing_label(item, index) for index, item in enumerate(LABEL_DESIRED, 1)),
     )
-    approved = configuration_plan_status_identifiers_allocate(configuration_plan_build(current_snapshot))
+    approved = WorkflowConfigurationReconciler().plan_get(current_snapshot).status_identifier_allocate()
     transport = _ScriptedTransport(
         [
             _workflow_response(partial_issue_status_list),
@@ -949,7 +950,7 @@ def test_graphql_configuration_rereads_approved_destination_before_status_mutati
             _project_status_response(PROJECT_STATUS_DESIRED),
         ]
     )
-    service = LinearWorkflowConfigurationGraphQL(transport)
+    service = LinearWorkflowConfigurationGraphQL(transport, WorkflowConfigurationReconciler())
 
     service.missing_statuses_create(
         expected_workspace_id=WORKSPACE_ID,

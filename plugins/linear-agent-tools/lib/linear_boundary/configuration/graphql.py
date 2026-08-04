@@ -10,10 +10,8 @@ from linear_boundary.configuration.model import (
     LinearLabel,
     StatusDefinition,
     WorkflowConfigurationSnapshot,
-    configuration_plan_build,
-    configuration_plan_status_identifiers_require,
-    configuration_plan_subset_require,
 )
+from linear_boundary.configuration.reconciliation import WorkflowConfigurationReconciler
 from linear_boundary.contract import LinearContractError
 from linear_boundary.transport import LinearGraphQLTransport, LinearTransportError
 
@@ -61,7 +59,7 @@ mutation LinearAgentProjectStatusCreate($input: ProjectStatusCreateInput!) {
 """
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class WorkflowConfigurationGraphQLRead:
     """Contain the GraphQL-owned configuration and guarded destination."""
 
@@ -69,17 +67,39 @@ class WorkflowConfigurationGraphQLRead:
     issue_status_list: list[StatusDefinition]
     project_status_list: list[StatusDefinition]
 
+    def __post_init__(self) -> None:
+        """Detach one trusted typed GraphQL read from pagination builders."""
+
+        if not isinstance(self.destination, DestinationIdentity):
+            raise LinearContractError("Linear GraphQL read destination has another shape")
+        if not isinstance(self.issue_status_list, list) or any(
+            not isinstance(item, StatusDefinition) for item in self.issue_status_list
+        ):
+            raise LinearContractError("Linear GraphQL issue status list has another shape")
+        if not isinstance(self.project_status_list, list) or any(
+            not isinstance(item, StatusDefinition) for item in self.project_status_list
+        ):
+            raise LinearContractError("Linear GraphQL Project status list has another shape")
+        object.__setattr__(self, "issue_status_list", list(self.issue_status_list))
+        object.__setattr__(self, "project_status_list", list(self.project_status_list))
+
 
 class LinearWorkflowConfigurationGraphQL:
     """Read and create only missing issue and Project workflow statuses."""
 
-    def __init__(self, transport: LinearGraphQLTransport) -> None:
+    def __init__(
+        self,
+        transport: LinearGraphQLTransport,
+        reconciler: WorkflowConfigurationReconciler,
+    ) -> None:
         """Initialize the exact transport dependency.
 
         Args:
             transport: One-process secret-bearing GraphQL transport.
+            reconciler: Canonical workflow-configuration comparison owner.
         """
 
+        self._reconciler = reconciler
         self._transport = transport
 
     def read(
@@ -204,7 +224,7 @@ class LinearWorkflowConfigurationGraphQL:
             expected_viewer_id=expected_viewer_id,
             expected_team_id=expected_team_id,
         )
-        return configuration_plan_build(
+        return self._reconciler.plan_get(
             WorkflowConfigurationSnapshot(
                 destination=current.destination,
                 issue_status_list=current.issue_status_list,
@@ -232,7 +252,7 @@ class LinearWorkflowConfigurationGraphQL:
 
         if not approved_plan.can_mutate():
             raise LinearContractError("Conflicting workflow configuration cannot be applied")
-        configuration_plan_status_identifiers_require(approved_plan)
+        approved_plan.status_identifier_require()
         approved_destination = approved_plan.destination
         if (
             approved_destination.workspace_id != expected_workspace_id
@@ -245,7 +265,7 @@ class LinearWorkflowConfigurationGraphQL:
             expected_viewer_id=expected_viewer_id,
             expected_team_id=expected_team_id,
         )
-        current_plan = configuration_plan_build(
+        current_plan = self._reconciler.plan_get(
             WorkflowConfigurationSnapshot(
                 destination=current.destination,
                 issue_status_list=current.issue_status_list,
@@ -253,22 +273,21 @@ class LinearWorkflowConfigurationGraphQL:
                 label_list=[],
             )
         )
-        configuration_plan_subset_require(
-            ConfigurationPlan(
-                destination=current_plan.destination,
-                issue_status_create_list=current_plan.issue_status_create_list,
-                project_status_create_list=current_plan.project_status_create_list,
-                label_create_list=[],
-                conflict_list=current_plan.conflict_list,
-            ),
-            ConfigurationPlan(
-                destination=approved_plan.destination,
-                issue_status_create_list=approved_plan.issue_status_create_list,
-                project_status_create_list=approved_plan.project_status_create_list,
-                label_create_list=[],
-                conflict_list=approved_plan.conflict_list,
-            ),
+        current_status_plan = ConfigurationPlan(
+            destination=current_plan.destination,
+            issue_status_create_list=current_plan.issue_status_create_list,
+            project_status_create_list=current_plan.project_status_create_list,
+            label_create_list=[],
+            conflict_list=current_plan.conflict_list,
         )
+        approved_status_plan = ConfigurationPlan(
+            destination=approved_plan.destination,
+            issue_status_create_list=approved_plan.issue_status_create_list,
+            project_status_create_list=approved_plan.project_status_create_list,
+            label_create_list=[],
+            conflict_list=approved_plan.conflict_list,
+        )
+        current_status_plan.subset_require(approved_status_plan)
         approved_issue_status_by_name_map = {item.name: item for item in approved_plan.issue_status_create_list}
         for status in current_plan.issue_status_create_list:
             approved_status = approved_issue_status_by_name_map[status.name]
@@ -311,7 +330,7 @@ class LinearWorkflowConfigurationGraphQL:
             expected_viewer_id=expected_viewer_id,
             expected_team_id=expected_team_id,
         )
-        readback = configuration_plan_build(
+        readback = self._reconciler.plan_get(
             WorkflowConfigurationSnapshot(
                 destination=current.destination,
                 issue_status_list=current.issue_status_list,

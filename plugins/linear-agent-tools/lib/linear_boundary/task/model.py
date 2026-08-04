@@ -37,7 +37,7 @@ def task_delivery_validate(*, role_label: str, delivery_kind: str) -> None:
         raise LinearContractError("Task role and delivery kind are incompatible")
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class TaskExecutionSnapshot:
     """Contain all current facts needed to decide agent dispatchability."""
 
@@ -83,7 +83,7 @@ class TaskExecutionSnapshot:
             raise LinearContractError("Task must have exactly one assignee or delegate")
         uuid_validate(assignment_id_list[0], label="Task execution assignment ID")
         uuid_validate(self.execution_identity_id, label="Execution identity ID")
-        self.label_name_list = list(self.label_name_list)
+        object.__setattr__(self, "label_name_list", list(self.label_name_list))
 
     def can_dispatch(self) -> bool:
         """Return whether a runner may own the next attempt.
@@ -148,8 +148,26 @@ class TransitionProof:
     def __post_init__(self) -> None:
         """Require every proof flag to be a real boolean."""
 
-        for name in self.__dataclass_fields__:
-            if not isinstance(getattr(self, name), bool):
-                raise LinearContractError(f"Transition proof {name} must be boolean")
+        boolean_by_field_name_map = {
+            "human_decision": self.human_decision,
+            "task_definition_ready": self.task_definition_ready,
+            "fresh_thread": self.fresh_thread,
+            "workspace_preserved": self.workspace_preserved,
+            "result_ready": self.result_ready,
+            "verification_ready": self.verification_ready,
+            "publication_ready": self.publication_ready,
+            "required_ci_ready": self.required_ci_ready,
+            "evidence_ready": self.evidence_ready,
+            "candidate_fingerprint_ready": self.candidate_fingerprint_ready,
+            "candidate_unchanged": self.candidate_unchanged,
+            "candidate_mutated": self.candidate_mutated,
+            "remediation_blocker_ready": self.remediation_blocker_ready,
+            "review_finding_ready": self.review_finding_ready,
+            "merge_complete": self.merge_complete,
+            "cleanup_complete": self.cleanup_complete,
+        }
+        for field_name, value in boolean_by_field_name_map.items():
+            if not isinstance(value, bool):
+                raise LinearContractError(f"Transition proof {field_name} must be boolean")
         if self.candidate_unchanged and self.candidate_mutated:
             raise LinearContractError("Candidate cannot be both unchanged and mutated")

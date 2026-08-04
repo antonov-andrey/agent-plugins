@@ -18,10 +18,8 @@ from linear_boundary.configuration.graphql import LinearWorkflowConfigurationGra
 from linear_boundary.configuration.model import (
     ConfigurationPlan,
     LinearLabel,
-    configuration_plan_status_identifiers_allocate,
-    configuration_plan_status_identifiers_require,
-    configuration_plan_subset_require,
 )
+from linear_boundary.configuration.reconciliation import WorkflowConfigurationReconciler
 from linear_boundary.contract import LinearContractError
 from linear_boundary.transport import (
     LinearAuthenticationError,
@@ -163,7 +161,7 @@ def _approved_plan_load(path: Path) -> ConfigurationPlan:
         raise LinearContractError("Approved plan fingerprint differs from its content")
     if not plan.can_mutate():
         raise LinearContractError("Conflicting workflow configuration cannot be approved")
-    configuration_plan_status_identifiers_require(plan)
+    plan.status_identifier_require()
     return plan
 
 
@@ -180,7 +178,10 @@ def main(argv: list[str] | None = None) -> int:
     args = _args_parse(argv)
     try:
         label_list = _labels_load(args.labels_input)
-        service = LinearWorkflowConfigurationGraphQL(LinearGraphQLTransport(_credential_get()))
+        service = LinearWorkflowConfigurationGraphQL(
+            LinearGraphQLTransport(_credential_get()),
+            WorkflowConfigurationReconciler(),
+        )
         plan = service.plan(
             expected_workspace_id=args.workspace_id,
             expected_viewer_id=args.viewer_id,
@@ -188,7 +189,7 @@ def main(argv: list[str] | None = None) -> int:
             label_list=label_list,
         )
         if args.command == "plan":
-            plan = configuration_plan_status_identifiers_allocate(plan)
+            plan = plan.status_identifier_allocate()
             print(json.dumps(_plan_envelope(plan), ensure_ascii=False, indent=2, sort_keys=True))
             return 0 if plan.can_mutate() else 2
         approved_plan = _approved_plan_load(args.approved_plan_input)
@@ -198,7 +199,7 @@ def main(argv: list[str] | None = None) -> int:
             or approved_plan.destination.team_id != args.team_id
         ):
             raise LinearContractError("Approved plan destination differs from apply arguments")
-        configuration_plan_subset_require(plan, approved_plan)
+        plan.subset_require(approved_plan)
         service.missing_statuses_create(
             expected_workspace_id=args.workspace_id,
             expected_viewer_id=args.viewer_id,
