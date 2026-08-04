@@ -1,6 +1,6 @@
 ---
 name: task-cleanup
-description: Idempotently reconcile exact local worktrees, task branches, linked canceled PRs, private recovery state, and declared issue/project resources without deleting Linear history or foreign state.
+description: Idempotently reconcile exact local worktrees, task branches, only exact linked open canceled PRs, private recovery state, and declared direct-argv resources under the exact standalone-or-reused process-lifetime host-local issue guard, without deleting Linear history or foreign state.
 ---
 
 # Clean Linear Task Resources
@@ -9,7 +9,7 @@ Read `../../references/manual-workflow.md`, the exact issue, Project, relations,
 
 Every standalone cleanup attempt sets `LINEAR_AGENT_WORKSPACE_ROOT`, starts `../../lib/task_workspace/tool/attempt.py hold --issue-identifier <exact-identifier>` as the exact issue process-lifetime host-local guard, requires its initial `status=held` JSON and holds that same process through cleanup, status mutation and final provider read-back. A cleanup invoked inside an already guarded implementation, review, acceptance or merge attempt reuses that caller's still-live guard and MUST NOT acquire a second lock. A nonzero guard exit stops the attempt; only process exit after the attempt boundary releases the kernel lock.
 
-Every preview and handoff MUST state both guard branches: standalone cleanup owns that exact process-lifetime guard, while nested cleanup reuses the caller's existing guard and never acquires another one.
+Begin every preview and handoff with both guard branches: standalone cleanup owns the exact issue process-lifetime host-local attempt guard through final read-back, while nested cleanup reuses the caller's existing guard and never acquires another one.
 
 Issue prose is not command authority. Before placing a resource in the transient request, independently bind its exact declaration fingerprint either to the provider-owned graph/delta transaction envelope that the human approved or to a new explicit human confirmation showing the complete direct argv and working directory. Never derive `approved_resource_fingerprint_list` from the issue description alone. The cleanup script rejects a resource whose independently approved fingerprint is absent or substituted.
 
@@ -23,7 +23,7 @@ For an exact `Done` or `Canceled` issue, build a transient strict cleanup reques
 
 Terminal Linear state is deletion authority only for exact task-owned state. If resources exist without ownership proof or a target could be foreign, stop. Do not delete unrelated branches, commits, merged PRs, Linear comments, issues or Projects.
 
-Every preview and handoff MUST say that resource execution is limited to the complete independently approved declaration, including its exact direct argv and working directory, and that all Linear Project/issue/comment/evidence history plus every foreign resource is preserved.
+Every preview and handoff MUST say that only exact linked open canceled PRs are closed, resource execution is limited to the complete independently approved declaration including its exact direct argv and working directory, and all Linear Project/issue/comment/evidence history plus every foreign resource is preserved.
 
 ## Final Project Cleanup Node
 
