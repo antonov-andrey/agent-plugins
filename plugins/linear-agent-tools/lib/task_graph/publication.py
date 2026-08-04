@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 from task_graph.delta import TaskGraphDelta
 from task_graph.model import SourceIdentity, TaskBlockerEdge, TaskGraph, TaskNode
@@ -15,7 +15,8 @@ def linear_markdown_link(value: str) -> str:
 
     parsed = urlsplit(value)
     if parsed.scheme in {"http", "https"} and parsed.netloc:
-        return f"[{value}](<{value}>)"
+        encoded_target = quote(value, safe=":/?#[]@!$&'()*+,;=%")
+        return f"[{value}](<{encoded_target}>)"
     return value
 
 
@@ -102,7 +103,7 @@ class IssuePublication:
                     repository_heading,
                     "",
                     *[
-                        f"* {index}. `{item.origin_url}` at `{item.base_branch}` using `{item.merge_method}`"
+                        f"{index}. `{item.origin_url}` at `{item.base_branch}` using `{item.merge_method}`"
                         for index, item in enumerate(node.repository_list, 1)
                     ],
                 )
@@ -152,7 +153,6 @@ class IssuePublication:
                 "",
                 "Agent attempts append concise comments with commits, receipts, PRs, CI and telemetry. "
                 "Raw logs, prompts and credentials are excluded.",
-                "",
             )
         )
         return cls(
@@ -242,7 +242,6 @@ class GraphPublicationView:
                 "```json",
                 normalized_json,
                 "```",
-                "",
             )
         )
         issue_list = [
@@ -361,7 +360,6 @@ class DeltaPublicationView:
                 "```json",
                 normalized_json,
                 "```",
-                "",
             )
         )
         provider_identity_detail_list = [

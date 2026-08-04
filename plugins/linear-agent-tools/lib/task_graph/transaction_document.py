@@ -15,7 +15,7 @@ _DOCUMENT_MARKER_BY_TITLE_PREFIX = {
     "Linear task graph delta ": "# Linear Agent Tools Delta Plan\n",
 }
 _JSON_START = "\n```json\n"
-_JSON_END = "\n```\n"
+_JSON_END = "\n```"
 
 
 class TransactionDocument(Protocol):
@@ -81,7 +81,12 @@ def _transaction_payload_get(content: str, *, marker: str) -> dict[str, object]:
         raise TaskGraphError("Linear transaction document title collides with foreign content")
     start = content.find(_JSON_START)
     end = content.find(_JSON_END, start + len(_JSON_START)) if start >= 0 else -1
-    if start < 0 or end < 0 or content.find(_JSON_START, start + len(_JSON_START)) >= 0:
+    if (
+        start < 0
+        or end < 0
+        or end + len(_JSON_END) != len(content)
+        or content.find(_JSON_START, start + len(_JSON_START)) >= 0
+    ):
         raise TaskGraphError("Linear transaction document has no unique normalized payload")
     encoded = content[start + len(_JSON_START) : end]
     try:

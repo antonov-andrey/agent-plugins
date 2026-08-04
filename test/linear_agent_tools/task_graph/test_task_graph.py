@@ -15,7 +15,7 @@ if str(LIBRARY_ROOT) not in sys.path:
 
 from task_graph.delta import TaskGraphDelta
 from task_graph.model import TaskGraph, TaskGraphError
-from task_graph.publication import DeltaPublicationView, GraphPublicationView
+from task_graph.publication import DeltaPublicationView, GraphPublicationView, linear_markdown_link
 from task_graph.reconciliation.delta import TaskGraphDeltaReconciler
 from task_graph.reconciliation.initial import TaskGraphReconciler
 from task_graph.reconciliation.model import (
@@ -172,9 +172,33 @@ def test_publication_uses_linear_canonical_markdown_for_exact_readback() -> None
     assert "\n\n* Project key:" in view.project_description
     assert f"[{graph.source.canonical_url}](<{graph.source.canonical_url}>)" in view.project_description
     assert "\n* Provider: `linear-agent-tools/v1`" in view.import_document_content
-    assert "\n* Node key: `implementation`" in next(
-        item.description for item in view.issue_list if item.node_key == "implementation"
+    issue_description = next(item.description for item in view.issue_list if item.node_key == "implementation")
+    assert "\n* Node key: `implementation`" in issue_description
+    assert "\n1. `git@github.com:antonov-andrey/example.git`" in issue_description
+    assert not issue_description.endswith("\n")
+    assert not view.import_document_content.endswith("\n")
+    value = "https://example.test/spec.md#Раздел"
+    assert linear_markdown_link(value) == (
+        f"[{value}](<https://example.test/spec.md#%D0%A0%D0%B0%D0%B7%D0%B4%D0%B5%D0%BB>)"
     )
+
+
+def test_remote_issue_accepts_the_canonical_identifier_returned_by_linear_mcp() -> None:
+    """Official MCP issue reads expose AND-5 rather than the hidden GraphQL UUID."""
+
+    issue = RemoteIssue(
+        id="AND-5",
+        node_key="implementation",
+        title="Implementation",
+        description="Complete the implementation.",
+        status_name="Backlog",
+        label_name_list=[],
+        assignee_id="",
+        delegate_id="",
+        blocker_key_list=[],
+    )
+
+    assert issue.id == "AND-5"
 
 
 def _delta_payload(graph: TaskGraph) -> dict[str, object]:

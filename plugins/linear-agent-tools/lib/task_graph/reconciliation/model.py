@@ -28,6 +28,7 @@ _PROJECT_KEY_PATTERN = re.compile(
 )
 _ROLE_VALUE_SET = frozenset(item.value for item in TaskRole)
 _UUID_PATTERN = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+_ISSUE_IDENTIFIER_PATTERN = re.compile(r"[A-Z][A-Z0-9]*-[1-9][0-9]*")
 
 
 def _node_key_require(value: object, *, label: str) -> None:
@@ -49,6 +50,15 @@ def _uuid_require(value: object, *, label: str) -> None:
 
     if not isinstance(value, str) or _UUID_PATTERN.fullmatch(value) is None:
         raise TaskGraphError(f"{label} must be one lowercase UUID")
+
+
+def _issue_identity_require(value: object) -> None:
+    """Accept the exact issue identity exposed by the official Linear MCP."""
+
+    if not isinstance(value, str) or (
+        _UUID_PATTERN.fullmatch(value) is None and _ISSUE_IDENTIFIER_PATTERN.fullmatch(value) is None
+    ):
+        raise TaskGraphError("Remote issue ID must be one lowercase UUID or canonical Linear identifier")
 
 
 class PublicationPhase(StrEnum):
@@ -89,7 +99,7 @@ class RemoteIssue:
     def __post_init__(self) -> None:
         """Validate one fully read external issue snapshot."""
 
-        _uuid_require(self.id, label="Remote issue ID")
+        _issue_identity_require(self.id)
         _node_key_require(self.node_key, label="Remote issue node key")
         _single_line_require(self.title, label="Remote issue title")
         if not isinstance(self.description, str) or not self.description.strip() or "\x00" in self.description:
