@@ -19,7 +19,7 @@ from task_workspace.model import (
     WorkspaceConfig,
     WorkspaceRequest,
 )
-from task_workspace.submodule import recursive_submodule_state_list_get
+from task_workspace.submodule import WorkspaceSubmoduleReader
 from task_workspace.transaction import TaskWorkspaceTransaction
 
 
@@ -78,7 +78,11 @@ def main(argv: list[str] | None = None) -> int:
     try:
         request = _request_get(args.issue_identifier, args.repositories_input)
         transaction = TaskWorkspaceTransaction(WorkspaceConfig.from_environment())
-        state_list = transaction.prepare(request) if args.command == "prepare" else transaction.validate(request)
+        state_list = (
+            transaction.prepare(request)
+            if args.command == "prepare"
+            else transaction.validate(request)
+        )
     except TaskWorkspaceError as error:
         print(str(error), file=sys.stderr)
         return 2
@@ -93,7 +97,9 @@ def main(argv: list[str] | None = None) -> int:
                         "origin_identity": item.origin_identity,
                         "recursive_submodule_commit_by_path_map": {
                             state.relative_path: state.commit
-                            for state in recursive_submodule_state_list_get(Path(item.task_root))
+                            for state in WorkspaceSubmoduleReader(
+                                Path(item.task_root)
+                            ).read()
                         },
                         "task_root": item.task_root,
                     }

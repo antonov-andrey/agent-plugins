@@ -15,14 +15,16 @@ LIBRARY_ROOT = REPOSITORY_ROOT / "plugins" / "linear-agent-tools" / "lib"
 if str(LIBRARY_ROOT) not in sys.path:
     sys.path.insert(0, str(LIBRARY_ROOT))
 
-import task_workspace.transaction as transaction_module
 import task_workspace.lock as lock_module
 from task_cleanup.model import (
     CleanupAuthority,
     CleanupRequest,
     TaskCleanupError,
 )
-from task_cleanup.reconciliation import TaskCleanupReconciler, _pull_request_contract_require
+from task_cleanup.reconciliation import (
+    TaskCleanupReconciler,
+    _pull_request_contract_require,
+)
 from task_cleanup.resource import ResourceCleaner
 from task_graph.model import ResourceDeclaration, ResourceLifetime
 from task_workspace.lock import IssueAttemptLock, IssueWorkspaceLock
@@ -32,9 +34,9 @@ from task_workspace.model import (
     WorkspaceConfig,
     WorkspaceRequest,
 )
-from task_workspace.bootstrap import manifest_parse
+from task_workspace.bootstrap import BootstrapPlan, BootstrapResource
 from task_workspace.repository import WorkspaceRepository, origin_identity_get
-from task_workspace.submodule import recursive_submodule_state_list_get
+from task_workspace.submodule import WorkspaceSubmoduleReader
 from task_workspace.transaction import TaskWorkspaceTransaction
 
 
@@ -84,7 +86,9 @@ def _repository_create(workspace: Path, *, resources: bool = True) -> Repository
         check=True,
         capture_output=True,
     )
-    subprocess.run(["git", "clone", str(remote), str(root)], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "clone", str(remote), str(root)], check=True, capture_output=True
+    )
     _git(root, "config", "user.email", "test@example.com")
     _git(root, "config", "user.name", "Test User")
     (root / "README.md").write_text("# Example\n", encoding="utf-8")
@@ -116,11 +120,13 @@ resource:
     return RepositoryFixture(root=root, remote=remote, baseline_commit=initial)
 
 
-def test_bootstrap_manifest_parser_is_self_contained_and_schema_bounded(tmp_path: Path) -> None:
+def test_bootstrap_manifest_parser_is_self_contained_and_schema_bounded(
+    tmp_path: Path,
+) -> None:
     """The installable plugin parses only its owned YAML schema without PyYAML."""
 
     (tmp_path / "config:file").write_text("value\n", encoding="utf-8")
-    plan = manifest_parse(
+    plan = BootstrapPlan.from_manifest(
         b"""schema_version: 2
 resource:
   copy_optional_path_list: []
@@ -140,7 +146,13 @@ cleanup:
     )
 
     assert [item.relative_path for item in plan.resource_list] == ["config:file"]
-    assert plan.cleanup_argument_list == ["python", "manage.py", "destroy", "--git-worktree", "{common_prefix}"]
+    assert plan.cleanup_argument_list == [
+        "python",
+        "manage.py",
+        "destroy",
+        "--git-worktree",
+        "{common_prefix}",
+    ]
 
 
 @pytest.mark.parametrize(
@@ -156,14 +168,18 @@ cleanup:
         b"schema_version: 2\nresource:\n  copy_optional_path_list:\n    - #comment\n",
     ],
 )
-def test_bootstrap_manifest_parser_rejects_yaml_outside_owned_subset(payload: bytes, tmp_path: Path) -> None:
+def test_bootstrap_manifest_parser_rejects_yaml_outside_owned_subset(
+    payload: bytes, tmp_path: Path
+) -> None:
     """Ambiguous general-YAML features cannot enter the bootstrap contract."""
 
     with pytest.raises(TaskWorkspaceError):
-        manifest_parse(payload, main_root=tmp_path)
+        BootstrapPlan.from_manifest(payload, main_root=tmp_path)
 
 
-def _request(remote: Path, *, issue: str = "AND-101", baseline: str = "") -> WorkspaceRequest:
+def _request(
+    remote: Path, *, issue: str = "AND-101", baseline: str = ""
+) -> WorkspaceRequest:
     """Return one exact issue workspace request.
 
     Args:
@@ -191,7 +207,9 @@ def _submodule_add(workspace: Path, root: Path) -> str:
         check=True,
         capture_output=True,
     )
-    subprocess.run(["git", "clone", str(remote), str(source)], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "clone", str(remote), str(source)], check=True, capture_output=True
+    )
     _git(source, "config", "user.email", "test@example.com")
     _git(source, "config", "user.name", "Test User")
     (source / "provider.py").write_text("VALUE = 1\n", encoding="utf-8")
@@ -213,7 +231,9 @@ def _submodule_add(workspace: Path, root: Path) -> str:
     return commit
 
 
-def _canceled_cleanup_request(request: WorkspaceRequest, *, issue: str) -> CleanupRequest:
+def _canceled_cleanup_request(
+    request: WorkspaceRequest, *, issue: str
+) -> CleanupRequest:
     """Return terminal cancellation authority for one exact workspace request.
 
     Args:
@@ -260,7 +280,9 @@ def test_prepare_preserves_dirty_main_and_rework_adopts_existing_workspace(
     task_root = Path(state.task_root)
     assert state.baseline_commit == baseline
     assert state.branch_name == "linear/and-101"
-    assert (task_root / "local-config.json").read_text(encoding="utf-8") == '{"mode":"test"}\n'
+    assert (task_root / "local-config.json").read_text(
+        encoding="utf-8"
+    ) == '{"mode":"test"}\n'
     assert (task_root / "secret.txt").is_symlink()
     assert (root / "local-config.json").exists()
     (task_root / "unfinished.txt").write_text("preserve me\n", encoding="utf-8")
@@ -289,7 +311,7 @@ def test_prepare_initializes_recursive_submodules_and_retry_never_resets_them(
     task_root = Path(state.task_root)
     provider_root = task_root / "vendor" / "provider"
 
-    submodule_state_list = recursive_submodule_state_list_get(task_root)
+    submodule_state_list = WorkspaceSubmoduleReader(task_root).read()
     assert [item.payload() for item in submodule_state_list] == [
         {"relative_path": "vendor/provider", "commit": provider_commit}
     ]
@@ -339,7 +361,9 @@ def test_direct_workspace_and_cleanup_models_require_strict_typed_lists(
         cleanup_argument_list=["python", "manage.py", "destroy"],
         consumer_node_key_list=[],
     )
-    with pytest.raises(TaskCleanupError, match="independently approved declaration fingerprint"):
+    with pytest.raises(
+        TaskCleanupError, match="independently approved declaration fingerprint"
+    ):
         CleanupRequest(
             issue_identifier="AND-121",
             authority=authority,
@@ -388,17 +412,17 @@ def test_interrupted_bootstrap_recovers_from_durable_planned_resource(
     remote = repository_fixture.remote
     config = WorkspaceConfig(tmp_path.resolve())
     request = _request(remote, issue="AND-102")
-    original = transaction_module.resource_materialize
+    original = BootstrapResource.materialize
     call_count = 0
 
-    def fail_once(*args: object, **kwargs: object) -> None:
+    def fail_once(resource: BootstrapResource, *args: object, **kwargs: object) -> None:
         nonlocal call_count
         call_count += 1
         if call_count == 1:
             raise RuntimeError("simulated interruption")
-        original(*args, **kwargs)
+        original(resource, *args, **kwargs)
 
-    monkeypatch.setattr(transaction_module, "resource_materialize", fail_once)
+    monkeypatch.setattr(BootstrapResource, "materialize", fail_once)
     with pytest.raises(RuntimeError, match="simulated interruption"):
         TaskWorkspaceTransaction(config).prepare(request)
 
@@ -495,7 +519,9 @@ def test_attempt_guard_holds_issue_ownership_for_its_process_lifetime(
         pass
 
 
-def test_issue_lock_rejects_attacker_symlink_parent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_issue_lock_rejects_attacker_symlink_parent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A predictable lock path cannot redirect lock creation outside its private root."""
 
     workspace = tmp_path / "workspace"
@@ -506,7 +532,9 @@ def test_issue_lock_rejects_attacker_symlink_parent(tmp_path: Path, monkeypatch:
     private_root.symlink_to(outside, target_is_directory=True)
     monkeypatch.setattr(lock_module.tempfile, "gettempdir", lambda: str(tmp_path))
 
-    with pytest.raises(TaskWorkspaceError, match="private user-owned physical directory"):
+    with pytest.raises(
+        TaskWorkspaceError, match="private user-owned physical directory"
+    ):
         with IssueWorkspaceLock(WorkspaceConfig(workspace.resolve()), "AND-113"):
             pass
 
@@ -547,7 +575,9 @@ def test_worktree_container_symlink_is_rejected_before_git_mutation(
     (root / ".worktree").symlink_to(outside, target_is_directory=True)
 
     with pytest.raises(TaskWorkspaceError, match="physical repository-local directory"):
-        TaskWorkspaceTransaction(WorkspaceConfig(tmp_path.resolve())).prepare(_request(remote, issue="AND-111"))
+        TaskWorkspaceTransaction(WorkspaceConfig(tmp_path.resolve())).prepare(
+            _request(remote, issue="AND-111")
+        )
 
     assert not (outside / "and-111").exists()
     assert _git(root, "branch", "--list", "linear/and-111") == ""
@@ -575,12 +605,17 @@ resource:
         encoding="utf-8",
     )
 
-    state = TaskWorkspaceTransaction(WorkspaceConfig(tmp_path.resolve())).prepare(_request(remote, issue="AND-118"))[0]
+    state = TaskWorkspaceTransaction(WorkspaceConfig(tmp_path.resolve())).prepare(
+        _request(remote, issue="AND-118")
+    )[0]
 
     assert state.phase == "bootstrap-ready"
     assert state.resource_list == []
     assert not (Path(state.task_root) / "uncommitted-required.txt").exists()
-    assert _git(root, "status", "--short", "worktree-bootstrap.yaml") == "M worktree-bootstrap.yaml"
+    assert (
+        _git(root, "status", "--short", "worktree-bootstrap.yaml")
+        == "M worktree-bootstrap.yaml"
+    )
 
 
 def test_legacy_bootstrap_requires_adoption_then_uses_only_canonical_yaml(
@@ -594,7 +629,9 @@ def test_legacy_bootstrap_requires_adoption_then_uses_only_canonical_yaml(
 
     remote = repository_fixture.remote
     (root / "worktree-bootstrap.yaml").unlink()
-    (root / "worktree-bootstrap.toml").write_text("schema_version = 1\n", encoding="utf-8")
+    (root / "worktree-bootstrap.toml").write_text(
+        "schema_version = 1\n", encoding="utf-8"
+    )
     _git(root, "add", "worktree-bootstrap.yaml", "worktree-bootstrap.toml")
     _git(root, "commit", "-m", "Represent stale consumer contract")
     _git(root, "push", "origin", "main")
@@ -657,8 +694,12 @@ resource:
     _git(root, "commit", "-m", "Declare nested bootstrap resource")
     _git(root, "push", "origin", "main")
 
-    with pytest.raises(TaskWorkspaceError, match="destination parent is not a physical directory"):
-        TaskWorkspaceTransaction(WorkspaceConfig(tmp_path.resolve())).prepare(_request(remote, issue="AND-119"))
+    with pytest.raises(
+        TaskWorkspaceError, match="destination parent is not a physical directory"
+    ):
+        TaskWorkspaceTransaction(WorkspaceConfig(tmp_path.resolve())).prepare(
+            _request(remote, issue="AND-119")
+        )
 
     assert source.read_text(encoding="utf-8") == "source\n"
 
@@ -666,10 +707,20 @@ resource:
 def test_origin_identity_preserves_security_relevant_url_components() -> None:
     """Ports and SSH users cannot collapse distinct repository origins."""
 
-    assert origin_identity_get("git@github.com:owner/example.git") == "ssh://github.com/owner/example"
-    assert origin_identity_get("ssh://git@github.com/owner/example.git") == "ssh://github.com/owner/example"
-    assert origin_identity_get("ssh://git@github.com:2222/owner/example.git") == ("ssh://github.com:2222/owner/example")
-    assert origin_identity_get("ssh://deploy@github.com/owner/example.git") == ("ssh://deploy@github.com/owner/example")
+    assert (
+        origin_identity_get("git@github.com:owner/example.git")
+        == "ssh://github.com/owner/example"
+    )
+    assert (
+        origin_identity_get("ssh://git@github.com/owner/example.git")
+        == "ssh://github.com/owner/example"
+    )
+    assert origin_identity_get("ssh://git@github.com:2222/owner/example.git") == (
+        "ssh://github.com:2222/owner/example"
+    )
+    assert origin_identity_get("ssh://deploy@github.com/owner/example.git") == (
+        "ssh://deploy@github.com/owner/example"
+    )
     with pytest.raises(TaskWorkspaceError, match="credentials"):
         origin_identity_get("https://token@github.com/owner/example.git")
     with pytest.raises(TaskWorkspaceError, match="suffixes"):
@@ -721,16 +772,26 @@ def test_fresh_host_adopts_remote_rework_only_with_recorded_baseline(
     fresh_workspace = tmp_path / "fresh"
     fresh_workspace.mkdir()
     fresh_root = fresh_workspace / "example"
-    subprocess.run(["git", "clone", str(remote), str(fresh_root)], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "clone", str(remote), str(fresh_root)], check=True, capture_output=True
+    )
     _git(fresh_root, "config", "user.email", "test@example.com")
     _git(fresh_root, "config", "user.name", "Test User")
     fresh_config = WorkspaceConfig(fresh_workspace.resolve())
 
-    with pytest.raises(TaskWorkspaceError, match="requires its recorded Linear baseline"):
-        TaskWorkspaceTransaction(fresh_config).prepare(_request(remote, issue="AND-105"))
+    with pytest.raises(
+        TaskWorkspaceError, match="requires its recorded Linear baseline"
+    ):
+        TaskWorkspaceTransaction(fresh_config).prepare(
+            _request(remote, issue="AND-105")
+        )
 
-    adopted = TaskWorkspaceTransaction(fresh_config).prepare(_request(remote, issue="AND-105", baseline=baseline))[0]
-    assert (Path(adopted.task_root) / "change.txt").read_text(encoding="utf-8") == "candidate\n"
+    adopted = TaskWorkspaceTransaction(fresh_config).prepare(
+        _request(remote, issue="AND-105", baseline=baseline)
+    )[0]
+    assert (Path(adopted.task_root) / "change.txt").read_text(
+        encoding="utf-8"
+    ) == "candidate\n"
 
 
 def test_unowned_local_branch_is_not_adopted_without_private_state(
@@ -752,8 +813,12 @@ def test_unowned_local_branch_is_not_adopted_without_private_state(
             _request(remote, issue="AND-112", baseline=baseline)
         )
 
-    state_path = Path(_git(root, "rev-parse", "--path-format=absolute", "--git-common-dir"))
-    assert not (state_path / "linear-agent-tools" / "task" / "and-112" / "workspace.json").exists()
+    state_path = Path(
+        _git(root, "rev-parse", "--path-format=absolute", "--git-common-dir")
+    )
+    assert not (
+        state_path / "linear-agent-tools" / "task" / "and-112" / "workspace.json"
+    ).exists()
 
 
 def test_unowned_local_branch_is_rejected_even_when_exact_remote_exists(
@@ -794,7 +859,9 @@ def test_private_state_parent_symlink_is_rejected_before_git_mutation(
     (root / ".git" / "linear-agent-tools").symlink_to(outside, target_is_directory=True)
 
     with pytest.raises(TaskWorkspaceError, match="user-owned physical directory"):
-        TaskWorkspaceTransaction(WorkspaceConfig(tmp_path.resolve())).prepare(_request(remote, issue="AND-115"))
+        TaskWorkspaceTransaction(WorkspaceConfig(tmp_path.resolve())).prepare(
+            _request(remote, issue="AND-115")
+        )
 
     assert list(outside.iterdir()) == []
     assert _git(root, "branch", "--list", "linear/and-115") == ""
@@ -870,7 +937,9 @@ def test_done_cleanup_rejects_unintegrated_branch_commits(tmp_path: Path) -> Non
         TaskCleanupReconciler(config).cleanup(cleanup_request)
 
     assert task_root.exists()
-    assert _git(task_root, "rev-parse", "HEAD") != _git(task_root, "rev-parse", "origin/main")
+    assert _git(task_root, "rev-parse", "HEAD") != _git(
+        task_root, "rev-parse", "origin/main"
+    )
 
 
 def test_canceled_cleanup_may_remove_dirty_exact_task_state(tmp_path: Path) -> None:
@@ -884,7 +953,9 @@ def test_canceled_cleanup_may_remove_dirty_exact_task_state(tmp_path: Path) -> N
     config = WorkspaceConfig(tmp_path.resolve())
     request = _request(remote, issue="AND-107")
     state = TaskWorkspaceTransaction(config).prepare(request)[0]
-    (Path(state.task_root) / "uncommitted.txt").write_text("discard by cancellation\n", encoding="utf-8")
+    (Path(state.task_root) / "uncommitted.txt").write_text(
+        "discard by cancellation\n", encoding="utf-8"
+    )
     cleanup_request = CleanupRequest(
         issue_identifier="AND-107",
         authority=CleanupAuthority(
@@ -944,7 +1015,9 @@ def test_cleanup_recovers_after_worktree_removal_before_state_commit(
     assert _git(root, "branch", "--list", state.branch_name) == ""
 
 
-@pytest.mark.parametrize("interruption_field", ["remote_branch_removed", "local_branch_removed"])
+@pytest.mark.parametrize(
+    "interruption_field", ["remote_branch_removed", "local_branch_removed"]
+)
 def test_cleanup_recovers_after_branch_removal_before_state_commit(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -965,14 +1038,18 @@ def test_cleanup_recovers_after_branch_removal_before_state_commit(
     original_state_write = WorkspaceRepository.state_write
     interrupted = False
 
-    def interrupt_after_branch_removal(self: WorkspaceRepository, candidate: object) -> None:
+    def interrupt_after_branch_removal(
+        self: WorkspaceRepository, candidate: object
+    ) -> None:
         nonlocal interrupted
         if getattr(candidate, interruption_field, False) and not interrupted:
             interrupted = True
             raise RuntimeError(f"simulated post-{interruption_field} interruption")
         original_state_write(self, candidate)
 
-    monkeypatch.setattr(WorkspaceRepository, "state_write", interrupt_after_branch_removal)
+    monkeypatch.setattr(
+        WorkspaceRepository, "state_write", interrupt_after_branch_removal
+    )
 
     with pytest.raises(RuntimeError, match=interruption_field):
         TaskCleanupReconciler(config).cleanup(cleanup_request)
@@ -1005,14 +1082,21 @@ def test_cleanup_rejects_remote_branch_mutation_after_durable_snapshot(
     original_state_write = WorkspaceRepository.state_write
     interrupted = False
 
-    def interrupt_after_removal_proof(self: WorkspaceRepository, candidate: object) -> None:
+    def interrupt_after_removal_proof(
+        self: WorkspaceRepository, candidate: object
+    ) -> None:
         nonlocal interrupted
-        if getattr(candidate, "cleanup_worktree_removal_ready", False) and not interrupted:
+        if (
+            getattr(candidate, "cleanup_worktree_removal_ready", False)
+            and not interrupted
+        ):
             interrupted = True
             raise RuntimeError("simulated pre-removal interruption")
         original_state_write(self, candidate)
 
-    monkeypatch.setattr(WorkspaceRepository, "state_write", interrupt_after_removal_proof)
+    monkeypatch.setattr(
+        WorkspaceRepository, "state_write", interrupt_after_removal_proof
+    )
     with pytest.raises(RuntimeError, match="pre-removal"):
         TaskCleanupReconciler(config).cleanup(cleanup_request)
 
@@ -1083,16 +1167,25 @@ def test_cleanup_rejects_changed_resource_declaration_after_durable_success(
     original_state_write = WorkspaceRepository.state_write
     interrupted = False
 
-    def interrupt_after_resource_receipt(self: WorkspaceRepository, candidate: object) -> None:
+    def interrupt_after_resource_receipt(
+        self: WorkspaceRepository, candidate: object
+    ) -> None:
         nonlocal interrupted
         original_state_write(self, candidate)
-        if getattr(candidate, "cleaned_resource_fingerprint_by_resource_key_map", {}) and not interrupted:
+        if (
+            getattr(candidate, "cleaned_resource_fingerprint_by_resource_key_map", {})
+            and not interrupted
+        ):
             interrupted = True
             raise RuntimeError("simulated post-resource interruption")
 
-    monkeypatch.setattr(WorkspaceRepository, "state_write", interrupt_after_resource_receipt)
+    monkeypatch.setattr(
+        WorkspaceRepository, "state_write", interrupt_after_resource_receipt
+    )
     with pytest.raises(RuntimeError, match="post-resource"):
-        TaskCleanupReconciler(config, resources=ResourceCleaner(runner)).cleanup(cleanup_request)
+        TaskCleanupReconciler(config, resources=ResourceCleaner(runner)).cleanup(
+            cleanup_request
+        )
 
     changed = ResourceDeclaration(
         key=resource.key,
@@ -1114,7 +1207,9 @@ def test_cleanup_rejects_changed_resource_declaration_after_durable_success(
             )
         )
 
-    assert captured_argument_list == [["python", "manage.py", "destroy", "--issue", "AND-120"]]
+    assert captured_argument_list == [
+        ["python", "manage.py", "destroy", "--issue", "AND-120"]
+    ]
     assert (root / ".worktree" / "and-120").exists()
 
 
@@ -1167,8 +1262,12 @@ def test_cleanup_never_executes_project_command_through_replaced_worktree_symlin
         approved_resource_fingerprint_list=[resource.fingerprint()],
     )
 
-    with pytest.raises(TaskCleanupError, match="unavailable before project-owned cleanup"):
-        TaskCleanupReconciler(config, resources=ResourceCleaner(runner)).cleanup(cleanup_request)
+    with pytest.raises(
+        TaskCleanupError, match="unavailable before project-owned cleanup"
+    ):
+        TaskCleanupReconciler(config, resources=ResourceCleaner(runner)).cleanup(
+            cleanup_request
+        )
 
     assert not called
     assert list(outside.iterdir()) == []
@@ -1196,7 +1295,11 @@ def test_cleanup_requires_complete_exact_pull_request_set() -> None:
             all_other_project_nodes_terminal=False,
             unresolved_remediation_blocker_count=0,
         ),
-        repository_list=[RepositoryRequest("https://github.com/antonov-andrey/example.git", "main", "")],
+        repository_list=[
+            RepositoryRequest(
+                "https://github.com/antonov-andrey/example.git", "main", ""
+            )
+        ],
         pull_request_list=[],
         resource_list=[],
     )
@@ -1221,7 +1324,9 @@ def test_project_final_cleanup_requires_acceptance_other_terminal_nodes_and_no_r
     captured_argument_list: list[list[str]] = []
     captured_working_directory_list: list[Path] = []
 
-    def runner(argument_list: list[str], *, cwd: Path, check: bool, capture_output: bool) -> object:
+    def runner(
+        argument_list: list[str], *, cwd: Path, check: bool, capture_output: bool
+    ) -> object:
         assert not check
         assert capture_output
         captured_argument_list.append(argument_list)
@@ -1264,8 +1369,12 @@ def test_project_final_cleanup_requires_acceptance_other_terminal_nodes_and_no_r
         project_issue_identifier_list=["AND-110"],
     )
 
-    first = TaskCleanupReconciler(config, resources=ResourceCleaner(runner)).cleanup(cleanup_request)
-    second = TaskCleanupReconciler(config, resources=ResourceCleaner(runner)).cleanup(cleanup_request)
+    first = TaskCleanupReconciler(config, resources=ResourceCleaner(runner)).cleanup(
+        cleanup_request
+    )
+    second = TaskCleanupReconciler(config, resources=ResourceCleaner(runner)).cleanup(
+        cleanup_request
+    )
 
     assert first.cleaned_resource_count == 1
     assert second.cleaned_resource_count == 1
@@ -1350,7 +1459,9 @@ def test_project_final_cleanup_proves_all_project_issue_workspaces_absent(
     with pytest.raises(TaskCleanupError, match="AND-120.*private task-workspace state"):
         TaskCleanupReconciler(config).cleanup(project_cleanup)
 
-    TaskCleanupReconciler(config).cleanup(_canceled_cleanup_request(other_request, issue="AND-120"))
+    TaskCleanupReconciler(config).cleanup(
+        _canceled_cleanup_request(other_request, issue="AND-120")
+    )
     result = TaskCleanupReconciler(config).cleanup(project_cleanup)
 
     assert result.removed_worktree_count == 0
@@ -1372,7 +1483,9 @@ def test_attempt_cleanup_repeats_idempotent_resource_without_removing_workspace(
     captured_argument_list: list[list[str]] = []
     captured_working_directory_list: list[Path] = []
 
-    def runner(argument_list: list[str], *, cwd: Path, check: bool, capture_output: bool) -> object:
+    def runner(
+        argument_list: list[str], *, cwd: Path, check: bool, capture_output: bool
+    ) -> object:
         assert not check
         assert capture_output
         captured_argument_list.append(argument_list)
@@ -1409,12 +1522,19 @@ def test_attempt_cleanup_repeats_idempotent_resource_without_removing_workspace(
         approved_resource_fingerprint_list=[resource.fingerprint()],
     )
 
-    first = TaskCleanupReconciler(config, resources=ResourceCleaner(runner)).cleanup(cleanup_request)
-    second = TaskCleanupReconciler(config, resources=ResourceCleaner(runner)).cleanup(cleanup_request)
+    first = TaskCleanupReconciler(config, resources=ResourceCleaner(runner)).cleanup(
+        cleanup_request
+    )
+    second = TaskCleanupReconciler(config, resources=ResourceCleaner(runner)).cleanup(
+        cleanup_request
+    )
 
     assert first.cleaned_resource_count == second.cleaned_resource_count == 1
     assert len(captured_argument_list) == 2
-    assert captured_working_directory_list == [Path(state.task_root), Path(state.task_root)]
+    assert captured_working_directory_list == [
+        Path(state.task_root),
+        Path(state.task_root),
+    ]
     assert Path(state.task_root).exists()
     assert _git(root, "show-ref", "--verify", f"refs/heads/{state.branch_name}")
 
@@ -1425,7 +1545,9 @@ def test_resource_cleaner_executes_direct_argv_without_shell() -> None:
     captured_argument_list: list[list[str]] = []
     captured_working_directory_list: list[Path] = []
 
-    def runner(argument_list: list[str], *, cwd: Path, check: bool, capture_output: bool) -> object:
+    def runner(
+        argument_list: list[str], *, cwd: Path, check: bool, capture_output: bool
+    ) -> object:
         assert not check
         assert capture_output
         captured_argument_list.append(argument_list)
@@ -1452,5 +1574,7 @@ def test_resource_cleaner_executes_direct_argv_without_shell() -> None:
         placeholder_by_name_map={"linear_issue_identifier": "AND-108"},
     )
 
-    assert captured_argument_list == [["python", "manage.py", "destroy", "--task", "AND-108"]]
+    assert captured_argument_list == [
+        ["python", "manage.py", "destroy", "--task", "AND-108"]
+    ]
     assert captured_working_directory_list == [Path("/tmp/task")]

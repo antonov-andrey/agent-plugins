@@ -6,14 +6,11 @@ from dataclasses import replace
 from pathlib import Path
 
 from task_workspace.bootstrap import (
+    BootstrapPlan,
     BootstrapResource,
-    manifest_parse,
-    resource_materialize,
-    resource_ready_require,
 )
 from task_workspace.lock import IssueWorkspaceLock
 from task_workspace.model import (
-    BootstrapResourceState,
     RepositoryRequest,
     RepositoryWorkspaceState,
     TaskWorkspaceError,
@@ -21,10 +18,7 @@ from task_workspace.model import (
     WorkspaceRequest,
 )
 from task_workspace.repository import GitCommand, WorkspaceRepository
-from task_workspace.submodule import (
-    recursive_submodule_state_list_get,
-    recursive_submodule_state_list_prepare,
-)
+from task_workspace.submodule import WorkspaceSubmoduleReader
 
 
 class TaskWorkspaceTransaction:
@@ -50,7 +44,10 @@ class TaskWorkspaceTransaction:
         """
 
         with IssueWorkspaceLock(self._config, request.issue_identifier):
-            state_list = [self._repository_prepare(request, repository) for repository in request.repository_list]
+            state_list = [
+                self._repository_prepare(request, repository)
+                for repository in request.repository_list
+            ]
             return state_list
 
     def validate(self, request: WorkspaceRequest) -> list[RepositoryWorkspaceState]:
@@ -66,17 +63,27 @@ class TaskWorkspaceTransaction:
         with IssueWorkspaceLock(self._config, request.issue_identifier):
             state_list: list[RepositoryWorkspaceState] = []
             for repository_request in request.repository_list:
-                repository = WorkspaceRepository.from_config(self._config, repository_request)
+                repository = WorkspaceRepository.from_config(
+                    self._config, repository_request
+                )
                 state = repository.state_read(request.issue_identifier)
                 if state is None:
-                    raise TaskWorkspaceError("Issue workspace has no private ownership state")
+                    raise TaskWorkspaceError(
+                        "Issue workspace has no private ownership state"
+                    )
                 repository.state_identity_require(request.issue_identifier, state)
-                if state.phase != "bootstrap-ready" or any(item.phase != "ready" for item in state.resource_list):
-                    raise TaskWorkspaceError("Issue workspace transaction is incomplete")
+                if state.phase != "bootstrap-ready" or any(
+                    item.phase != "ready" for item in state.resource_list
+                ):
+                    raise TaskWorkspaceError(
+                        "Issue workspace transaction is incomplete"
+                    )
                 repository.task_worktree_require(state)
-                recursive_submodule_state_list_get(Path(state.task_root))
-                for resource in _resource_list_from_state(state.resource_list):
-                    resource_ready_require(resource, task_root=Path(state.task_root))
+                WorkspaceSubmoduleReader(Path(state.task_root)).read()
+                for resource_state in state.resource_list:
+                    BootstrapResource.from_state(resource_state).ready_require(
+                        task_root=Path(state.task_root)
+                    )
                 state_list.append(state)
             return state_list
 
@@ -104,21 +111,24 @@ class TaskWorkspaceTransaction:
             repository.state_identity_require(request.issue_identifier, state)
         repository.task_worktree_create_or_accept(state)
         if state.phase == "planned":
-            recursive_submodule_state_list_prepare(Path(state.task_root))
+            WorkspaceSubmoduleReader(Path(state.task_root)).prepare()
             state = replace(state, phase="worktree-ready")
             repository.state_write(state)
         else:
-            recursive_submodule_state_list_get(Path(state.task_root))
+            WorkspaceSubmoduleReader(Path(state.task_root)).read()
         resource_by_relative_path_map = {
-            item.relative_path: item for item in _resource_list_from_state(state.resource_list)
+            item.relative_path: item
+            for item in [
+                BootstrapResource.from_state(resource_state)
+                for resource_state in state.resource_list
+            ]
         }
         for index, resource_state in enumerate(state.resource_list):
             resource = resource_by_relative_path_map[resource_state.relative_path]
             if resource_state.phase == "ready":
-                resource_ready_require(resource, task_root=Path(state.task_root))
+                resource.ready_require(task_root=Path(state.task_root))
                 continue
-            resource_materialize(
-                resource,
+            resource.materialize(
                 main_root=Path(state.main_root),
                 task_root=Path(state.task_root),
             )
@@ -126,7 +136,8 @@ class TaskWorkspaceTransaction:
             state = replace(
                 state,
                 resource_list=[
-                    ready_state if item_index == index else item for item_index, item in enumerate(state.resource_list)
+                    ready_state if item_index == index else item
+                    for item_index, item in enumerate(state.resource_list)
                 ],
             )
             repository.state_write(state)
@@ -154,7 +165,9 @@ class TaskWorkspaceTransaction:
 
         repository.fetch()
         repository.task_container_require(create=False)
-        base_commit = repository.commit_get(f"refs/remotes/origin/{repository_request.base_branch}")
+        base_commit = repository.commit_get(
+            f"refs/remotes/origin/{repository_request.base_branch}"
+        )
         baseline = repository_request.expected_baseline_commit or base_commit
         if repository_request.expected_baseline_commit:
             result = GitCommand.run(
@@ -163,22 +176,41 @@ class TaskWorkspaceTransaction:
                 check=False,
             )
             if result.returncode != 0:
-                raise TaskWorkspaceError("Expected task baseline is not reachable from the current remote base")
+                raise TaskWorkspaceError(
+                    "Expected task baseline is not reachable from the current remote base"
+                )
         branch_name = request.branch_name
         remote_branch_exists = repository.exist_remote_branch(branch_name)
         if remote_branch_exists and not repository_request.expected_baseline_commit:
-            raise TaskWorkspaceError("Adopting an existing remote task branch requires its recorded Linear baseline")
+            raise TaskWorkspaceError(
+                "Adopting an existing remote task branch requires its recorded Linear baseline"
+            )
         if repository.exist_local_branch(branch_name):
-            raise TaskWorkspaceError("Local task branch exists without private ownership state")
-        if repository.tracked_file_bytes_get(baseline, "worktree-bootstrap.toml") is not None:
-            raise TaskWorkspaceError("Repository baseline uses legacy worktree-bootstrap.toml and requires adoption")
-        manifest_bytes = repository.tracked_file_bytes_get(baseline, "worktree-bootstrap.yaml")
+            raise TaskWorkspaceError(
+                "Local task branch exists without private ownership state"
+            )
+        if (
+            repository.tracked_file_bytes_get(baseline, "worktree-bootstrap.toml")
+            is not None
+        ):
+            raise TaskWorkspaceError(
+                "Repository baseline uses legacy worktree-bootstrap.toml and requires adoption"
+            )
+        manifest_bytes = repository.tracked_file_bytes_get(
+            baseline, "worktree-bootstrap.yaml"
+        )
         if manifest_bytes is None:
-            raise TaskWorkspaceError("Repository baseline omits required worktree-bootstrap.yaml")
-        plan = manifest_parse(manifest_bytes, main_root=repository.main_root)
+            raise TaskWorkspaceError(
+                "Repository baseline omits required worktree-bootstrap.yaml"
+            )
+        plan = BootstrapPlan.from_manifest(
+            manifest_bytes, main_root=repository.main_root
+        )
         task_root = repository.main_root / ".worktree" / request.basename
         if task_root.exists() or task_root.is_symlink():
-            raise TaskWorkspaceError("Task worktree path exists without private ownership state")
+            raise TaskWorkspaceError(
+                "Task worktree path exists without private ownership state"
+            )
         return RepositoryWorkspaceState(
             issue_identifier=request.issue_identifier,
             origin_identity=repository.origin_identity,
@@ -201,27 +233,3 @@ class TaskWorkspaceTransaction:
             remote_branch_removed=False,
             local_branch_removed=False,
         )
-
-
-def _resource_list_from_state(
-    state_list: list[BootstrapResourceState],
-) -> list[BootstrapResource]:
-    """Reconstruct exact materialization contracts from durable state.
-
-    Args:
-        state_list: Persisted resource state.
-
-    Returns:
-        Exact resource contracts.
-    """
-
-    return [
-        BootstrapResource(
-            relative_path=item.relative_path,
-            kind=item.kind,
-            required=not item.skipped,
-            source_identity=item.source_identity,
-            skipped=item.skipped,
-        )
-        for item in state_list
-    ]
