@@ -22,18 +22,13 @@ from verification._validation import VerificationReceiptError
 from verification.attempt import AttemptSummary
 from verification.baseline import LocalPhaseBaseline, TaskWorkspaceBaseline
 from verification.candidate import CandidateInput
-from verification.invalidation import receipt_reuse_decide
-from verification.model import VerificationInput
+from verification.invalidation import ReceiptReuseEvaluator
+from verification.model import VerificationInput, VerificationReceipt
 from verification.receipt import (
-    attempt_comment_parse,
-    attempt_comment_render,
-    baseline_comment_parse,
-    baseline_comment_render,
-    receipt_comment_parse,
-    receipt_comment_render,
-    receipt_create,
-    workspace_baseline_comment_parse,
-    workspace_baseline_comment_render,
+    ATTEMPT_COMMENT_CODEC,
+    LOCAL_PHASE_BASELINE_COMMENT_CODEC,
+    TASK_WORKSPACE_BASELINE_COMMENT_CODEC,
+    VERIFICATION_RECEIPT_COMMENT_CODEC,
 )
 
 COMMIT_ONE = "a" * 40
@@ -76,24 +71,27 @@ def test_receipt_roundtrip_and_exact_reuse_key() -> None:
     """A passed receipt reuses only when every declared input is identical."""
 
     current = _verification_input()
-    receipt = receipt_create(
+    receipt = VerificationReceipt.from_input(
         current,
         outcome="passed",
         evidence_url="https://github.com/antonov-andrey/example/actions/runs/1",
         completed_at=datetime(2026, 8, 4, 12, 30, tzinfo=timezone.utc),
     )
-    parsed = receipt_comment_parse(receipt_comment_render(receipt))
+    parsed = VerificationReceipt.from_payload(
+        VERIFICATION_RECEIPT_COMMENT_CODEC.payload_parse(VERIFICATION_RECEIPT_COMMENT_CODEC.render(receipt.payload()))
+    )
 
     assert parsed == receipt
-    assert receipt_reuse_decide(parsed, current).reusable
-    changed_commit = receipt_reuse_decide(parsed, _verification_input(commit=COMMIT_TWO))
+    assert ReceiptReuseEvaluator(current).decision_get(parsed).reusable
+    changed_commit = ReceiptReuseEvaluator(_verification_input(commit=COMMIT_TWO)).decision_get(parsed)
     assert changed_commit.reason_list == ["repository-commit-set-changed"]
-    changed_lock = receipt_reuse_decide(parsed, _verification_input(lock=LOCK_TWO))
+    changed_lock = ReceiptReuseEvaluator(_verification_input(lock=LOCK_TWO)).decision_get(parsed)
     assert changed_lock.reason_list == ["dependency-lock-set-changed"]
-    changed_environment = receipt_reuse_decide(parsed, _verification_input(environment="development:release-two"))
+    changed_environment = ReceiptReuseEvaluator(
+        _verification_input(environment="development:release-two")
+    ).decision_get(parsed)
     assert changed_environment.reason_list == ["environment-identity-changed"]
-    changed_repository = receipt_reuse_decide(
-        parsed,
+    changed_repository = ReceiptReuseEvaluator(
         VerificationInput(
             command_argument_list=["pytest", "-q"],
             working_directory=".",
@@ -107,15 +105,14 @@ def test_receipt_roundtrip_and_exact_reuse_key() -> None:
             dependency_lock_sha256_by_path_map={"requirements-dev.txt": LOCK_ONE},
             environment_identity="development:release-one",
             release_identity="sha256:" + "e" * 64,
-        ),
-    )
+        )
+    ).decision_get(parsed)
     assert changed_repository.reason_list == [
         "verification-repository-changed",
         "repository-commit-set-changed",
     ]
 
-    changed_source = receipt_reuse_decide(
-        parsed,
+    changed_source = ReceiptReuseEvaluator(
         VerificationInput(
             **{
                 **_verification_input().payload(),
@@ -125,8 +122,8 @@ def test_receipt_roundtrip_and_exact_reuse_key() -> None:
                 "recursive_submodule_commit_by_path_map": {"module/provider": COMMIT_ONE},
                 "dependency_lock_sha256_by_path_map": {"requirements-dev.txt": LOCK_ONE},
             }
-        ),
-    )
+        )
+    ).decision_get(parsed)
     assert changed_source.reason_list == ["source-fingerprint-changed"]
 
 
@@ -145,10 +142,13 @@ def test_external_evidence_receipt_can_bind_source_without_a_repository_commit()
         release_identity="",
     )
 
-    assert receipt_reuse_decide(
-        receipt_create(value, outcome="passed", evidence_url="https://linear.app/example"),
-        value,
-    ).reusable
+    assert (
+        ReceiptReuseEvaluator(value)
+        .decision_get(
+            VerificationReceipt.from_input(value, outcome="passed", evidence_url="https://linear.app/example")
+        )
+        .reusable
+    )
 
 
 def test_repository_scoped_inputs_require_the_exact_verification_repository() -> None:
@@ -218,7 +218,7 @@ def test_receipt_normalizes_utc_and_rejects_naive_instant() -> None:
     """Receipt instants preserve the exact UTC moment and reject timezone absence."""
 
     offset = timezone(timedelta(hours=4))
-    receipt = receipt_create(
+    receipt = VerificationReceipt.from_input(
         _verification_input(),
         outcome="passed",
         evidence_url="https://example.test/evidence",
@@ -227,7 +227,7 @@ def test_receipt_normalizes_utc_and_rejects_naive_instant() -> None:
     assert receipt.completed_at == datetime(2026, 8, 4, 12, 30, tzinfo=timezone.utc)
 
     with pytest.raises(VerificationReceiptError, match="timezone-aware"):
-        receipt_create(
+        VerificationReceipt.from_input(
             _verification_input(),
             outcome="passed",
             evidence_url="https://example.test/evidence",
@@ -302,7 +302,12 @@ def test_candidate_fingerprint_and_attempt_comment_bind_exact_external_state() -
         evidence_url_list=["https://example.test/evidence/17"],
     )
 
-    assert attempt_comment_parse(attempt_comment_render(summary)) == summary
+    assert (
+        AttemptSummary.from_payload(
+            ATTEMPT_COMMENT_CODEC.payload_parse(ATTEMPT_COMMENT_CODEC.render(summary.payload()))
+        )
+        == summary
+    )
     assert "token_count" not in summary.payload()
     assert (
         candidate.fingerprint()
@@ -402,7 +407,14 @@ def test_local_phase_baseline_requires_every_phase_and_round_trips() -> None:
         evidence_url="https://linear.app/example/project/acceptance",
     )
 
-    assert baseline_comment_parse(baseline_comment_render(baseline)) == baseline
+    assert (
+        LocalPhaseBaseline.from_payload(
+            LOCAL_PHASE_BASELINE_COMMENT_CODEC.payload_parse(
+                LOCAL_PHASE_BASELINE_COMMENT_CODEC.render(baseline.payload())
+            )
+        )
+        == baseline
+    )
     with pytest.raises(VerificationReceiptError, match="queue, startup, execution, review and merge"):
         LocalPhaseBaseline(
             project_id=baseline.project_id,
@@ -424,7 +436,14 @@ def test_task_workspace_baseline_is_deterministic_linear_evidence() -> None:
         baseline_commit_by_repository_url_map={"git@github.com:antonov-andrey/example.git": COMMIT_ONE},
     )
 
-    assert workspace_baseline_comment_parse(workspace_baseline_comment_render(baseline)) == baseline
+    assert (
+        TaskWorkspaceBaseline.from_payload(
+            TASK_WORKSPACE_BASELINE_COMMENT_CODEC.payload_parse(
+                TASK_WORKSPACE_BASELINE_COMMENT_CODEC.render(baseline.payload())
+            )
+        )
+        == baseline
+    )
     with pytest.raises(VerificationReceiptError, match="branch differs"):
         TaskWorkspaceBaseline(
             issue_identifier=baseline.issue_identifier,

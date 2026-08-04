@@ -18,9 +18,9 @@ from verification.attempt import AttemptSummary
 from verification.baseline import LocalPhaseBaseline, TaskWorkspaceBaseline
 from verification.candidate import CandidateInput
 from verification.receipt import (
-    attempt_comment_render,
-    baseline_comment_render,
-    workspace_baseline_comment_render,
+    ATTEMPT_COMMENT_CODEC,
+    LOCAL_PHASE_BASELINE_COMMENT_CODEC,
+    TASK_WORKSPACE_BASELINE_COMMENT_CODEC,
 )
 
 
@@ -87,11 +87,11 @@ def main(argv: list[str] | None = None) -> int:
                 )
             )
         elif args.command == "attempt":
-            print(attempt_comment_render(AttemptSummary.from_payload(payload)))
+            print(ATTEMPT_COMMENT_CODEC.render(AttemptSummary.from_payload(payload).payload()))
         elif args.command == "baseline":
-            print(baseline_comment_render(LocalPhaseBaseline.from_payload(payload)))
+            print(LOCAL_PHASE_BASELINE_COMMENT_CODEC.render(LocalPhaseBaseline.from_payload(payload).payload()))
         else:
-            print(workspace_baseline_comment_render(TaskWorkspaceBaseline.from_payload(payload)))
+            print(TASK_WORKSPACE_BASELINE_COMMENT_CODEC.render(TaskWorkspaceBaseline.from_payload(payload).payload()))
         return 0
     except VerificationReceiptError as error:
         print(str(error), file=sys.stderr)

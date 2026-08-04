@@ -23,39 +23,52 @@ class ReceiptDecision:
         object.__setattr__(self, "reason_list", list(self.reason_list))
 
 
-def receipt_reuse_decide(receipt: VerificationReceipt, current: VerificationInput) -> ReceiptDecision:
-    """Compare every declared dependency rather than command text alone.
+class ReceiptReuseEvaluator:
+    """Compare prior receipts with one complete current verification input."""
 
-    Args:
-        receipt: Prior immutable receipt.
-        current: Complete current verification inputs.
+    def __init__(self, current: VerificationInput) -> None:
+        """Bind the exact current dependency state.
 
-    Returns:
-        Reuse decision with concise invalidation reasons.
-    """
+        Args:
+            current: Complete current verification inputs.
+        """
 
-    reason_list: list[str] = []
-    prior = receipt.input
-    if receipt.outcome != "passed":
-        reason_list.append("prior-outcome-not-passed")
-    if prior.command_argument_list != current.command_argument_list:
-        reason_list.append("command-changed")
-    if prior.working_directory != current.working_directory:
-        reason_list.append("working-directory-changed")
-    if prior.repository_url != current.repository_url:
-        reason_list.append("verification-repository-changed")
-    if prior.source_fingerprint != current.source_fingerprint:
-        reason_list.append("source-fingerprint-changed")
-    if prior.repository_commit_by_url_map != current.repository_commit_by_url_map:
-        reason_list.append("repository-commit-set-changed")
-    if prior.recursive_submodule_commit_by_path_map != current.recursive_submodule_commit_by_path_map:
-        reason_list.append("recursive-submodule-set-changed")
-    if prior.dependency_lock_sha256_by_path_map != current.dependency_lock_sha256_by_path_map:
-        reason_list.append("dependency-lock-set-changed")
-    if prior.environment_identity != current.environment_identity:
-        reason_list.append("environment-identity-changed")
-    if prior.release_identity != current.release_identity:
-        reason_list.append("release-identity-changed")
-    if receipt.verification_key != current.key() and not reason_list:
-        reason_list.append("canonical-key-changed")
-    return ReceiptDecision(reusable=not reason_list, reason_list=reason_list)
+        if not isinstance(current, VerificationInput):
+            raise VerificationReceiptError("Current verification input has another shape")
+        self._current = current
+
+    def decision_get(self, receipt: VerificationReceipt) -> ReceiptDecision:
+        """Compare every declared dependency rather than command text alone.
+
+        Args:
+            receipt: Prior immutable receipt.
+
+        Returns:
+            Reuse decision with concise invalidation reasons.
+        """
+
+        reason_list: list[str] = []
+        prior = receipt.input
+        if receipt.outcome != "passed":
+            reason_list.append("prior-outcome-not-passed")
+        if prior.command_argument_list != self._current.command_argument_list:
+            reason_list.append("command-changed")
+        if prior.working_directory != self._current.working_directory:
+            reason_list.append("working-directory-changed")
+        if prior.repository_url != self._current.repository_url:
+            reason_list.append("verification-repository-changed")
+        if prior.source_fingerprint != self._current.source_fingerprint:
+            reason_list.append("source-fingerprint-changed")
+        if prior.repository_commit_by_url_map != self._current.repository_commit_by_url_map:
+            reason_list.append("repository-commit-set-changed")
+        if prior.recursive_submodule_commit_by_path_map != self._current.recursive_submodule_commit_by_path_map:
+            reason_list.append("recursive-submodule-set-changed")
+        if prior.dependency_lock_sha256_by_path_map != self._current.dependency_lock_sha256_by_path_map:
+            reason_list.append("dependency-lock-set-changed")
+        if prior.environment_identity != self._current.environment_identity:
+            reason_list.append("environment-identity-changed")
+        if prior.release_identity != self._current.release_identity:
+            reason_list.append("release-identity-changed")
+        if receipt.verification_key != self._current.key() and not reason_list:
+            reason_list.append("canonical-key-changed")
+        return ReceiptDecision(reusable=not reason_list, reason_list=reason_list)

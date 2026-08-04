@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 import hashlib
 import json
 
@@ -212,6 +212,38 @@ class VerificationReceipt:
             or any(character in self.evidence_url for character in ("\x00", "\n", "\r"))
         ):
             raise VerificationReceiptError("Verification evidence URL must be non-empty single-line text")
+
+    @classmethod
+    def from_input(
+        cls,
+        verification_input: VerificationInput,
+        *,
+        outcome: str,
+        evidence_url: str,
+        completed_at: datetime | None = None,
+    ) -> "VerificationReceipt":
+        """Create one immutable receipt at an exact UTC instant.
+
+        Args:
+            verification_input: Complete declared inputs.
+            outcome: Passed or failed.
+            evidence_url: Link to the owning log or CI result.
+            completed_at: Optional deterministic UTC instant.
+
+        Returns:
+            Typed verification receipt.
+        """
+
+        instant = completed_at or datetime.now(timezone.utc)
+        if instant.tzinfo is None or instant.utcoffset() is None:
+            raise VerificationReceiptError("Receipt creation instant must be timezone-aware")
+        return cls(
+            verification_key=verification_input.key(),
+            outcome=outcome,
+            completed_at=instant.astimezone(timezone.utc),
+            evidence_url=evidence_url,
+            input=verification_input,
+        )
 
     def payload(self) -> dict[str, object]:
         """Return one canonical JSON-ready receipt object.

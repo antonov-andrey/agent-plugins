@@ -14,13 +14,9 @@ if str(LIBRARY_ROOT) not in sys.path:
     sys.path.insert(0, str(LIBRARY_ROOT))
 
 from verification._validation import VerificationReceiptError
-from verification.invalidation import receipt_reuse_decide
-from verification.model import VerificationInput
-from verification.receipt import (
-    receipt_comment_parse,
-    receipt_comment_render,
-    receipt_create,
-)
+from verification.invalidation import ReceiptReuseEvaluator
+from verification.model import VerificationInput, VerificationReceipt
+from verification.receipt import VERIFICATION_RECEIPT_COMMENT_CODEC
 
 
 def _args_parse(argv: list[str] | None = None) -> argparse.Namespace:
@@ -102,11 +98,19 @@ def main(argv: list[str] | None = None) -> int:
     try:
         current = VerificationInput.from_payload(_json_load(args.input, label="Verification input"))
         if args.command == "create":
-            receipt = receipt_create(current, outcome=args.outcome, evidence_url=args.evidence_url)
-            print(receipt_comment_render(receipt))
+            receipt = VerificationReceipt.from_input(
+                current,
+                outcome=args.outcome,
+                evidence_url=args.evidence_url,
+            )
+            print(VERIFICATION_RECEIPT_COMMENT_CODEC.render(receipt.payload()))
             return 0
-        receipt = receipt_comment_parse(_text_load(args.receipt_comment, label="Verification receipt comment"))
-        decision = receipt_reuse_decide(receipt, current)
+        receipt = VerificationReceipt.from_payload(
+            VERIFICATION_RECEIPT_COMMENT_CODEC.payload_parse(
+                _text_load(args.receipt_comment, label="Verification receipt comment")
+            )
+        )
+        decision = ReceiptReuseEvaluator(current).decision_get(receipt)
         print(
             json.dumps(
                 {
