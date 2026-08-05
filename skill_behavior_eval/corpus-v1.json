@@ -284,13 +284,13 @@
       "id": "direct-linear-task-graph-create",
       "working_directory": "..",
       "working_directory_mode": "same-branch",
-      "prompt": "Use $linear-agent-tools:task-graph-create to decompose an agreed incident report into implementation, review, acceptance, and cleanup issues. Explain idempotent publication and activation; do not mutate Linear in this evaluation.",
+      "prompt": "Use $linear-agent-tools:task-graph-create for this complete agreed incident source: one independently verifiable code fix in the agent-plugins repository on base main, followed after merge by one independent semantic review, one whole-outcome acceptance, and final cleanup; there are no external resources. Preview the complete concrete issue DAG and exact blockers, then explain idempotent publication and activation. Do not mutate Linear in this evaluation.",
       "expected_skill_list": ["linear-agent-tools:task-graph-create"],
       "forbidden_skill_list": ["agent-workflows:goal-brainstorm", "linear-agent-tools:task-implement"],
       "semantic_invariant_list": [
         {
           "id": "linear-owned-dag",
-          "text": "The response previews a complete source-independent DAG whose Linear issues and blocker relations become canonical, with no task-graph.yaml or per-task goal artifact."
+          "text": "The response previews the complete concrete implementation to review to acceptance to cleanup DAG with exact blocker relations. Linear issues and blocker relations become canonical, with no task-graph.yaml or per-task goal artifact."
         },
         {
           "id": "activation-barrier",
