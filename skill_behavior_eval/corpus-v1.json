@@ -330,7 +330,7 @@
         },
         {
           "id": "receipt-integrity",
-          "text": "Each verification key binds checkout path, roles, repository, revision, recursive submodules, dependency locks, corpus, model, configuration, environment and release inputs. A separate receipt key binds that verification key, outcome, UTC instant, canonical immutable evidence URL and content SHA-256. The evidence URL has no credentials, port, query or fragment."
+          "text": "Each stable verification key binds the exact source fingerprint, exact direct argv, canonical absolute working directory, corpus content, model identity, model configuration, applicable environment and release identity, plus every result-affecting checkout's canonical absolute path, roles, repository URL, full commit, recursive submodules and dependency locks. A separate receipt key binds that verification key, outcome, UTC completion instant, exact durable canonical HTTPS artifact URL and artifact content SHA-256. The artifact URL has no credentials, port, query or fragment, and receipt-bearing Human Review candidate identity uses the validated receipt key rather than the stable verification key."
         },
         {
           "id": "exclusive-attempt",

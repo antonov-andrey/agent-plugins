@@ -22,6 +22,7 @@
   - Submodule and lock keys use canonical checkout-relative paths.
   - Repeated repository URLs remain separate checkout records.
   - The receipt key binds the verification key, outcome, UTC instant, canonical artifact URL, and content SHA-256.
+  - An evidence candidate carries complete current-schema receipts keyed by evidence kind. The shared candidate tool validates every derived receipt key and fingerprints only the compact evidence-kind-to-receipt-key map; verification keys remain reuse identities and cannot stand in for receipt-bearing approval evidence.
   - Artifact URLs use durable HTTPS provider identities without credentials, ports, query strings, or fragments.
   - The receipt comment renders JSON forward slashes as escapes so Linear readback cannot replace that stable identity with a presigned URL; JSON parsing restores the exact canonical URL value.
   - Receipts live in Linear comments or GitHub checks.

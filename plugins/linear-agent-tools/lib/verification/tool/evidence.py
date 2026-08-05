@@ -81,6 +81,7 @@ def main(argv: list[str] | None = None) -> int:
                     {
                         "schema_version": 1,
                         "candidate_fingerprint": candidate.fingerprint(),
+                        "candidate_identity": candidate.identity_payload(),
                         "input": candidate.payload(),
                     },
                     separators=(",", ":"),

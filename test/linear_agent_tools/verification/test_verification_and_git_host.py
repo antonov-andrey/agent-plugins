@@ -405,6 +405,10 @@ def test_receipt_rejects_evidence_identity_substitution(
         "https://uploads.linear.app/workspace/asset/artifact\\download",
         "https://uploads.linear.app/workspace/asset/artifact\tother",
         "https://uploads.linear.app/workspace/asset/артефакт",
+        "https://127.1/workspace/asset/artifact",
+        "https://0177.0.0.1/workspace/asset/artifact",
+        "https://2130706433/workspace/asset/artifact",
+        "https://0x7f000001/workspace/asset/artifact",
         " https://uploads.linear.app/workspace/asset/artifact",
     ],
 )
@@ -437,9 +441,34 @@ def test_receipt_accepts_exact_canonical_percent_encoded_path() -> None:
 @pytest.mark.parametrize(
     "evidence_url",
     [
+        "https://uploads.linear.app/workspace/asset/artifact",
+        "https://123.example/workspace/asset/artifact",
+        "https://127.0.0.1/workspace/asset/artifact",
+    ],
+)
+def test_receipt_accepts_canonical_dns_and_ipv4_provider_hosts(evidence_url: str) -> None:
+    """Numeric-label DNS and canonical dotted IPv4 remain explicit provider identities."""
+
+    receipt = VerificationReceipt.from_input(
+        _verification_input(),
+        outcome="passed",
+        evidence_url=evidence_url,
+        evidence_content_sha256=EVIDENCE_ONE,
+    )
+
+    assert receipt.evidence_url == evidence_url
+
+
+@pytest.mark.parametrize(
+    "evidence_url",
+    [
         LINEAR_ATTACHMENT_URL + "?",
         LINEAR_ATTACHMENT_URL + "#",
         "https://uploads.linear.app/workspace/asset/not an artifact",
+        "https://127.1/workspace/asset/artifact",
+        "https://0177.0.0.1/workspace/asset/artifact",
+        "https://2130706433/workspace/asset/artifact",
+        "https://0x7f000001/workspace/asset/artifact",
     ],
 )
 def test_receipt_comment_parse_rejects_noncanonical_evidence_url(evidence_url: str) -> None:
@@ -528,6 +557,10 @@ def test_receipt_cli_reuses_the_exact_linear_comment_shape(tmp_path: Path) -> No
         LINEAR_ATTACHMENT_URL + "?",
         LINEAR_ATTACHMENT_URL + "#",
         "https://uploads.linear.app/workspace/asset/not an artifact",
+        "https://127.1/workspace/asset/artifact",
+        "https://0177.0.0.1/workspace/asset/artifact",
+        "https://2130706433/workspace/asset/artifact",
+        "https://0x7f000001/workspace/asset/artifact",
     ],
 )
 def test_receipt_cli_rejects_noncanonical_evidence_url(tmp_path: Path, evidence_url: str) -> None:
@@ -639,7 +672,7 @@ def test_candidate_fingerprint_and_attempt_comment_bind_exact_external_state() -
     candidate = CandidateInput(
         delivery_kind="code",
         pull_request_head_by_url_map={"https://github.com/antonov-andrey/example/pull/17": COMMIT_ONE},
-        evidence_identity_by_kind_map={},
+        evidence_receipt_by_kind_map={},
     )
     summary = AttemptSummary(
         attempt_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
@@ -670,7 +703,7 @@ def test_candidate_fingerprint_and_attempt_comment_bind_exact_external_state() -
         != CandidateInput(
             delivery_kind="code",
             pull_request_head_by_url_map={"https://github.com/antonov-andrey/example/pull/17": COMMIT_TWO},
-            evidence_identity_by_kind_map={},
+            evidence_receipt_by_kind_map={},
         ).fingerprint()
     )
 
@@ -678,8 +711,96 @@ def test_candidate_fingerprint_and_attempt_comment_bind_exact_external_state() -
         CandidateInput(
             delivery_kind="code",
             pull_request_head_by_url_map={"https://example.test/pull/17": COMMIT_ONE},
-            evidence_identity_by_kind_map={},
+            evidence_receipt_by_kind_map={},
         )
+
+
+def test_evidence_candidate_uses_validated_receipt_keys_for_every_result_identity() -> None:
+    """Human approval changes for every receipt result or artifact identity transition."""
+
+    verification_input = _verification_input()
+    completed_at = datetime(2026, 8, 4, 12, 30, tzinfo=timezone.utc)
+    receipt_list = [
+        VerificationReceipt.from_input(
+            verification_input,
+            outcome=outcome,
+            completed_at=instant,
+            evidence_url=evidence_url,
+            evidence_content_sha256=evidence_sha256,
+        )
+        for outcome, instant, evidence_url, evidence_sha256 in (
+            ("passed", completed_at, LINEAR_ATTACHMENT_URL, EVIDENCE_ONE),
+            ("failed", completed_at, LINEAR_ATTACHMENT_URL, EVIDENCE_ONE),
+            ("passed", completed_at + timedelta(seconds=1), LINEAR_ATTACHMENT_URL, EVIDENCE_ONE),
+            ("passed", completed_at, LINEAR_ATTACHMENT_URL + "-two", EVIDENCE_ONE),
+            ("passed", completed_at, LINEAR_ATTACHMENT_URL, EVIDENCE_TWO),
+        )
+    ]
+    candidate_list = [
+        CandidateInput(
+            delivery_kind="evidence",
+            pull_request_head_by_url_map={},
+            evidence_receipt_by_kind_map={"acceptance": receipt},
+        )
+        for receipt in receipt_list
+    ]
+
+    assert {receipt.verification_key for receipt in receipt_list} == {verification_input.key()}
+    assert len({receipt.receipt_key for receipt in receipt_list}) == len(receipt_list)
+    assert len({candidate.fingerprint() for candidate in candidate_list}) == len(candidate_list)
+    for candidate, receipt in zip(candidate_list, receipt_list, strict=True):
+        assert candidate.identity_payload()["evidence_receipt_key_by_kind_map"] == {"acceptance": receipt.receipt_key}
+
+
+def test_evidence_candidate_rejects_verification_key_substitution_and_prior_shape() -> None:
+    """A stable reuse key cannot masquerade as receipt-bearing approval evidence."""
+
+    receipt = VerificationReceipt.from_input(
+        _verification_input(),
+        outcome="passed",
+        completed_at=datetime(2026, 8, 4, 12, 30, tzinfo=timezone.utc),
+        evidence_url=LINEAR_ATTACHMENT_URL,
+        evidence_content_sha256=EVIDENCE_ONE,
+    )
+    candidate = CandidateInput(
+        delivery_kind="evidence",
+        pull_request_head_by_url_map={},
+        evidence_receipt_by_kind_map={"acceptance": receipt},
+    )
+    substituted_payload = candidate.payload()
+    substituted_payload["evidence_receipt_by_kind_map"]["acceptance"]["receipt_key"] = receipt.verification_key
+
+    with pytest.raises(VerificationReceiptError, match="receipt key differs from its exact result"):
+        CandidateInput.from_payload(substituted_payload)
+    with pytest.raises(VerificationReceiptError, match="current receipt schema"):
+        CandidateInput(
+            delivery_kind="evidence",
+            pull_request_head_by_url_map={},
+            evidence_receipt_by_kind_map={"acceptance": receipt.verification_key},
+        )
+
+    prior_payload = candidate.payload()
+    prior_payload["evidence_identity_by_kind_map"] = {
+        "acceptance": prior_payload.pop("evidence_receipt_by_kind_map")["acceptance"]["verification_key"]
+    }
+    with pytest.raises(VerificationReceiptError, match="another shape"):
+        CandidateInput.from_payload(prior_payload)
+
+
+def test_task_implement_behavior_invariant_requires_every_receipt_input_identity() -> None:
+    """The model handoff gate cannot pass after omitting mandatory receipt inputs."""
+
+    corpus = json.loads((REPOSITORY_ROOT / "skill_behavior_eval" / "corpus-v1.json").read_text(encoding="utf-8"))
+    case = next(item for item in corpus["case_list"] if item["id"] == "direct-linear-task-implement")
+    invariant = next(item for item in case["semantic_invariant_list"] if item["id"] == "receipt-integrity")
+
+    for required_text in (
+        "source fingerprint",
+        "direct argv",
+        "canonical absolute working directory",
+        "receipt-bearing Human Review candidate identity uses the validated receipt key",
+    ):
+        assert required_text in invariant["text"]
 
 
 @pytest.mark.parametrize(
@@ -819,7 +940,15 @@ def test_shared_evidence_cli_renders_candidate_without_persistent_state(
     candidate = CandidateInput(
         delivery_kind="evidence",
         pull_request_head_by_url_map={},
-        evidence_identity_by_kind_map={"acceptance": "sha256:" + "e" * 64},
+        evidence_receipt_by_kind_map={
+            "acceptance": VerificationReceipt.from_input(
+                _verification_input(),
+                outcome="passed",
+                evidence_url=LINEAR_ATTACHMENT_URL,
+                evidence_content_sha256=EVIDENCE_ONE,
+                completed_at=datetime(2026, 8, 4, 12, 30, tzinfo=timezone.utc),
+            )
+        },
     )
     input_path.write_text(json.dumps(candidate.payload()), encoding="utf-8")
 
@@ -832,6 +961,10 @@ def test_shared_evidence_cli_renders_candidate_without_persistent_state(
 
     payload = json.loads(rendered.stdout)
     assert payload["candidate_fingerprint"] == candidate.fingerprint()
+    assert payload["candidate_identity"] == candidate.identity_payload()
+    assert payload["candidate_identity"]["evidence_receipt_key_by_kind_map"] == {
+        "acceptance": candidate.evidence_receipt_by_kind_map["acceptance"].receipt_key
+    }
     assert payload["input"] == candidate.payload()
 
 

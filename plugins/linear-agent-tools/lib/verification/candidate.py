@@ -14,6 +14,7 @@ from verification._validation import (
     single_line_validate,
     text_by_text_map_parse,
 )
+from verification.model import VerificationReceipt
 
 _GITHUB_PULL_REQUEST_PATH_PATTERN = re.compile(r"/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[1-9][0-9]*")
 
@@ -24,7 +25,7 @@ class CandidateInput:
 
     delivery_kind: str
     pull_request_head_by_url_map: dict[str, str]
-    evidence_identity_by_kind_map: dict[str, str]
+    evidence_receipt_by_kind_map: dict[str, VerificationReceipt]
 
     def __post_init__(self) -> None:
         """Require one code or evidence candidate with no mixed identity surface."""
@@ -34,17 +35,19 @@ class CandidateInput:
             "evidence",
         }:
             raise VerificationReceiptError("Candidate delivery kind must be code or evidence")
-        for label, value in (
-            ("pull-request heads", self.pull_request_head_by_url_map),
-            ("evidence identities", self.evidence_identity_by_kind_map),
-        ):
-            if not isinstance(value, dict):
-                raise VerificationReceiptError(f"Candidate {label} must be a mapping")
-            for key, identity in value.items():
-                single_line_validate(key, label=f"Candidate {label} key")
-                single_line_validate(identity, label=f"Candidate {label} identity")
+        if not isinstance(self.pull_request_head_by_url_map, dict):
+            raise VerificationReceiptError("Candidate pull-request heads must be a mapping")
+        for url, commit in self.pull_request_head_by_url_map.items():
+            single_line_validate(url, label="Candidate pull-request heads key")
+            single_line_validate(commit, label="Candidate pull-request heads identity")
+        if not isinstance(self.evidence_receipt_by_kind_map, dict):
+            raise VerificationReceiptError("Candidate evidence receipts must be a mapping")
+        for evidence_kind, receipt in self.evidence_receipt_by_kind_map.items():
+            single_line_validate(evidence_kind, label="Candidate evidence receipt kind")
+            if not isinstance(receipt, VerificationReceipt):
+                raise VerificationReceiptError("Candidate evidence receipt must use the current receipt schema")
         if self.delivery_kind == "code":
-            if not self.pull_request_head_by_url_map or self.evidence_identity_by_kind_map:
+            if not self.pull_request_head_by_url_map or self.evidence_receipt_by_kind_map:
                 raise VerificationReceiptError("Code candidate requires only one or more exact pull-request heads")
             if any(COMMIT_PATTERN.fullmatch(commit) is None for commit in self.pull_request_head_by_url_map.values()):
                 raise VerificationReceiptError("Code candidate pull-request head is not a full lowercase commit")
@@ -58,8 +61,8 @@ class CandidateInput:
                     or _GITHUB_PULL_REQUEST_PATH_PATTERN.fullmatch(parsed.path) is None
                 ):
                     raise VerificationReceiptError("Code candidate pull-request URL is not one canonical GitHub PR")
-        elif self.pull_request_head_by_url_map or not self.evidence_identity_by_kind_map:
-            raise VerificationReceiptError("Evidence candidate requires only one or more exact evidence identities")
+        elif self.pull_request_head_by_url_map or not self.evidence_receipt_by_kind_map:
+            raise VerificationReceiptError("Evidence candidate requires only one or more current verification receipts")
         object.__setattr__(
             self,
             "pull_request_head_by_url_map",
@@ -67,8 +70,8 @@ class CandidateInput:
         )
         object.__setattr__(
             self,
-            "evidence_identity_by_kind_map",
-            dict(sorted(self.evidence_identity_by_kind_map.items())),
+            "evidence_receipt_by_kind_map",
+            dict(sorted(self.evidence_receipt_by_kind_map.items())),
         )
 
     def payload(self) -> dict[str, object]:
@@ -80,7 +83,25 @@ class CandidateInput:
 
         return {
             "delivery_kind": self.delivery_kind,
-            "evidence_identity_by_kind_map": dict(self.evidence_identity_by_kind_map),
+            "evidence_receipt_by_kind_map": {
+                evidence_kind: receipt.payload() for evidence_kind, receipt in self.evidence_receipt_by_kind_map.items()
+            },
+            "pull_request_head_by_url_map": dict(self.pull_request_head_by_url_map),
+        }
+
+    def identity_payload(self) -> dict[str, object]:
+        """Return the exact compact identity approved at Human Review.
+
+        Returns:
+            Canonical PR heads or validated receipt keys by evidence kind.
+        """
+
+        return {
+            "delivery_kind": self.delivery_kind,
+            "evidence_receipt_key_by_kind_map": {
+                evidence_kind: receipt.receipt_key
+                for evidence_kind, receipt in self.evidence_receipt_by_kind_map.items()
+            },
             "pull_request_head_by_url_map": dict(self.pull_request_head_by_url_map),
         }
 
@@ -93,7 +114,7 @@ class CandidateInput:
 
         return hashlib.sha256(
             json.dumps(
-                self.payload(),
+                self.identity_payload(),
                 ensure_ascii=False,
                 separators=(",", ":"),
                 sort_keys=True,
@@ -113,7 +134,7 @@ class CandidateInput:
 
         expected = {
             "delivery_kind",
-            "evidence_identity_by_kind_map",
+            "evidence_receipt_by_kind_map",
             "pull_request_head_by_url_map",
         }
         if not isinstance(payload, dict) or set(payload) != expected:
@@ -123,7 +144,24 @@ class CandidateInput:
             pull_request_head_by_url_map=text_by_text_map_parse(
                 payload["pull_request_head_by_url_map"], label="pull-request heads"
             ),
-            evidence_identity_by_kind_map=text_by_text_map_parse(
-                payload["evidence_identity_by_kind_map"], label="evidence identities"
-            ),
+            evidence_receipt_by_kind_map=_evidence_receipt_by_kind_map_parse(payload["evidence_receipt_by_kind_map"]),
         )
+
+
+def _evidence_receipt_by_kind_map_parse(value: object) -> dict[str, VerificationReceipt]:
+    """Parse one closed mapping of evidence kinds to current-schema receipts.
+
+    Args:
+        value: Candidate JSON value.
+
+    Returns:
+        Canonically ordered typed receipt mapping.
+    """
+
+    if not isinstance(value, dict):
+        raise VerificationReceiptError("Candidate evidence receipts must be a mapping")
+    receipt_by_kind_map: dict[str, VerificationReceipt] = {}
+    for evidence_kind, receipt_payload in value.items():
+        parsed_kind = single_line_validate(evidence_kind, label="Candidate evidence receipt kind")
+        receipt_by_kind_map[parsed_kind] = VerificationReceipt.from_payload(receipt_payload)
+    return dict(sorted(receipt_by_kind_map.items()))

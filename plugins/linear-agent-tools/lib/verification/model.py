@@ -5,9 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
+import ipaddress
 import json
 from pathlib import PurePosixPath
 import re
+import socket
 from urllib.parse import urlsplit, urlunsplit
 
 from verification._validation import (
@@ -27,6 +29,27 @@ _EVIDENCE_URL_HOST_PATTERN = re.compile(
 _EVIDENCE_URL_PATH_PATTERN = re.compile(r"/(?:[A-Za-z0-9._~!$&'()*+,;=:@/-]|%[0-9A-F]{2})*")
 _URI_PERCENT_ENCODING_PATTERN = re.compile(r"%([0-9A-F]{2})")
 _URI_UNRESERVED_CHARACTER_SET = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+
+
+def _evidence_url_host_is_noncanonical_numeric_ipv4(hostname: str) -> bool:
+    """Return whether a host is a legacy spelling of one IPv4 address.
+
+    Args:
+        hostname: Lowercase URL hostname returned by ``urlsplit``.
+
+    Returns:
+        True for a numeric IPv4 form that is not canonical dotted decimal.
+    """
+
+    try:
+        canonical_address = ipaddress.IPv4Address(hostname)
+    except ipaddress.AddressValueError:
+        try:
+            socket.inet_aton(hostname)
+        except OSError:
+            return False
+        return True
+    return str(canonical_address) != hostname
 
 
 def _absolute_path_validate(value: object, *, label: str) -> str:
@@ -75,6 +98,7 @@ def _evidence_url_validate(value: object) -> str:
         or hostname is None
         or len(hostname) > 253
         or _EVIDENCE_URL_HOST_PATTERN.fullmatch(hostname) is None
+        or _evidence_url_host_is_noncanonical_numeric_ipv4(hostname)
         or parsed.netloc != hostname
         or not parsed.path
         or _EVIDENCE_URL_PATH_PATTERN.fullmatch(parsed.path) is None
