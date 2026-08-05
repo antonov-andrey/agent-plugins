@@ -54,7 +54,7 @@ Every receipt-bearing preview or handoff MUST explicitly state all of these fact
 - each durable canonical HTTPS artifact URL contains no credentials, port, query string or fragment; and
 - for evidence delivery, the Human Review candidate identity is validated and derived from each current receipt key, never from the stable verification key.
 
-A generic claim that a receipt binds inputs and evidence, or a handoff that only says receipts were created, is insufficient.
+A generic claim that a receipt binds inputs and evidence, or a handoff that only says receipts were created, is insufficient. Checkout path canonicality is itself mandatory evidence: every receipt-bearing handoff must say `canonical absolute path`; reducing that identity to only `absolute path` is incomplete.
 
 Before publishing the attempt result, invoke `task-cleanup` for all current `attempt`-lifetime resources. Build the exact code or evidence candidate fingerprint with `../../lib/verification/tool/evidence.py candidate`. Evidence delivery supplies a map of evidence kind to complete passed current-schema verification receipt after exact provider readback; the tool validates the derived receipt key and emits the compact map of evidence kind to receipt key that Human Review approves. Never substitute the stable verification key. Build the concise structured attempt comment with its `attempt` operation: attempt ID, role, delivery kind, UTC start/end, outcome, delivery-applicable commit set, receipt hit/miss counts, external wait duration, token usage only when directly exposed, candidate fingerprint, PR/CI links and bounded evidence. Publish that exact comment to Linear. Exclude prompts, secrets and raw logs; delete transient input files.
 
