@@ -9,6 +9,8 @@ Review one `task:review` / `evidence` issue in a fresh thread. Read `../../refer
 
 Every preview or handoff response MUST state that one exact issue process-lifetime host-local attempt guard is acquired before dispatch or status mutation, held continuously through nested attempt cleanup and the final Linear provider readback so no second local attempt can overlap, and released only by process exit after that boundary.
 
+Each preview and handoff MUST state that complete coverage is derived afresh from all current applicable sources and stable owners. It MUST state that prior reports, implementation artifacts, changed-file lists, and passing tests do not define review scope.
+
 1. Set `LINEAR_AGENT_WORKSPACE_ROOT` to the explicit user workspace. Start `../../lib/task_workspace/tool/attempt.py hold --issue-identifier <exact-identifier>` as the exact issue process-lifetime host-local guard, require its initial `status=held` JSON, and keep that same process alive from before dispatch or mutation through nested attempt cleanup and final Linear provider read-back. A nonzero exit means another local attempt owns the issue; do not continue. Process exit after final read-back releases the kernel lock.
 2. Save a complete fresh Linear snapshot and run `../../lib/linear_boundary/tool/task.py dispatch`. Require exit `0`, Project `In Progress`, issue `Todo`, `In Progress` or `Rework`, exact `task:review` role and `evidence` delivery. Validate every requested status mutation with the same tool's `transition` operation and reread Linear.
 3. Use read-only candidate commits, PR refs, merged main commits and environment identities. Do not create a fake review branch.
