@@ -10,6 +10,7 @@ from task_graph.reconciliation.model import (
     ReconciliationPlan,
     RemoteIssue,
     RemoteProject,
+    match_issue_description,
 )
 
 
@@ -49,7 +50,7 @@ class TaskGraphReconciler:
                 required_label_set.add("agent:codex")
             if (
                 current.title != desired.title
-                or current.description != desired.description
+                or not match_issue_description(current.description, desired.description)
                 or current.status_name != "Todo"
                 or set(current.label_name_list) != required_label_set
                 or current.assignee_id != desired.assignee_id
