@@ -31,6 +31,7 @@ from linear_boundary.configuration.catalog import (
 from linear_boundary.configuration.model import (
     ConfigurationPlan,
     DestinationIdentity,
+    GitStatusAutomation,
     LinearLabel,
     StatusDefinition,
     WorkflowConfigurationSnapshot,
@@ -174,7 +175,7 @@ def test_status_apply_precedes_still_missing_official_mcp_labels(
     spec.loader.exec_module(module)
     approved = (
         WorkflowConfigurationReconciler()
-        .plan_get(WorkflowConfigurationSnapshot(_destination(), [], [], []))
+        .plan_get(WorkflowConfigurationSnapshot(_destination(), [], [], [], []))
         .status_identifier_allocate()
     )
     labels_path = tmp_path / "labels.json"
@@ -193,7 +194,7 @@ def test_status_apply_precedes_still_missing_official_mcp_labels(
         def plan(self, **_argument_by_name: object) -> ConfigurationPlan:
             return approved
 
-        def missing_statuses_create(self, **argument_by_name: object) -> None:
+        def approved_configuration_apply(self, **argument_by_name: object) -> None:
             call_list.append(argument_by_name["approved_plan"])
 
     monkeypatch.setattr(module, "_credential_get", lambda: "secret-not-logged")
@@ -297,6 +298,62 @@ def _project_status_response(
     }
 
 
+def _git_status_automation(
+    index: int,
+    *,
+    event: str = "merge",
+    target_branch: bool = False,
+    workflow_state: bool = True,
+) -> GitStatusAutomation:
+    """Return one deterministic existing Git status automation rule."""
+
+    return GitStatusAutomation(
+        id=f"30000000-0000-4000-8000-{index:012d}",
+        event=event,
+        workflow_state_id=(f"31000000-0000-4000-8000-{index:012d}" if workflow_state else ""),
+        target_branch_id=(f"32000000-0000-4000-8000-{index:012d}" if target_branch else ""),
+        target_branch_pattern=("main" if target_branch else ""),
+        target_branch_is_regex=False,
+        legacy_branch_pattern="",
+    )
+
+
+def _git_status_automation_response(
+    automation_list: list[GitStatusAutomation],
+    *,
+    has_next: bool = False,
+    end_cursor: str | None = None,
+) -> dict[str, object]:
+    """Return one complete team Git status automation GraphQL page."""
+
+    return {
+        "team": {
+            "id": TEAM_ID,
+            "gitAutomationStates": {
+                "nodes": [
+                    {
+                        "id": item.id,
+                        "event": item.event,
+                        "branchPattern": item.legacy_branch_pattern or None,
+                        "state": ({"id": item.workflow_state_id} if item.workflow_state_id else None),
+                        "targetBranch": (
+                            {
+                                "id": item.target_branch_id,
+                                "branchPattern": item.target_branch_pattern,
+                                "isRegex": item.target_branch_is_regex,
+                            }
+                            if item.target_branch_id
+                            else None
+                        ),
+                    }
+                    for item in automation_list
+                ],
+                "pageInfo": {"hasNextPage": has_next, "endCursor": end_cursor},
+            },
+        }
+    }
+
+
 class _ScriptedTransport:
     """Return exact GraphQL data objects while recording typed operations."""
 
@@ -328,6 +385,7 @@ def test_configuration_plan_is_exact_and_idempotent() -> None:
         issue_status_list=list(_existing_status(item, index) for index, item in enumerate(ISSUE_STATUS_DESIRED[:3], 1)),
         project_status_list=[],
         label_list=[],
+        git_status_automation_list=[_git_status_automation(1)],
     )
 
     plan = WorkflowConfigurationReconciler().plan_get(partial)
@@ -335,6 +393,7 @@ def test_configuration_plan_is_exact_and_idempotent() -> None:
     assert [item.name for item in plan.issue_status_create_list] == [item.name for item in ISSUE_STATUS_DESIRED[3:]]
     assert plan.project_status_create_list == list(PROJECT_STATUS_DESIRED)
     assert plan.label_create_list == list(LABEL_DESIRED)
+    assert plan.git_status_automation_delete_list == [_git_status_automation(1)]
     assert plan.can_mutate()
 
     current = WorkflowConfigurationSnapshot(
@@ -344,6 +403,7 @@ def test_configuration_plan_is_exact_and_idempotent() -> None:
             _existing_status(item, index + 20) for index, item in enumerate(PROJECT_STATUS_DESIRED, 1)
         ),
         label_list=list(_existing_label(item, index) for index, item in enumerate(LABEL_DESIRED, 1)),
+        git_status_automation_list=[],
     )
 
     assert WorkflowConfigurationReconciler().plan_get(current).is_current()
@@ -354,7 +414,15 @@ def test_configuration_plan_roundtrip_and_fresh_subset_guard() -> None:
 
     approved = (
         WorkflowConfigurationReconciler()
-        .plan_get(WorkflowConfigurationSnapshot(_destination(), [], [], []))
+        .plan_get(
+            WorkflowConfigurationSnapshot(
+                _destination(),
+                [],
+                [],
+                [],
+                [_git_status_automation(1), _git_status_automation(2, target_branch=True)],
+            )
+        )
         .status_identifier_allocate()
     )
     parsed = ConfigurationPlan.from_payload(approved.payload())
@@ -375,6 +443,7 @@ def test_configuration_plan_roundtrip_and_fresh_subset_guard() -> None:
         issue_status_create_list=[replace(item, id="") for item in approved.issue_status_create_list[1:]],
         project_status_create_list=[replace(item, id="") for item in approved.project_status_create_list],
         label_create_list=[],
+        git_status_automation_delete_list=approved.git_status_automation_delete_list[:1],
         conflict_list=[],
     )
     current.subset_require(approved)
@@ -396,6 +465,11 @@ def test_configuration_plan_roundtrip_and_fresh_subset_guard() -> None:
                 workspace_id="44444444-4444-4444-8444-444444444444",
             ),
         ).subset_require(approved)
+    with pytest.raises(LinearContractError, match="Git status automation plan changed"):
+        replace(
+            current,
+            git_status_automation_delete_list=[replace(current.git_status_automation_delete_list[0], event="review")],
+        ).subset_require(approved)
 
 
 def test_configuration_rejects_wrong_category_and_foreign_label() -> None:
@@ -413,7 +487,7 @@ def test_configuration_rejects_wrong_category_and_foreign_label() -> None:
     foreign_label = _existing_label(LABEL_DESIRED[0], 2)
     foreign_label = LinearLabel(foreign_label.id, foreign_label.name, foreign_label.color, "foreign owner")
     plan = WorkflowConfigurationReconciler().plan_get(
-        WorkflowConfigurationSnapshot(_destination(), [wrong_status], [], [foreign_label])
+        WorkflowConfigurationSnapshot(_destination(), [wrong_status], [], [foreign_label], [])
     )
 
     assert not plan.can_mutate()
@@ -427,14 +501,14 @@ def test_configuration_rejects_wrong_category_and_foreign_label() -> None:
         color="#000000",
     )
     color_plan = WorkflowConfigurationReconciler().plan_get(
-        WorkflowConfigurationSnapshot(_destination(), [], [], [wrong_color])
+        WorkflowConfigurationSnapshot(_destination(), [], [], [wrong_color], [])
     )
     assert ("label", "task:implementation") in {(item.kind, item.name) for item in color_plan.conflict_list}
 
     wrong_case_status = replace(_existing_status(ISSUE_STATUS_DESIRED[1], 4), name="todo")
     wrong_case_label = replace(_existing_label(LABEL_DESIRED[0], 5), name="TASK:IMPLEMENTATION")
     casing_plan = WorkflowConfigurationReconciler().plan_get(
-        WorkflowConfigurationSnapshot(_destination(), [wrong_case_status], [], [wrong_case_label])
+        WorkflowConfigurationSnapshot(_destination(), [wrong_case_status], [], [wrong_case_label], [])
     )
     assert {(item.kind, item.name, item.reason) for item in casing_plan.conflict_list} == {
         ("issue-status", "Todo", "same name uses different casing"),
@@ -905,6 +979,12 @@ def test_graphql_configuration_fully_paginates_and_guards_exact_destination() ->
         [
             _workflow_response(ISSUE_STATUS_DESIRED[:4], has_next=True, end_cursor="next-page"),
             _workflow_response(ISSUE_STATUS_DESIRED[4:]),
+            _git_status_automation_response(
+                [_git_status_automation(1, event="start")],
+                has_next=True,
+                end_cursor="next-automation-page",
+            ),
+            _git_status_automation_response([_git_status_automation(2, target_branch=True, workflow_state=False)]),
             _project_status_response(PROJECT_STATUS_DESIRED),
         ]
     )
@@ -918,10 +998,16 @@ def test_graphql_configuration_fully_paginates_and_guards_exact_destination() ->
 
     assert [item.name for item in current.issue_status_list] == [item.name for item in ISSUE_STATUS_DESIRED]
     assert [item.name for item in current.project_status_list] == [item.name for item in PROJECT_STATUS_DESIRED]
+    assert current.git_status_automation_list == [
+        _git_status_automation(1, event="start"),
+        _git_status_automation(2, target_branch=True, workflow_state=False),
+    ]
     assert transport.call_list[1]["variables"]["after"] == "next-page"
+    assert transport.call_list[3]["variables"]["after"] == "next-automation-page"
     assert all(item["variables"]["viewerId"] == VIEWER_ID for item in transport.call_list[:2])
     assert "membership(userId: $viewerId)" in transport.call_list[0]["document"]
-    assert "projectStatuses(first: 100" in transport.call_list[2]["document"]
+    assert "gitAutomationStates(first: 100" in transport.call_list[2]["document"]
+    assert "projectStatuses(first: 100" in transport.call_list[4]["document"]
     assert all(item["repeat_safe"] is True for item in transport.call_list)
 
 
@@ -931,6 +1017,7 @@ def test_graphql_configuration_plan_can_discover_workspace_but_binds_its_fingerp
     transport = _ScriptedTransport(
         [
             _workflow_response(ISSUE_STATUS_DESIRED),
+            _git_status_automation_response([]),
             _project_status_response(PROJECT_STATUS_DESIRED),
         ]
     )
@@ -962,21 +1049,24 @@ def test_graphql_configuration_rereads_approved_destination_before_status_mutati
             _existing_status(item, index + 20) for index, item in enumerate(partial_project_status_list, 1)
         ),
         label_list=list(_existing_label(item, index) for index, item in enumerate(LABEL_DESIRED, 1)),
+        git_status_automation_list=[],
     )
     approved = WorkflowConfigurationReconciler().plan_get(current_snapshot).status_identifier_allocate()
     transport = _ScriptedTransport(
         [
             _workflow_response(partial_issue_status_list),
+            _git_status_automation_response([]),
             _project_status_response(partial_project_status_list),
             {"workflowStateCreate": {"success": True}},
             {"projectStatusCreate": {"success": True}},
             _workflow_response(ISSUE_STATUS_DESIRED),
+            _git_status_automation_response([]),
             _project_status_response(PROJECT_STATUS_DESIRED),
         ]
     )
     service = LinearWorkflowConfigurationGraphQL(transport, WorkflowConfigurationReconciler())
 
-    service.missing_statuses_create(
+    service.approved_configuration_apply(
         expected_workspace_id=WORKSPACE_ID,
         expected_viewer_id=VIEWER_ID,
         expected_team_id=TEAM_ID,
@@ -986,19 +1076,78 @@ def test_graphql_configuration_rereads_approved_destination_before_status_mutati
     operation_list = [item["operation_name"] for item in transport.call_list]
     assert operation_list == [
         "LinearAgentWorkflowConfiguration",
+        "LinearAgentGitStatusAutomations",
         "LinearAgentProjectStatuses",
         "LinearAgentWorkflowStateCreate",
         "LinearAgentProjectStatusCreate",
         "LinearAgentWorkflowConfiguration",
+        "LinearAgentGitStatusAutomations",
         "LinearAgentProjectStatuses",
     ]
-    create_call = transport.call_list[2]
+    create_call = transport.call_list[3]
     assert create_call["repeat_safe"] is False
     assert create_call["variables"]["input"]["name"] == "Canceled"
     assert create_call["variables"]["input"]["id"] == approved.issue_status_create_list[0].id
     assert uuid.UUID(create_call["variables"]["input"]["id"]).version == 4
-    project_create_call = transport.call_list[3]
+    project_create_call = transport.call_list[4]
     assert project_create_call["repeat_safe"] is False
     assert project_create_call["variables"]["input"]["name"] == "Canceled"
     assert project_create_call["variables"]["input"]["id"] == approved.project_status_create_list[0].id
     assert "status { id name type color description position }" in project_create_call["document"]
+
+
+def test_graphql_configuration_deletes_every_exact_git_status_automation_before_readback() -> None:
+    """Provider-owned task statuses cannot be changed by default or branch Git rules."""
+
+    automation_list = [
+        _git_status_automation(1, event="start"),
+        _git_status_automation(2, event="merge", target_branch=True, workflow_state=False),
+    ]
+    current_snapshot = WorkflowConfigurationSnapshot(
+        destination=_destination(),
+        issue_status_list=list(_existing_status(item, index) for index, item in enumerate(ISSUE_STATUS_DESIRED, 1)),
+        project_status_list=list(
+            _existing_status(item, index + 20) for index, item in enumerate(PROJECT_STATUS_DESIRED, 1)
+        ),
+        label_list=list(_existing_label(item, index) for index, item in enumerate(LABEL_DESIRED, 1)),
+        git_status_automation_list=automation_list,
+    )
+    approved = WorkflowConfigurationReconciler().plan_get(current_snapshot).status_identifier_allocate()
+    assert approved.git_status_automation_delete_list == automation_list
+    transport = _ScriptedTransport(
+        [
+            _workflow_response(ISSUE_STATUS_DESIRED),
+            _git_status_automation_response(automation_list),
+            _project_status_response(PROJECT_STATUS_DESIRED),
+            {
+                "gitAutomationStateDelete": {
+                    "entityId": automation_list[0].id,
+                    "success": True,
+                }
+            },
+            {
+                "gitAutomationStateDelete": {
+                    "entityId": automation_list[1].id,
+                    "success": True,
+                }
+            },
+            _workflow_response(ISSUE_STATUS_DESIRED),
+            _git_status_automation_response([]),
+            _project_status_response(PROJECT_STATUS_DESIRED),
+        ]
+    )
+    service = LinearWorkflowConfigurationGraphQL(transport, WorkflowConfigurationReconciler())
+
+    service.approved_configuration_apply(
+        expected_workspace_id=WORKSPACE_ID,
+        expected_viewer_id=VIEWER_ID,
+        expected_team_id=TEAM_ID,
+        approved_plan=approved,
+    )
+
+    delete_call_list = [
+        item for item in transport.call_list if item["operation_name"] == "LinearAgentGitStatusAutomationDelete"
+    ]
+    assert [item["variables"]["id"] for item in delete_call_list] == [item.id for item in automation_list]
+    assert all(item["repeat_safe"] is False for item in delete_call_list)
+    assert all("gitAutomationStateDelete" in item["document"] for item in delete_call_list)
