@@ -806,6 +806,7 @@ def test_task_implement_behavior_invariant_requires_every_receipt_input_identity
     for required_text in (
         "the separate receipt key binds that stable verification key itself",
         "every exact codec-rendered verification receipt comment was published before candidate publication",
+        "the Human Review candidate identity is validated and derived from each current receipt key",
         "a handoff that only says receipts were created, is insufficient",
     ):
         assert required_text in skill_text

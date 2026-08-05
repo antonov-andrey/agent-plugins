@@ -49,8 +49,9 @@ Every receipt-bearing preview or handoff MUST explicitly state all of these fact
 
 - the stable verification key binds the source fingerprint, exact direct argv, canonical absolute working directory, corpus content, model identity, model configuration, applicable environment and release identity, plus each checkout's canonical absolute path, roles, repository URL, full commit, recursive submodules and dependency locks;
 - the separate receipt key binds that stable verification key itself plus the outcome, UTC completion instant, exact artifact URL and artifact content SHA-256;
-- every exact codec-rendered verification receipt comment was published before candidate publication; and
-- each durable canonical HTTPS artifact URL contains no credentials, port, query string or fragment.
+- every exact codec-rendered verification receipt comment was published before candidate publication;
+- each durable canonical HTTPS artifact URL contains no credentials, port, query string or fragment; and
+- for evidence delivery, the Human Review candidate identity is validated and derived from each current receipt key, never from the stable verification key.
 
 A generic claim that a receipt binds inputs and evidence, or a handoff that only says receipts were created, is insufficient.
 
