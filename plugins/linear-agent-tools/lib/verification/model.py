@@ -7,12 +7,14 @@ from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import PurePosixPath
+from urllib.parse import urlsplit
 
 from verification._validation import (
     COMMIT_PATTERN,
     SHA256_PATTERN,
     VerificationReceiptError,
     instant_parse,
+    instant_render,
     single_line_validate,
     text_by_text_map_parse,
     utc_validate,
@@ -34,6 +36,70 @@ def _absolute_path_validate(value: object, *, label: str) -> str:
     if not path.is_absolute() or str(path) != value or any(part in {".", ".."} for part in path.parts):
         raise VerificationReceiptError(f"{label} must be a canonical absolute POSIX path")
     return value
+
+
+def _evidence_url_validate(value: object) -> str:
+    """Return one durable canonical HTTPS evidence URL.
+
+    Args:
+        value: Candidate provider artifact URL.
+
+    Returns:
+        Validated evidence URL.
+    """
+
+    evidence_url = single_line_validate(value, label="Verification evidence URL")
+    try:
+        parsed = urlsplit(evidence_url)
+    except ValueError as error:
+        raise VerificationReceiptError("Verification evidence URL must be one canonical HTTPS provider URL") from error
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.netloc != parsed.hostname
+        or not parsed.path
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise VerificationReceiptError("Verification evidence URL must be one canonical HTTPS provider URL")
+    return evidence_url
+
+
+def _receipt_key_get(
+    *,
+    completed_at: datetime,
+    evidence_content_sha256: str,
+    evidence_url: str,
+    outcome: str,
+    verification_key: str,
+) -> str:
+    """Return SHA-256 of one exact verification result and evidence identity.
+
+    Args:
+        completed_at: Exact UTC verification completion instant.
+        evidence_content_sha256: Exact evidence artifact content identity.
+        evidence_url: Durable canonical evidence artifact URL.
+        outcome: Passed or failed result.
+        verification_key: Stable identity of the verification inputs.
+
+    Returns:
+        Lowercase receipt key.
+    """
+
+    return hashlib.sha256(
+        json.dumps(
+            {
+                "completed_at": instant_render(completed_at),
+                "evidence_content_sha256": evidence_content_sha256,
+                "evidence_url": evidence_url,
+                "outcome": outcome,
+                "verification_key": verification_key,
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
 
 
 def _repository_path_validate(value: object, *, label: str) -> str:
@@ -200,8 +266,10 @@ class VerificationInput:
         checkout_path_list = [item.path for item in self.checkout_list]
         if len(checkout_path_list) != len(set(checkout_path_list)):
             raise VerificationReceiptError("Verification checkout paths must be unique")
-        if self.corpus_content_sha256 and SHA256_PATTERN.fullmatch(self.corpus_content_sha256) is None:
-            raise VerificationReceiptError("Verification corpus content identity must be empty or SHA-256")
+        if not isinstance(self.corpus_content_sha256, str) or (
+            self.corpus_content_sha256 and SHA256_PATTERN.fullmatch(self.corpus_content_sha256) is None
+        ):
+            raise VerificationReceiptError("Verification corpus content identity must be empty or SHA-256 text")
         single_line_validate(self.model_identity, label="Verification model identity", empty_allowed=True)
         if not isinstance(self.model_configuration_by_name_map, dict):
             raise VerificationReceiptError("Verification model configuration must be a mapping")
@@ -231,7 +299,7 @@ class VerificationInput:
         """Return SHA-256 of every declared verification input.
 
         Returns:
-            Lowercase receipt key.
+            Lowercase verification key.
         """
 
         return hashlib.sha256(
@@ -312,6 +380,7 @@ class VerificationReceipt:
     """Contain one concise immutable verification result and its exact inputs."""
 
     verification_key: str
+    receipt_key: str
     outcome: str
     completed_at: datetime
     evidence_url: str
@@ -333,17 +402,25 @@ class VerificationReceipt:
         }:
             raise VerificationReceiptError("Verification receipt outcome is unsupported")
         utc_validate(self.completed_at, label="Verification completion instant")
-        if (
-            not isinstance(self.evidence_url, str)
-            or not self.evidence_url
-            or any(character in self.evidence_url for character in ("\x00", "\n", "\r"))
-        ):
-            raise VerificationReceiptError("Verification evidence URL must be non-empty single-line text")
+        _evidence_url_validate(self.evidence_url)
         if (
             not isinstance(self.evidence_content_sha256, str)
             or SHA256_PATTERN.fullmatch(self.evidence_content_sha256) is None
         ):
             raise VerificationReceiptError("Verification evidence content identity must be SHA-256")
+        if (
+            not isinstance(self.receipt_key, str)
+            or SHA256_PATTERN.fullmatch(self.receipt_key) is None
+            or self.receipt_key
+            != _receipt_key_get(
+                completed_at=self.completed_at,
+                evidence_content_sha256=self.evidence_content_sha256,
+                evidence_url=self.evidence_url,
+                outcome=self.outcome,
+                verification_key=self.verification_key,
+            )
+        ):
+            raise VerificationReceiptError("Verification receipt key differs from its exact result and evidence")
 
     @classmethod
     def from_input(
@@ -360,7 +437,7 @@ class VerificationReceipt:
         Args:
             verification_input: Complete declared inputs.
             outcome: Passed or failed.
-            evidence_url: Link to the owning log or CI result.
+            evidence_url: Durable canonical HTTPS provider artifact identity.
             evidence_content_sha256: Exact evidence artifact content identity.
             completed_at: Optional deterministic UTC instant.
 
@@ -371,8 +448,16 @@ class VerificationReceipt:
         instant = completed_at or datetime.now(timezone.utc)
         if instant.tzinfo is None or instant.utcoffset() is None:
             raise VerificationReceiptError("Receipt creation instant must be timezone-aware")
+        verification_key = verification_input.key()
         return cls(
-            verification_key=verification_input.key(),
+            verification_key=verification_key,
+            receipt_key=_receipt_key_get(
+                completed_at=instant.astimezone(timezone.utc),
+                evidence_content_sha256=evidence_content_sha256,
+                evidence_url=evidence_url,
+                outcome=outcome,
+                verification_key=verification_key,
+            ),
             outcome=outcome,
             completed_at=instant.astimezone(timezone.utc),
             evidence_url=evidence_url,
@@ -388,12 +473,13 @@ class VerificationReceipt:
         """
 
         return {
-            "schema_version": 2,
+            "schema_version": 3,
             "completed_at": self.completed_at.isoformat().replace("+00:00", "Z"),
             "evidence_content_sha256": self.evidence_content_sha256,
             "evidence_url": self.evidence_url,
             "input": self.input.payload(),
             "outcome": self.outcome,
+            "receipt_key": self.receipt_key,
             "verification_key": self.verification_key,
         }
 
@@ -415,12 +501,14 @@ class VerificationReceipt:
             "evidence_url",
             "input",
             "outcome",
+            "receipt_key",
             "verification_key",
         }
-        if not isinstance(payload, dict) or set(payload) != expected or payload["schema_version"] != 2:
+        if not isinstance(payload, dict) or set(payload) != expected or payload["schema_version"] != 3:
             raise VerificationReceiptError("Verification receipt has another shape")
         return cls(
             verification_key=payload["verification_key"],
+            receipt_key=payload["receipt_key"],
             outcome=payload["outcome"],
             completed_at=instant_parse(payload["completed_at"], label="Verification completed_at"),
             evidence_url=payload["evidence_url"],

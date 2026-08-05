@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
@@ -36,6 +37,8 @@ COMMIT_TWO = "b" * 40
 CORPUS_ONE = "1" * 64
 CORPUS_TWO = "2" * 64
 EVIDENCE_ONE = "3" * 64
+EVIDENCE_TWO = "4" * 64
+LINEAR_ATTACHMENT_URL = "https://uploads.linear.app/workspace/asset/artifact"
 LOCK_ONE = "c" * 64
 LOCK_TWO = "d" * 64
 
@@ -102,6 +105,15 @@ def test_receipt_roundtrip_and_exact_reuse_key() -> None:
 
     assert parsed == receipt
     assert ReceiptReuseEvaluator(current).decision_get(parsed).reusable
+    changed_evidence = VerificationReceipt.from_input(
+        current,
+        outcome="passed",
+        evidence_url=LINEAR_ATTACHMENT_URL,
+        evidence_content_sha256=EVIDENCE_TWO,
+        completed_at=receipt.completed_at,
+    )
+    assert changed_evidence.verification_key == receipt.verification_key
+    assert changed_evidence.receipt_key != receipt.receipt_key
     changed_commit = ReceiptReuseEvaluator(_verification_input(commit=COMMIT_TWO)).decision_get(parsed)
     assert changed_commit.reason_list == ["checkout-set-changed"]
     changed_lock = ReceiptReuseEvaluator(_verification_input(lock=LOCK_TWO)).decision_get(parsed)
@@ -129,6 +141,20 @@ def test_receipt_roundtrip_and_exact_reuse_key() -> None:
     changed_source_payload["source_fingerprint"] = "0" * 64
     changed_source = ReceiptReuseEvaluator(VerificationInput.from_payload(changed_source_payload)).decision_get(parsed)
     assert changed_source.reason_list == ["source-fingerprint-changed"]
+
+
+@pytest.mark.parametrize("value", [None, False, 0, [], {}])
+def test_verification_input_rejects_non_string_corpus_identity(value: object) -> None:
+    """The empty corpus identity is one explicit string, not another falsy JSON type."""
+
+    current = _verification_input()
+    payload = current.payload()
+    payload["corpus_content_sha256"] = value
+
+    with pytest.raises(VerificationReceiptError, match="empty or SHA-256 text"):
+        VerificationInput.from_payload(payload)
+    with pytest.raises(VerificationReceiptError, match="empty or SHA-256 text"):
+        replace(current, corpus_content_sha256=value)
 
 
 def test_external_evidence_receipt_can_bind_source_without_a_repository_commit() -> None:
@@ -301,6 +327,63 @@ def test_receipt_normalizes_utc_and_rejects_naive_instant() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    ("evidence_url", "evidence_content_sha256"),
+    [
+        ("https://attacker.invalid/evidence", EVIDENCE_ONE),
+        (LINEAR_ATTACHMENT_URL, EVIDENCE_TWO),
+        ("https://attacker.invalid/evidence", EVIDENCE_TWO),
+    ],
+)
+def test_receipt_rejects_evidence_identity_substitution(
+    evidence_url: str,
+    evidence_content_sha256: str,
+) -> None:
+    """URL-only, SHA-only, and combined substitutions invalidate the issued receipt key."""
+
+    receipt = VerificationReceipt.from_input(
+        _verification_input(),
+        outcome="passed",
+        evidence_url=LINEAR_ATTACHMENT_URL,
+        evidence_content_sha256=EVIDENCE_ONE,
+        completed_at=datetime(2026, 8, 4, 12, 30, tzinfo=timezone.utc),
+    )
+    payload = receipt.payload()
+    payload["evidence_url"] = evidence_url
+    payload["evidence_content_sha256"] = evidence_content_sha256
+
+    with pytest.raises(VerificationReceiptError, match="receipt key differs"):
+        VerificationReceipt.from_payload(payload)
+    with pytest.raises(VerificationReceiptError, match="receipt key differs"):
+        replace(
+            receipt,
+            evidence_url=evidence_url,
+            evidence_content_sha256=evidence_content_sha256,
+        )
+
+
+@pytest.mark.parametrize(
+    "evidence_url",
+    [
+        LINEAR_ATTACHMENT_URL + "?signature=short-lived",
+        LINEAR_ATTACHMENT_URL + "#download",
+        "http://uploads.linear.app/workspace/asset/artifact",
+        "https://user@uploads.linear.app/workspace/asset/artifact",
+        "https://uploads.linear.app:443/workspace/asset/artifact",
+    ],
+)
+def test_receipt_rejects_noncanonical_evidence_url(evidence_url: str) -> None:
+    """A receipt never stores an expiring or authority-ambiguous artifact URL."""
+
+    with pytest.raises(VerificationReceiptError, match="canonical HTTPS provider URL"):
+        VerificationReceipt.from_input(
+            _verification_input(),
+            outcome="passed",
+            evidence_url=evidence_url,
+            evidence_content_sha256=EVIDENCE_ONE,
+        )
+
+
 def test_receipt_cli_reuses_the_exact_linear_comment_shape(tmp_path: Path) -> None:
     """The CLI consumes the same provider comment body that its create operation emits."""
 
@@ -343,7 +426,7 @@ def test_receipt_cli_reuses_the_exact_linear_comment_shape(tmp_path: Path) -> No
 
     assert reused.returncode == 0
     assert json.loads(reused.stdout)["reusable"] is True
-    assert created.stdout.startswith("<!-- linear-agent-tools-verification:v2 -->")
+    assert created.stdout.startswith("<!-- linear-agent-tools-verification:v3 -->")
 
 
 def test_receipt_rejects_prior_schema_without_a_compatibility_branch() -> None:
@@ -356,15 +439,15 @@ def test_receipt_rejects_prior_schema_without_a_compatibility_branch() -> None:
         evidence_content_sha256=EVIDENCE_ONE,
     )
     payload = receipt.payload()
-    payload["schema_version"] = 1
+    payload["schema_version"] = 2
 
     with pytest.raises(VerificationReceiptError, match="another shape"):
         VerificationReceipt.from_payload(payload)
     with pytest.raises(VerificationReceiptError, match="another shape"):
         VERIFICATION_RECEIPT_COMMENT_CODEC.payload_parse(
             VERIFICATION_RECEIPT_COMMENT_CODEC.render(receipt.payload()).replace(
+                "linear-agent-tools-verification:v3",
                 "linear-agent-tools-verification:v2",
-                "linear-agent-tools-verification:v1",
                 1,
             )
         )

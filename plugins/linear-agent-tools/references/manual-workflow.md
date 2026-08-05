@@ -15,7 +15,16 @@
 - Git owns branches and commits. GitHub owns PRs, required checks, reviews and merge results.
 - GitHub integration owns official issue-to-branch/PR linking only. Every team Git status automation, including target-branch rules, is absent so that PR events cannot bypass provider-owned `Human Review`, `Merging`, evidence publication or cleanup transitions.
 - Source systems such as `project-goals` own authoring before handoff and immutable Git provenance for the exact revision published at handoff.
-- Git administration state contains only local ownership and crash recovery. Verification receipts bind the exact source fingerprint, command, canonical absolute working directory, corpus, model, configuration and applicable environment or release identities. Their checkout list binds each canonical absolute path, roles, repository URL, full commit, recursive submodules and dependency locks without collapsing repeated repository URLs; submodule and lock keys are canonical checkout-relative paths. Each receipt also binds one independently readable immutable result artifact by its exact provider URL and content SHA-256. Receipts live in Linear comments or GitHub checks. No local task graph or execution database exists.
+- Git administration state contains only local ownership and crash recovery.
+- Verification receipts use one current schema.
+  - The verification key binds the source, command, working directory, corpus, model, configuration, environment, and release inputs.
+  - Each checkout binds its path, roles, repository URL, full commit, recursive submodules, and dependency locks.
+  - Submodule and lock keys use canonical checkout-relative paths.
+  - Repeated repository URLs remain separate checkout records.
+  - The receipt key binds the verification key, outcome, UTC instant, canonical artifact URL, and content SHA-256.
+  - Artifact URLs use durable HTTPS provider identities without credentials, ports, query strings, or fragments.
+  - Receipts live in Linear comments or GitHub checks.
+- No local task graph or execution database exists.
 
 For a `project-goals` source, provenance is one canonical commit-pinned directory URL. The directory contains the exact sibling `goal.md` and `spec.md`; mutable `main`, a repository root, or separate file URLs are not equivalent source identities.
 

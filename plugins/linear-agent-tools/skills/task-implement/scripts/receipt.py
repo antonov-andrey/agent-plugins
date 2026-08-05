@@ -35,8 +35,16 @@ def _args_parse(argv: list[str] | None = None) -> argparse.Namespace:
     create = subparsers.add_parser("create")
     create.add_argument("--input", required=True, type=Path)
     create.add_argument("--outcome", choices=("passed", "failed"), required=True)
-    create.add_argument("--evidence-url", required=True)
-    create.add_argument("--evidence-content-sha256", required=True)
+    create.add_argument(
+        "--evidence-url",
+        required=True,
+        help="Durable canonical HTTPS provider URL without credentials, port, query, or fragment.",
+    )
+    create.add_argument(
+        "--evidence-content-sha256",
+        required=True,
+        help="Lowercase SHA-256 of the exact independently readable evidence bytes.",
+    )
     reuse = subparsers.add_parser("reuse")
     reuse.add_argument(
         "--receipt-comment",

@@ -330,7 +330,7 @@
         },
         {
           "id": "receipt-integrity",
-          "text": "Each reusable receipt binds every result-affecting checkout path, role, repository, revision, recursive submodule and dependency lock, plus exact corpus, model, configuration, environment or release inputs and one immutable result artifact URL with its content checksum."
+          "text": "Each verification key binds checkout path, roles, repository, revision, recursive submodules, dependency locks, corpus, model, configuration, environment and release inputs. A separate receipt key binds that verification key, outcome, UTC instant, canonical immutable evidence URL and content SHA-256. The evidence URL has no credentials, port, query or fragment."
         },
         {
           "id": "exclusive-attempt",

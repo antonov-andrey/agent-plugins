@@ -38,7 +38,7 @@ class ReceiptReuseEvaluator:
         self._current = current
 
     def decision_get(self, receipt: VerificationReceipt) -> ReceiptDecision:
-        """Compare every declared dependency rather than command text alone.
+        """Compare every declared dependency of one integrity-validated receipt.
 
         Args:
             receipt: Prior immutable receipt.
@@ -47,6 +47,8 @@ class ReceiptReuseEvaluator:
             Reuse decision with concise invalidation reasons.
         """
 
+        if not isinstance(receipt, VerificationReceipt):
+            raise VerificationReceiptError("Prior verification receipt has another shape")
         reason_list: list[str] = []
         prior = receipt.input
         if receipt.outcome != "passed":
