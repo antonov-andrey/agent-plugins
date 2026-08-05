@@ -384,6 +384,22 @@ def test_receipt_rejects_noncanonical_evidence_url(evidence_url: str) -> None:
         )
 
 
+def test_receipt_comment_protects_canonical_evidence_url_from_provider_rewrite() -> None:
+    """JSON slash escapes preserve the URL value without exposing one Linear autolink target."""
+
+    receipt = VerificationReceipt.from_input(
+        _verification_input(),
+        outcome="passed",
+        evidence_url=LINEAR_ATTACHMENT_URL,
+        evidence_content_sha256=EVIDENCE_ONE,
+    )
+    rendered = VERIFICATION_RECEIPT_COMMENT_CODEC.render(receipt.payload())
+
+    assert LINEAR_ATTACHMENT_URL not in rendered
+    assert r"https:\/\/uploads.linear.app\/workspace\/asset\/artifact" in rendered
+    assert VerificationReceipt.from_payload(VERIFICATION_RECEIPT_COMMENT_CODEC.payload_parse(rendered)) == receipt
+
+
 def test_receipt_cli_reuses_the_exact_linear_comment_shape(tmp_path: Path) -> None:
     """The CLI consumes the same provider comment body that its create operation emits."""
 
@@ -427,6 +443,8 @@ def test_receipt_cli_reuses_the_exact_linear_comment_shape(tmp_path: Path) -> No
     assert reused.returncode == 0
     assert json.loads(reused.stdout)["reusable"] is True
     assert created.stdout.startswith("<!-- linear-agent-tools-verification:v3 -->")
+    assert "https://example.test/ci/1" not in created.stdout
+    assert r"https:\/\/example.test\/ci\/1" in created.stdout
 
 
 def test_receipt_rejects_prior_schema_without_a_compatibility_branch() -> None:

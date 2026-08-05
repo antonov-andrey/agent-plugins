@@ -34,6 +34,7 @@ Every preview or handoff response MUST state that one exact issue process-lifeti
   - Bind corpus content, model identity, model configuration, and applicable environment or release identity.
   - Preserve the exact machine-readable result as one independently readable immutable provider artifact.
   - Use a durable canonical HTTPS provider URL without credentials, ports, query strings, or fragments.
+  - Publish the exact codec-rendered receipt comment; its JSON slash escapes preserve that URL value across Linear readback instead of exposing an autolink target that Linear can replace with a presigned URL.
   - The receipt key binds the verification key, outcome, UTC completion instant, exact artifact URL, and artifact content SHA-256.
   - Create and evaluate only the current receipt schema through `scripts/receipt.py`.
   - A source-independent evidence probe may use an empty checkout list, but its source fingerprint remains required.

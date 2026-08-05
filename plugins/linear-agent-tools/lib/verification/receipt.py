@@ -17,6 +17,7 @@ class VerificationCommentCodec:
 
     prefix: str
     label: str
+    escape_forward_slash: bool = False
 
     def __post_init__(self) -> None:
         """Reject an ambiguous or unsafe comment marker."""
@@ -28,6 +29,7 @@ class VerificationCommentCodec:
             or not isinstance(self.label, str)
             or not self.label
             or any(character in self.label for character in "\x00\r\n")
+            or not isinstance(self.escape_forward_slash, bool)
         ):
             raise VerificationReceiptError("Verification comment codec has another shape")
 
@@ -59,7 +61,10 @@ class VerificationCommentCodec:
             Markdown comment body.
         """
 
-        return self.prefix + json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + _COMMENT_SUFFIX
+        encoded = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
+        if self.escape_forward_slash:
+            encoded = encoded.replace("/", r"\/")
+        return self.prefix + encoded + _COMMENT_SUFFIX
 
 
 ATTEMPT_COMMENT_CODEC = VerificationCommentCodec(
@@ -77,4 +82,5 @@ TASK_WORKSPACE_BASELINE_COMMENT_CODEC = VerificationCommentCodec(
 VERIFICATION_RECEIPT_COMMENT_CODEC = VerificationCommentCodec(
     prefix="<!-- linear-agent-tools-verification:v3 -->\n```json\n",
     label="Verification receipt",
+    escape_forward_slash=True,
 )

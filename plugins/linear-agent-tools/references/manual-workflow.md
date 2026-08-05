@@ -23,6 +23,7 @@
   - Repeated repository URLs remain separate checkout records.
   - The receipt key binds the verification key, outcome, UTC instant, canonical artifact URL, and content SHA-256.
   - Artifact URLs use durable HTTPS provider identities without credentials, ports, query strings, or fragments.
+  - The receipt comment renders JSON forward slashes as escapes so Linear readback cannot replace that stable identity with a presigned URL; JSON parsing restores the exact canonical URL value.
   - Receipts live in Linear comments or GitHub checks.
 - No local task graph or execution database exists.
 
