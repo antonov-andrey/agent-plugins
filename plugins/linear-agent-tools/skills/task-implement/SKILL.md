@@ -25,9 +25,10 @@ Every preview or handoff response MUST state that one exact issue process-lifeti
 - Apply every applicable project standard and implement only the bounded issue outcome.
 - Complete one coherent owner slice before verification and publication. Use `agent-workflows:git-commit` for logical commits and push each commit immediately; do not emit symptom-by-symptom intermediate commits that are not independently green.
 - Run targeted checks after each completed owner slice, the applicable full suite on the frozen candidate, live acceptance only for that exact deployed candidate, and a fresh semantic audit after the last fix.
-- Build receipts from the exact source fingerprint, direct argv, canonical absolute working directory, and every result-affecting checkout.
+- Build receipts from the exact source fingerprint, semantic verification-contract fingerprint, direct argv, canonical absolute working directory, and every result-affecting checkout.
   - The verification key binds only the complete declared result inputs.
-  - Each checkout binds its canonical absolute path, roles, repository URL, full commit, recursive submodules, and dependency locks.
+  - Derive the verification-contract fingerprint only from the actual assertions, expected behavior, output schema, and invariants. Do not add issue, delta, attempt, Codex version, or other orchestration identity unless it changes result semantics.
+  - Each checkout binds its canonical absolute path, roles, credential-free supported repository URL, full commit, recursive submodules, and dependency locks.
   - Use canonical checkout-relative paths for submodules and locks.
   - Keep repeated repository URLs as separate checkout records.
   - Every receipt preview and handoff MUST state these per-checkout identities.
@@ -48,7 +49,7 @@ Every preview or handoff response MUST state that one exact issue process-lifeti
 
 Every receipt-bearing preview or handoff MUST explicitly state all of these facts:
 
-- the stable verification key binds the source fingerprint, exact direct argv, canonical absolute working directory, corpus content, model identity, model configuration, applicable environment and release identity, plus each checkout's canonical absolute path, roles, repository URL, full commit, recursive submodules and dependency locks;
+- the stable verification key binds the source fingerprint, semantic verification-contract fingerprint, exact direct argv, canonical absolute working directory, corpus content, model identity, model configuration, applicable environment and release identity, plus each checkout's canonical absolute path, roles, credential-free supported repository URL, full commit, recursive submodules and dependency locks;
 - the separate receipt key binds that stable verification key itself plus the outcome, UTC completion instant, exact artifact URL and artifact content SHA-256;
 - every exact codec-rendered verification receipt comment was published before candidate publication;
 - each durable canonical HTTPS artifact URL contains no credentials, port, query string or fragment; and
@@ -56,7 +57,7 @@ Every receipt-bearing preview or handoff MUST explicitly state all of these fact
 
 A generic claim that a receipt binds inputs and evidence, or a handoff that only says receipts were created, is insufficient. Checkout path canonicality is itself mandatory evidence: every receipt-bearing handoff must say `canonical absolute path`; reducing that identity to only `absolute path` is incomplete.
 
-Before publishing the attempt result, invoke `task-cleanup` for all current `attempt`-lifetime resources. Build the exact code or evidence candidate fingerprint with `../../lib/verification/tool/evidence.py candidate`. Evidence delivery supplies a map of evidence kind to complete passed current-schema verification receipt after exact provider readback; the tool validates the derived receipt key and emits the compact map of evidence kind to receipt key that Human Review approves. Never substitute the stable verification key. Build the concise structured attempt comment with its `attempt` operation: attempt ID, role, delivery kind, UTC start/end, outcome, delivery-applicable commit set, receipt hit/miss counts, external wait duration, token usage only when directly exposed, candidate fingerprint, PR/CI links and bounded evidence. Publish that exact comment to Linear. Exclude prompts, secrets and raw logs; delete transient input files.
+Before publishing the attempt result, invoke `task-cleanup` for all current `attempt`-lifetime resources. Build the exact code or evidence candidate identity and fingerprint with `../../lib/verification/tool/evidence.py candidate`. Evidence delivery supplies a map of evidence kind to complete passed current-schema verification receipt after exact provider readback; the tool validates the derived receipt key and emits the compact map of evidence kind to receipt key that Human Review approves. Never substitute the stable verification key. Build the concise structured attempt comment with its `attempt` operation: attempt ID, role, delivery kind, UTC start/end, outcome, delivery-applicable commit set, receipt hit/miss counts, external wait duration, token usage only when directly exposed, complete compact candidate identity, its derived fingerprint, PR/CI links and bounded evidence. Publish and reread that exact comment in Linear and require the fingerprint to reproduce from the persisted identity. Exclude prompts, secrets and raw logs; delete transient input files only after this readback.
 
 Validate the exact `In Progress -> Human Review` proof with the shared transition tool. Move only when result, verification, commit/push/PR, required CI and evidence are complete, then reread Linear. Stop the agent and preserve the workspace. Any later candidate mutation requires `Rework`, a fresh thread and a new fingerprint.
 

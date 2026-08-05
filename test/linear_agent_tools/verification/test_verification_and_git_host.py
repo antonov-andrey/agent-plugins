@@ -22,7 +22,7 @@ from git_host.pull_request import GitHubPullRequestBoundary
 from verification._validation import VerificationReceiptError
 from verification.attempt import AttemptSummary
 from verification.baseline import LocalPhaseBaseline, TaskWorkspaceBaseline
-from verification.candidate import CandidateInput
+from verification.candidate import CandidateIdentity, CandidateInput
 from verification.invalidation import ReceiptReuseEvaluator
 from verification.model import VerificationCheckout, VerificationInput, VerificationReceipt
 from verification.receipt import (
@@ -34,6 +34,8 @@ from verification.receipt import (
 
 COMMIT_ONE = "a" * 40
 COMMIT_TWO = "b" * 40
+CONTRACT_ONE = "5" * 64
+CONTRACT_TWO = "6" * 64
 CORPUS_ONE = "1" * 64
 CORPUS_TWO = "2" * 64
 EVIDENCE_ONE = "3" * 64
@@ -48,6 +50,7 @@ def _verification_input(
     commit: str = COMMIT_ONE,
     lock: str = LOCK_ONE,
     environment: str = "development:release-one",
+    contract: str = CONTRACT_ONE,
     corpus: str = CORPUS_ONE,
     model: str = "gpt-5.6-sol",
     reasoning_effort: str = "medium",
@@ -58,6 +61,7 @@ def _verification_input(
         commit: Repository commit.
         lock: Dependency lock fingerprint.
         environment: Exact external environment identity.
+        contract: Exact semantic verification contract identity.
         corpus: Exact corpus content identity.
         model: Exact model identity.
         reasoning_effort: Exact model reasoning configuration.
@@ -70,6 +74,7 @@ def _verification_input(
         command_argument_list=["pytest", "-q"],
         working_directory="/workspace/example/.worktree/and-17",
         source_fingerprint="f" * 64,
+        verification_contract_fingerprint=contract,
         checkout_list=[
             VerificationCheckout(
                 path="/workspace/example/.worktree/and-17",
@@ -141,6 +146,8 @@ def test_receipt_roundtrip_and_exact_reuse_key() -> None:
     changed_source_payload["source_fingerprint"] = "0" * 64
     changed_source = ReceiptReuseEvaluator(VerificationInput.from_payload(changed_source_payload)).decision_get(parsed)
     assert changed_source.reason_list == ["source-fingerprint-changed"]
+    changed_contract = ReceiptReuseEvaluator(_verification_input(contract=CONTRACT_TWO)).decision_get(parsed)
+    assert changed_contract.reason_list == ["verification-contract-changed"]
 
 
 @pytest.mark.parametrize("value", [None, False, 0, [], {}])
@@ -157,6 +164,72 @@ def test_verification_input_rejects_non_string_corpus_identity(value: object) ->
         replace(current, corpus_content_sha256=value)
 
 
+@pytest.mark.parametrize("value", ["", "not-a-sha256", None, False, 0])
+def test_verification_input_requires_semantic_contract_fingerprint(value: object) -> None:
+    """Receipt reuse cannot outlive the prompt, expectations, invariants, or schema it verifies."""
+
+    payload = _verification_input().payload()
+    payload["verification_contract_fingerprint"] = value
+
+    with pytest.raises(VerificationReceiptError, match="contract fingerprint must be SHA-256"):
+        VerificationInput.from_payload(payload)
+
+
+@pytest.mark.parametrize(
+    "repository_url",
+    [
+        "https://token@github.com/antonov-andrey/example.git",
+        "https://token:secret@github.com/antonov-andrey/example.git",
+        "https://github.com/antonov-andrey/example.git?token=secret",
+        "relative-repository",
+    ],
+)
+def test_verification_checkout_rejects_unsafe_repository_url_without_echo(repository_url: str) -> None:
+    """Receipt construction rejects secret-bearing or unsupported Git origins without reflecting them."""
+
+    with pytest.raises(VerificationReceiptError, match="unsafe or unsupported") as error:
+        replace(_verification_input().checkout_list[0], repository_url=repository_url)
+
+    assert "token" not in str(error.value)
+    assert "secret" not in str(error.value)
+
+
+def test_shared_evidence_cli_rejects_credential_bearing_repository_without_echo(tmp_path: Path) -> None:
+    """The public receipt boundary rejects a repository secret before rendering any comment."""
+
+    script = LIBRARY_ROOT / "verification" / "tool" / "evidence.py"
+    input_path = tmp_path / "input.json"
+    payload = _verification_input().payload()
+    payload["checkout_list"][0]["repository_url"] = "https://token:secret@github.com/example/repository.git"
+    input_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    created = subprocess.run(
+        [
+            str(script),
+            "receipt-create",
+            "--input",
+            str(input_path),
+            "--outcome",
+            "passed",
+            "--completed-at",
+            "2026-08-04T12:30:00Z",
+            "--evidence-url",
+            LINEAR_ATTACHMENT_URL,
+            "--evidence-content-sha256",
+            EVIDENCE_ONE,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert created.returncode == 2
+    assert created.stdout == ""
+    assert "unsafe or unsupported" in created.stderr
+    assert "token" not in created.stderr
+    assert "secret" not in created.stderr
+
+
 def test_external_evidence_receipt_can_bind_source_without_a_repository_commit() -> None:
     """A source-independent provider probe remains reusable only for its exact source."""
 
@@ -164,6 +237,7 @@ def test_external_evidence_receipt_can_bind_source_without_a_repository_commit()
         command_argument_list=["linear-provider-probe"],
         working_directory="/workspace",
         source_fingerprint="f" * 64,
+        verification_contract_fingerprint=CONTRACT_ONE,
         checkout_list=[],
         corpus_content_sha256="",
         model_identity="",
@@ -511,6 +585,18 @@ def test_receipt_comment_protects_canonical_evidence_url_from_provider_rewrite()
     assert VerificationReceipt.from_payload(VERIFICATION_RECEIPT_COMMENT_CODEC.payload_parse(rendered)) == receipt
 
 
+def test_shared_evidence_cli_is_directly_executable() -> None:
+    """The shared replacement CLI launches through its documented direct path."""
+
+    script = LIBRARY_ROOT / "verification" / "tool" / "evidence.py"
+
+    result = subprocess.run([str(script), "--help"], check=False, capture_output=True, text=True)
+
+    assert result.returncode == 0
+    assert "receipt-create" in result.stdout
+    assert result.stderr == ""
+
+
 def test_shared_evidence_cli_creates_and_reuses_the_exact_linear_comment_shape(tmp_path: Path) -> None:
     """Every workflow role uses the shared owner for codec creation and provider readback."""
 
@@ -521,7 +607,6 @@ def test_shared_evidence_cli_creates_and_reuses_the_exact_linear_comment_shape(t
 
     created = subprocess.run(
         [
-            sys.executable,
             str(script),
             "receipt-create",
             "--input",
@@ -542,7 +627,6 @@ def test_shared_evidence_cli_creates_and_reuses_the_exact_linear_comment_shape(t
     comment_path.write_text(created.stdout.rstrip("\n"), encoding="utf-8")
     reused = subprocess.run(
         [
-            sys.executable,
             str(script),
             "receipt-reuse",
             "--input",
@@ -557,7 +641,7 @@ def test_shared_evidence_cli_creates_and_reuses_the_exact_linear_comment_shape(t
 
     assert reused.returncode == 0
     assert json.loads(reused.stdout)["reusable"] is True
-    assert created.stdout.startswith("<!-- linear-agent-tools-verification:v3 -->")
+    assert created.stdout.startswith("<!-- linear-agent-tools-verification:v4 -->")
     assert "https://example.test/ci/1" not in created.stdout
     assert r"https:\/\/example.test\/ci\/1" in created.stdout
 
@@ -608,7 +692,7 @@ def test_shared_evidence_cli_rejects_noncanonical_evidence_url(tmp_path: Path, e
 
     assert created.returncode == 2
     assert "canonical HTTPS provider URL" in created.stderr
-    assert "linear-agent-tools-verification:v3" not in created.stdout
+    assert "linear-agent-tools-verification:v4" not in created.stdout
 
 
 @pytest.mark.parametrize(
@@ -671,15 +755,15 @@ def test_receipt_rejects_prior_schema_without_a_compatibility_branch() -> None:
         evidence_content_sha256=EVIDENCE_ONE,
     )
     payload = receipt.payload()
-    payload["schema_version"] = 2
+    payload["schema_version"] = 3
 
     with pytest.raises(VerificationReceiptError, match="another shape"):
         VerificationReceipt.from_payload(payload)
     with pytest.raises(VerificationReceiptError, match="another shape"):
         VERIFICATION_RECEIPT_COMMENT_CODEC.payload_parse(
             VERIFICATION_RECEIPT_COMMENT_CODEC.render(receipt.payload()).replace(
+                "linear-agent-tools-verification:v4",
                 "linear-agent-tools-verification:v3",
-                "linear-agent-tools-verification:v2",
                 1,
             )
         )
@@ -706,6 +790,7 @@ def test_candidate_fingerprint_and_attempt_comment_bind_exact_external_state() -
         receipt_miss_count=1,
         external_wait_seconds=12.5,
         token_count=None,
+        candidate_identity=candidate.identity_get(),
         candidate_fingerprint=candidate.fingerprint(),
         evidence_url_list=["https://example.test/evidence/17"],
     )
@@ -777,13 +862,63 @@ def test_evidence_candidate_uses_validated_receipt_keys_for_every_result_identit
     assert len({receipt.receipt_key for receipt in passed_receipt_list}) == len(passed_receipt_list)
     assert len({candidate.fingerprint() for candidate in candidate_list}) == len(candidate_list)
     for candidate, receipt in zip(candidate_list, passed_receipt_list, strict=True):
-        assert candidate.identity_payload()["evidence_receipt_key_by_kind_map"] == {"acceptance": receipt.receipt_key}
+        assert candidate.identity_get().evidence_receipt_key_by_kind_map == {"acceptance": receipt.receipt_key}
     with pytest.raises(VerificationReceiptError, match="passed outcome"):
         CandidateInput(
             delivery_kind="evidence",
             pull_request_head_by_url_map={},
             evidence_receipt_by_kind_map={"acceptance": failed_receipt},
         )
+
+
+def test_attempt_comment_persists_and_validates_complete_evidence_candidate_identity() -> None:
+    """Fresh review reconstructs the exact evidence-kind-to-receipt-key map from Linear telemetry."""
+
+    completed_at = datetime(2026, 8, 4, 12, 30, tzinfo=timezone.utc)
+    candidate = CandidateInput(
+        delivery_kind="evidence",
+        pull_request_head_by_url_map={},
+        evidence_receipt_by_kind_map={
+            "acceptance": VerificationReceipt.from_input(
+                _verification_input(),
+                outcome="passed",
+                completed_at=completed_at,
+                evidence_url=LINEAR_ATTACHMENT_URL,
+                evidence_content_sha256=EVIDENCE_ONE,
+            ),
+            "semantic-review": VerificationReceipt.from_input(
+                _verification_input(),
+                outcome="passed",
+                completed_at=completed_at + timedelta(seconds=1),
+                evidence_url=LINEAR_ATTACHMENT_URL + "-review",
+                evidence_content_sha256=EVIDENCE_TWO,
+            ),
+        },
+    )
+    summary = AttemptSummary(
+        attempt_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        issue_identifier="AND-17",
+        role_label="task:review",
+        delivery_kind="evidence",
+        started_at=datetime(2026, 8, 4, 12, 0, tzinfo=timezone.utc),
+        completed_at=completed_at + timedelta(seconds=2),
+        outcome="human-review",
+        changed_commit_by_repository_map={},
+        receipt_hit_count=0,
+        receipt_miss_count=2,
+        external_wait_seconds=0.0,
+        token_count=None,
+        candidate_identity=candidate.identity_get(),
+        candidate_fingerprint=candidate.fingerprint(),
+        evidence_url_list=["https://linear.app/example/issue/AND-17"],
+    )
+    roundtrip_payload = ATTEMPT_COMMENT_CODEC.payload_parse(ATTEMPT_COMMENT_CODEC.render(summary.payload()))
+
+    assert AttemptSummary.from_payload(roundtrip_payload) == summary
+    assert roundtrip_payload["candidate_identity"] == candidate.identity_get().payload()
+    roundtrip_payload["candidate_identity"]["evidence_receipt_key_by_kind_map"].pop("semantic-review")
+    with pytest.raises(VerificationReceiptError, match="fingerprint differs"):
+        AttemptSummary.from_payload(roundtrip_payload)
 
 
 def test_evidence_candidate_rejects_verification_key_substitution_and_prior_shape() -> None:
@@ -825,7 +960,8 @@ def test_evidence_candidate_rejects_verification_key_substitution_and_prior_shap
     ("replacement", "message"),
     [
         ({"candidate_fingerprint": ""}, "candidate fingerprint"),
-        ({"outcome": "failed"}, "candidate fingerprint"),
+        ({"outcome": "failed"}, "candidate identity"),
+        ({"candidate_identity": None}, "candidate identity"),
         ({"role_label": "task:review"}, "role and delivery kind"),
         (
             {"role_label": "task:cleanup", "delivery_kind": "cleanup"},
@@ -840,6 +976,11 @@ def test_attempt_summary_rejects_role_outcome_candidate_and_evidence_mismatch(
 ) -> None:
     """Attempt telemetry cannot claim a semantically impossible role result."""
 
+    candidate_identity = CandidateIdentity(
+        delivery_kind="code",
+        evidence_receipt_key_by_kind_map={},
+        pull_request_head_by_url_map={"https://github.com/antonov-andrey/example/pull/17": COMMIT_ONE},
+    )
     argument_by_name: dict[str, object] = {
         "attempt_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
         "issue_identifier": "AND-17",
@@ -853,7 +994,8 @@ def test_attempt_summary_rejects_role_outcome_candidate_and_evidence_mismatch(
         "receipt_miss_count": 0,
         "external_wait_seconds": 0.0,
         "token_count": None,
-        "candidate_fingerprint": "f" * 64,
+        "candidate_identity": candidate_identity,
+        "candidate_fingerprint": candidate_identity.fingerprint(),
         "evidence_url_list": ["https://example.test/evidence/17"],
     }
     argument_by_name.update(replacement)
@@ -879,6 +1021,7 @@ def test_attempt_summary_rejects_commits_for_evidence_delivery() -> None:
             receipt_miss_count=1,
             external_wait_seconds=0.0,
             token_count=None,
+            candidate_identity=None,
             candidate_fingerprint="",
             evidence_url_list=[],
         )
@@ -979,9 +1122,9 @@ def test_shared_evidence_cli_renders_candidate_without_persistent_state(
 
     payload = json.loads(rendered.stdout)
     assert set(payload) == {"candidate_fingerprint", "candidate_identity", "input", "schema_version"}
-    assert payload["schema_version"] == 2
+    assert payload["schema_version"] == 3
     assert payload["candidate_fingerprint"] == candidate.fingerprint()
-    assert payload["candidate_identity"] == candidate.identity_payload()
+    assert payload["candidate_identity"] == candidate.identity_get().payload()
     assert payload["candidate_identity"]["evidence_receipt_key_by_kind_map"] == {
         "acceptance": candidate.evidence_receipt_by_kind_map["acceptance"].receipt_key
     }

@@ -326,11 +326,11 @@
         },
         {
           "id": "human-boundary",
-          "text": "It creates or adopts exact linked PRs, waits for applicable required CI, publishes receipts, a deterministic candidate fingerprint and concise structured attempt summary, moves to Human Review, stops, and preserves workspace."
+          "text": "It creates or adopts exact linked PRs, waits for applicable required CI, publishes receipts, and persists both the complete compact candidate identity and its derived fingerprint in a concise structured attempt summary. It rereads that identity before moving to Human Review, stopping, and preserving the workspace."
         },
         {
           "id": "receipt-integrity",
-          "text": "Each stable verification key binds the exact source fingerprint, exact direct argv, canonical absolute working directory, corpus content, model identity, model configuration, applicable environment and release identity, plus every result-affecting checkout's canonical absolute path, roles, repository URL, full commit, recursive submodules and dependency locks. A separate receipt key binds that verification key, outcome, UTC completion instant, exact durable canonical HTTPS artifact URL and artifact content SHA-256. The artifact URL has no credentials, port, query or fragment, and receipt-bearing Human Review candidate identity uses the validated receipt key rather than the stable verification key."
+          "text": "Each stable verification key binds the exact source fingerprint, semantic verification-contract fingerprint, exact direct argv, canonical absolute working directory, corpus content, model identity, model configuration, applicable environment and release identity, plus every result-affecting checkout's canonical absolute path, roles, credential-free supported repository URL, full commit, recursive submodules and dependency locks. The contract fingerprint represents actual assertions, expected behavior, output schema and invariants rather than unrelated orchestration identity. A separate receipt key binds that verification key, outcome, UTC completion instant, exact durable canonical HTTPS artifact URL and artifact content SHA-256. The artifact URL has no credentials, port, query or fragment, and receipt-bearing Human Review candidate identity uses the validated receipt key rather than the stable verification key."
         },
         {
           "id": "exclusive-attempt",
@@ -352,11 +352,11 @@
         },
         {
           "id": "fresh-zero-pass",
-          "text": "After remediation the review restarts from scratch in a fresh thread and reaches Human Review only with a new zero-finding evidence fingerprint and structured attempt comment."
+          "text": "After remediation the review restarts from scratch in a fresh thread and reaches Human Review only with a new zero-finding complete compact evidence identity and its derived fingerprint persisted and reread through the structured attempt comment."
         },
         {
           "id": "evidence-receipt-integrity",
-          "text": "Before candidate publication the review uses the shared verification owner to create a passed current-schema receipt for every evidence kind with the exact result-completion instant, publishes each exact codec-rendered receipt comment, fully paginates provider comments, requires byte-identical authenticated readback, and validates reuse from that readback. Each stable verification key binds the exact source fingerprint, exact direct argv, canonical absolute working directory, corpus content, model identity, model configuration, applicable environment and release identity, plus every result-affecting checkout's canonical absolute path, roles, repository URL, full commit, recursive submodules and dependency locks. A separate receipt key binds that verification key, outcome, UTC completion instant, exact durable canonical HTTPS artifact URL and artifact content SHA-256; the evidence candidate uses each validated passed receipt key rather than a stable verification key."
+          "text": "Before candidate publication the review uses the shared verification owner to create a passed current-schema receipt for every evidence kind with the exact result-completion instant, publishes each exact codec-rendered receipt comment, fully paginates provider comments, requires byte-identical authenticated readback, and validates reuse from that readback. Each stable verification key binds the exact source fingerprint, semantic verification-contract fingerprint derived from actual assertions, expected behavior, output schema and invariants, exact direct argv, canonical absolute working directory, corpus content, model identity, model configuration, applicable environment and release identity, plus every result-affecting checkout's canonical absolute path, roles, credential-free supported repository URL, full commit, recursive submodules and dependency locks. A separate receipt key binds that verification key, outcome, UTC completion instant, exact durable canonical HTTPS artifact URL and artifact content SHA-256; the evidence candidate uses each validated passed receipt key rather than a stable verification key."
         },
         {
           "id": "exclusive-attempt",
@@ -378,11 +378,11 @@
         },
         {
           "id": "baseline-and-approval",
-          "text": "It publishes exact evidence fingerprint and attempt telemetry, and when required records queue, startup, execution, review, and merge durations from provider history before stopping at Human Review."
+          "text": "It persists and rereads the complete compact evidence identity together with its derived fingerprint in attempt telemetry, and when required records queue, startup, execution, review, and merge durations from provider history before stopping at Human Review."
         },
         {
           "id": "evidence-receipt-integrity",
-          "text": "Before candidate publication acceptance uses the shared verification owner to create a passed current-schema receipt for every evidence kind with the exact result-completion instant, publishes each exact codec-rendered receipt comment, fully paginates provider comments, requires byte-identical authenticated readback, and validates reuse from that readback. Each stable verification key binds the exact source fingerprint, exact direct argv, canonical absolute working directory, corpus content, model identity, model configuration, applicable environment and release identity, plus every result-affecting checkout's canonical absolute path, roles, repository URL, full commit, recursive submodules and dependency locks. A separate receipt key binds that verification key, outcome, UTC completion instant, exact durable canonical HTTPS artifact URL and artifact content SHA-256; the evidence candidate uses each validated passed receipt key rather than a stable verification key."
+          "text": "Before candidate publication acceptance uses the shared verification owner to create a passed current-schema receipt for every evidence kind with the exact result-completion instant, publishes each exact codec-rendered receipt comment, fully paginates provider comments, requires byte-identical authenticated readback, and validates reuse from that readback. Each stable verification key binds the exact source fingerprint, semantic verification-contract fingerprint derived from actual assertions, expected behavior, output schema and invariants, exact direct argv, canonical absolute working directory, corpus content, model identity, model configuration, applicable environment and release identity, plus every result-affecting checkout's canonical absolute path, roles, credential-free supported repository URL, full commit, recursive submodules and dependency locks. A separate receipt key binds that verification key, outcome, UTC completion instant, exact durable canonical HTTPS artifact URL and artifact content SHA-256; the evidence candidate uses each validated passed receipt key rather than a stable verification key."
         },
         {
           "id": "exclusive-attempt",
@@ -400,7 +400,7 @@
       "semantic_invariant_list": [
         {
           "id": "exact-approved-candidate",
-          "text": "The response verifies exact PR heads, bases, Linear links, branch protection and required checks; any candidate mutation returns the issue to Rework instead of being fixed in the merge attempt."
+          "text": "The response reconstructs the complete compact PR URL/head identity from the provider-read attempt comment, reproduces its approved fingerprint, verifies exact PR heads, bases, Linear links, branch protection and required checks, and returns any candidate mutation to Rework instead of fixing it in the merge attempt."
         },
         {
           "id": "ordered-recovery",

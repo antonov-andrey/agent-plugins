@@ -37,7 +37,7 @@ from task_workspace.model import (
     WorkspaceRequest,
 )
 from task_workspace.bootstrap import BootstrapPlan, BootstrapResource
-from task_workspace.repository import WorkspaceRepository, origin_identity_get
+from task_workspace.repository import WorkspaceRepository
 from task_workspace.submodule import WorkspaceSubmoduleReader
 from task_workspace.transaction import TaskWorkspaceTransaction
 
@@ -711,19 +711,6 @@ resource:
         TaskWorkspaceTransaction(WorkspaceConfig(tmp_path.resolve())).prepare(_request(remote, issue="AND-119"))
 
     assert source.read_text(encoding="utf-8") == "source\n"
-
-
-def test_origin_identity_preserves_security_relevant_url_components() -> None:
-    """Ports and SSH users cannot collapse distinct repository origins."""
-
-    assert origin_identity_get("git@github.com:owner/example.git") == "ssh://github.com/owner/example"
-    assert origin_identity_get("ssh://git@github.com/owner/example.git") == "ssh://github.com/owner/example"
-    assert origin_identity_get("ssh://git@github.com:2222/owner/example.git") == ("ssh://github.com:2222/owner/example")
-    assert origin_identity_get("ssh://deploy@github.com/owner/example.git") == ("ssh://deploy@github.com/owner/example")
-    with pytest.raises(TaskWorkspaceError, match="credentials"):
-        origin_identity_get("https://token@github.com/owner/example.git")
-    with pytest.raises(TaskWorkspaceError, match="suffixes"):
-        origin_identity_get("https://github.com/owner/example.git?ref=main")
 
 
 def test_discovery_ignores_unrelated_checkout_with_noncanonical_origin(

@@ -59,6 +59,8 @@ class ReceiptReuseEvaluator:
             reason_list.append("working-directory-changed")
         if prior.source_fingerprint != self._current.source_fingerprint:
             reason_list.append("source-fingerprint-changed")
+        if prior.verification_contract_fingerprint != self._current.verification_contract_fingerprint:
+            reason_list.append("verification-contract-changed")
         if prior.checkout_list != self._current.checkout_list:
             reason_list.append("checkout-set-changed")
         if prior.corpus_content_sha256 != self._current.corpus_content_sha256:

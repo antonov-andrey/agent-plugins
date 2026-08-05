@@ -11,6 +11,7 @@ from pathlib import PurePosixPath
 import re
 from urllib.parse import urlsplit, urlunsplit
 
+from git_origin.identity import GitOriginError, origin_identity_get
 from verification._validation import (
     COMMIT_PATTERN,
     SHA256_PATTERN,
@@ -170,6 +171,24 @@ def _repository_path_validate(value: object, *, label: str) -> str:
     return value
 
 
+def _repository_url_validate(value: object) -> str:
+    """Return one credential-free supported Git origin.
+
+    Args:
+        value: Candidate repository URL.
+
+    Returns:
+        Validated original URL text.
+    """
+
+    repository_url = single_line_validate(value, label="Verification checkout repository URL")
+    try:
+        origin_identity_get(repository_url)
+    except GitOriginError as error:
+        raise VerificationReceiptError("Verification checkout repository URL is unsafe or unsupported") from error
+    return repository_url
+
+
 @dataclass(frozen=True, slots=True)
 class VerificationCheckout:
     """Bind one result-affecting checkout without collapsing equal repository URLs."""
@@ -185,7 +204,7 @@ class VerificationCheckout:
         """Validate one exact checkout identity and its repository-local dependencies."""
 
         _absolute_path_validate(self.path, label="Verification checkout path")
-        single_line_validate(self.repository_url, label="Verification checkout repository URL")
+        _repository_url_validate(self.repository_url)
         if not isinstance(self.commit, str) or COMMIT_PATTERN.fullmatch(self.commit) is None:
             raise VerificationReceiptError("Verification checkout commit is not a full lowercase identity")
         if (
@@ -286,6 +305,7 @@ class VerificationInput:
     command_argument_list: list[str]
     working_directory: str
     source_fingerprint: str
+    verification_contract_fingerprint: str
     checkout_list: list[VerificationCheckout]
     corpus_content_sha256: str
     model_identity: str
@@ -305,6 +325,11 @@ class VerificationInput:
         _absolute_path_validate(self.working_directory, label="Verification working directory")
         if not isinstance(self.source_fingerprint, str) or SHA256_PATTERN.fullmatch(self.source_fingerprint) is None:
             raise VerificationReceiptError("Verification source fingerprint must be SHA-256")
+        if (
+            not isinstance(self.verification_contract_fingerprint, str)
+            or SHA256_PATTERN.fullmatch(self.verification_contract_fingerprint) is None
+        ):
+            raise VerificationReceiptError("Verification contract fingerprint must be SHA-256")
         if not isinstance(self.checkout_list, list) or any(
             not isinstance(item, VerificationCheckout) for item in self.checkout_list
         ):
@@ -373,6 +398,7 @@ class VerificationInput:
             "model_identity": self.model_identity,
             "release_identity": self.release_identity,
             "source_fingerprint": self.source_fingerprint,
+            "verification_contract_fingerprint": self.verification_contract_fingerprint,
             "working_directory": self.working_directory,
         }
 
@@ -396,6 +422,7 @@ class VerificationInput:
             "model_identity",
             "release_identity",
             "source_fingerprint",
+            "verification_contract_fingerprint",
             "working_directory",
         }
         if not isinstance(payload, dict) or set(payload) != expected:
@@ -418,6 +445,7 @@ class VerificationInput:
             environment_identity=payload["environment_identity"],
             release_identity=payload["release_identity"],
             source_fingerprint=payload["source_fingerprint"],
+            verification_contract_fingerprint=payload["verification_contract_fingerprint"],
         )
 
 
@@ -519,7 +547,7 @@ class VerificationReceipt:
         """
 
         return {
-            "schema_version": 3,
+            "schema_version": 4,
             "completed_at": self.completed_at.isoformat().replace("+00:00", "Z"),
             "evidence_content_sha256": self.evidence_content_sha256,
             "evidence_url": self.evidence_url,
@@ -550,7 +578,7 @@ class VerificationReceipt:
             "receipt_key",
             "verification_key",
         }
-        if not isinstance(payload, dict) or set(payload) != expected or payload["schema_version"] != 3:
+        if not isinstance(payload, dict) or set(payload) != expected or payload["schema_version"] != 4:
             raise VerificationReceiptError("Verification receipt has another shape")
         return cls(
             verification_key=payload["verification_key"],

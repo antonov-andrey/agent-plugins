@@ -9,8 +9,8 @@ from pathlib import Path
 import secrets
 import stat
 import subprocess
-from urllib.parse import urlsplit
 
+from git_origin.identity import GitOriginError, origin_identity_get
 from json_contract import JsonContractError, json_load_strict
 from task_workspace.model import (
     RepositoryRequest,
@@ -77,8 +77,8 @@ def git_command_text_get(repository: Path, argument_list: Sequence[str], *, chec
     return git_command_run(repository, argument_list, check=check).stdout.decode("utf-8", errors="strict").strip()
 
 
-def origin_identity_get(value: str) -> str:
-    """Normalize one canonical origin URL for equality only.
+def _workspace_origin_identity_get(value: str) -> str:
+    """Translate shared Git-origin validation into the workspace boundary.
 
     Args:
         value: Configured or requested origin URL.
@@ -87,47 +87,10 @@ def origin_identity_get(value: str) -> str:
         Canonical comparison identity.
     """
 
-    if not value or any(character in value for character in ("\x00", "\n", "\r")):
-        raise TaskWorkspaceError("Repository origin URL is malformed")
-    if value.startswith("git@") and ":" in value:
-        authority, path = value.split(":", 1)
-        host = authority.removeprefix("git@").lower()
-        normalized_path = path.removesuffix(".git").strip("/")
-        if not host or not normalized_path or any(character in path for character in ("?", "#")):
-            raise TaskWorkspaceError("Repository origin URL has no path")
-        return f"ssh://{host}/{normalized_path}"
-    parsed = urlsplit(value)
-    if parsed.scheme in {"http", "https", "ssh", "git"} and parsed.hostname:
-        if parsed.query or parsed.fragment or parsed.password is not None:
-            raise TaskWorkspaceError("Repository origin URL contains unsupported credentials or suffixes")
-        if parsed.scheme in {"http", "https", "git"} and parsed.username is not None:
-            raise TaskWorkspaceError("Repository origin URL contains unsupported credentials")
-        try:
-            port = parsed.port
-        except ValueError as error:
-            raise TaskWorkspaceError("Repository origin URL contains an invalid port") from error
-        normalized_path = parsed.path.removesuffix(".git").strip("/")
-        if not normalized_path:
-            raise TaskWorkspaceError("Repository origin URL has no path")
-        host = parsed.hostname.lower()
-        authority = host if port is None else f"{host}:{port}"
-        if parsed.scheme == "ssh" and parsed.username not in {None, "git"}:
-            authority = f"{parsed.username}@{authority}"
-        return f"{parsed.scheme.lower()}://{authority}/{normalized_path}"
-    if parsed.scheme == "file":
-        if (
-            parsed.query
-            or parsed.fragment
-            or parsed.username
-            or parsed.password
-            or parsed.netloc not in {"", "localhost"}
-        ):
-            raise TaskWorkspaceError("Repository file URL contains unsupported authority or suffixes")
-        return f"file://{Path(parsed.path).resolve(strict=False)}"
-    path = Path(value)
-    if path.is_absolute():
-        return f"file://{path.resolve(strict=False)}"
-    raise TaskWorkspaceError("Repository origin URL uses an unsupported or relative form")
+    try:
+        return origin_identity_get(value)
+    except GitOriginError as error:
+        raise TaskWorkspaceError(str(error)) from error
 
 
 class WorkspaceRepository:
@@ -153,10 +116,10 @@ class WorkspaceRepository:
             raise TaskWorkspaceError("Canonical checkout discovery returned another root")
         if metadata_directory.resolve(strict=True) != self._common_directory_get():
             raise TaskWorkspaceError("Canonical checkout must own its physical Git common directory")
-        self.origin_identity = origin_identity_get(
+        self.origin_identity = _workspace_origin_identity_get(
             git_command_text_get(self.main_root, ("remote", "get-url", "origin"))
         )
-        if self.origin_identity != origin_identity_get(request.origin_url):
+        if self.origin_identity != _workspace_origin_identity_get(request.origin_url):
             raise TaskWorkspaceError("Canonical checkout origin differs from the approved issue contract")
         git_command_run(self.main_root, ("check-ref-format", "--branch", request.base_branch))
 
@@ -172,7 +135,7 @@ class WorkspaceRepository:
             Unique bound repository.
         """
 
-        requested_identity = origin_identity_get(request.origin_url)
+        requested_identity = _workspace_origin_identity_get(request.origin_url)
         candidate_list: list[Path] = []
         root_candidate_list = [
             config.root,
@@ -186,7 +149,7 @@ class WorkspaceRepository:
             if not origin:
                 continue
             try:
-                candidate_identity = origin_identity_get(origin)
+                candidate_identity = _workspace_origin_identity_get(origin)
             except TaskWorkspaceError:
                 # An unrelated checkout with a non-canonical remote is outside this
                 # request. It must not make discovery of the exact approved origin
@@ -551,7 +514,7 @@ class WorkspaceRepository:
         branch = git_command_text_get(task_root, ("symbolic-ref", "--quiet", "--short", "HEAD"))
         if branch != state.branch_name:
             raise TaskWorkspaceError("Task worktree checked out another branch")
-        origin = origin_identity_get(git_command_text_get(task_root, ("remote", "get-url", "origin")))
+        origin = _workspace_origin_identity_get(git_command_text_get(task_root, ("remote", "get-url", "origin")))
         if origin != state.origin_identity:
             raise TaskWorkspaceError("Task worktree origin differs from private ownership state")
         head = self.commit_get(state.branch_name)

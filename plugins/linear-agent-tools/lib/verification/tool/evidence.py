@@ -150,9 +150,9 @@ def main(argv: list[str] | None = None) -> int:
             print(
                 json.dumps(
                     {
-                        "schema_version": 2,
+                        "schema_version": 3,
                         "candidate_fingerprint": candidate.fingerprint(),
-                        "candidate_identity": candidate.identity_payload(),
+                        "candidate_identity": candidate.identity_get().payload(),
                         "input": candidate.payload(),
                     },
                     separators=(",", ":"),

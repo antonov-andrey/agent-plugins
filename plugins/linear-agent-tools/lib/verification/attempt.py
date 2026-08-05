@@ -18,6 +18,7 @@ from verification._validation import (
     text_by_text_map_parse,
     utc_validate,
 )
+from verification.candidate import CandidateIdentity
 
 _TASK_ROLE_SET = {
     "task:implementation",
@@ -89,6 +90,7 @@ class AttemptSummary:
     receipt_miss_count: int
     external_wait_seconds: float
     token_count: int | None
+    candidate_identity: CandidateIdentity | None
     candidate_fingerprint: str
     evidence_url_list: list[str]
 
@@ -151,7 +153,14 @@ class AttemptSummary:
             self.candidate_fingerprint and SHA256_PATTERN.fullmatch(self.candidate_fingerprint) is None
         ):
             raise VerificationReceiptError("Attempt candidate fingerprint must be empty or SHA-256")
-        if (self.outcome in _CANDIDATE_OUTCOME_SET) != bool(self.candidate_fingerprint):
+        have_candidate = self.outcome in _CANDIDATE_OUTCOME_SET
+        if self.candidate_identity is not None and not isinstance(self.candidate_identity, CandidateIdentity):
+            raise VerificationReceiptError("Attempt candidate identity has another shape")
+        if have_candidate != (self.candidate_identity is not None):
+            raise VerificationReceiptError("Attempt candidate identity is incompatible with its outcome")
+        if have_candidate and self.candidate_identity.fingerprint() != self.candidate_fingerprint:
+            raise VerificationReceiptError("Attempt candidate fingerprint differs from its persisted identity")
+        if not have_candidate and self.candidate_fingerprint:
             raise VerificationReceiptError("Attempt candidate fingerprint is incompatible with its outcome")
         if (
             not isinstance(self.evidence_url_list, list)
@@ -178,8 +187,9 @@ class AttemptSummary:
         """
 
         payload: dict[str, object] = {
-            "schema_version": 1,
+            "schema_version": 2,
             "attempt_id": self.attempt_id,
+            "candidate_identity": None if self.candidate_identity is None else self.candidate_identity.payload(),
             "candidate_fingerprint": self.candidate_fingerprint,
             "changed_commit_by_repository_map": dict(self.changed_commit_by_repository_map),
             "completed_at": instant_render(self.completed_at),
@@ -211,6 +221,7 @@ class AttemptSummary:
         required = {
             "schema_version",
             "attempt_id",
+            "candidate_identity",
             "candidate_fingerprint",
             "changed_commit_by_repository_map",
             "completed_at",
@@ -228,7 +239,7 @@ class AttemptSummary:
         if (
             not isinstance(payload, dict)
             or (set(payload) != required and set(payload) != allowed)
-            or payload["schema_version"] != 1
+            or payload["schema_version"] != 2
         ):
             raise VerificationReceiptError("Attempt summary has another shape")
         evidence_url_list = payload["evidence_url_list"]
@@ -249,6 +260,11 @@ class AttemptSummary:
             receipt_miss_count=payload["receipt_miss_count"],
             external_wait_seconds=payload["external_wait_seconds"],
             token_count=payload.get("token_count"),
+            candidate_identity=(
+                None
+                if payload["candidate_identity"] is None
+                else CandidateIdentity.from_payload(payload["candidate_identity"])
+            ),
             candidate_fingerprint=payload["candidate_fingerprint"],
             evidence_url_list=list(evidence_url_list),
         )
