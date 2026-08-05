@@ -50,6 +50,7 @@ Every preview or handoff response MUST state that one exact issue process-lifeti
 Every receipt-bearing preview or handoff MUST explicitly state all of these facts:
 
 - the stable verification key binds the source fingerprint, semantic verification-contract fingerprint, exact direct argv, canonical absolute working directory, corpus content, model identity, model configuration, applicable environment and release identity, plus each checkout's canonical absolute path, roles, credential-free supported repository URL, full commit, recursive submodules and dependency locks;
+- that semantic verification-contract fingerprint is derived from the actual assertions, expected behavior, output schema and invariants, and excludes issue, delta, attempt, Codex version and other orchestration identity unless it changes result semantics;
 - the separate receipt key binds that stable verification key itself plus the outcome, UTC completion instant, exact artifact URL and artifact content SHA-256;
 - every exact codec-rendered verification receipt comment was published before candidate publication;
 - each durable canonical HTTPS artifact URL contains no credentials, port, query string or fragment; and
