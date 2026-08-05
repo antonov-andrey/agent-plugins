@@ -355,6 +355,10 @@
           "text": "After remediation the review restarts from scratch in a fresh thread and reaches Human Review only with a new zero-finding evidence fingerprint and structured attempt comment."
         },
         {
+          "id": "evidence-receipt-integrity",
+          "text": "Before candidate publication the review uses the shared verification owner to create a passed current-schema receipt for every evidence kind with the exact result-completion instant, publishes each exact codec-rendered receipt comment, fully paginates provider comments, requires byte-identical authenticated readback, and validates reuse from that readback. Each stable verification key binds the exact source fingerprint, exact direct argv, canonical absolute working directory, corpus content, model identity, model configuration, applicable environment and release identity, plus every result-affecting checkout's canonical absolute path, roles, repository URL, full commit, recursive submodules and dependency locks. A separate receipt key binds that verification key, outcome, UTC completion instant, exact durable canonical HTTPS artifact URL and artifact content SHA-256; the evidence candidate uses each validated passed receipt key rather than a stable verification key."
+        },
+        {
           "id": "exclusive-attempt",
           "text": "The review acquires the exact issue process-lifetime host-local attempt guard before dispatch or mutation and keeps it through final provider readback so a second local attempt cannot overlap it."
         }
@@ -375,6 +379,10 @@
         {
           "id": "baseline-and-approval",
           "text": "It publishes exact evidence fingerprint and attempt telemetry, and when required records queue, startup, execution, review, and merge durations from provider history before stopping at Human Review."
+        },
+        {
+          "id": "evidence-receipt-integrity",
+          "text": "Before candidate publication acceptance uses the shared verification owner to create a passed current-schema receipt for every evidence kind with the exact result-completion instant, publishes each exact codec-rendered receipt comment, fully paginates provider comments, requires byte-identical authenticated readback, and validates reuse from that readback. Each stable verification key binds the exact source fingerprint, exact direct argv, canonical absolute working directory, corpus content, model identity, model configuration, applicable environment and release identity, plus every result-affecting checkout's canonical absolute path, roles, repository URL, full commit, recursive submodules and dependency locks. A separate receipt key binds that verification key, outcome, UTC completion instant, exact durable canonical HTTPS artifact URL and artifact content SHA-256; the evidence candidate uses each validated passed receipt key rather than a stable verification key."
         },
         {
           "id": "exclusive-attempt",

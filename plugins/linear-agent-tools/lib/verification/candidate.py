@@ -46,6 +46,8 @@ class CandidateInput:
             single_line_validate(evidence_kind, label="Candidate evidence receipt kind")
             if not isinstance(receipt, VerificationReceipt):
                 raise VerificationReceiptError("Candidate evidence receipt must use the current receipt schema")
+            if receipt.outcome != "passed":
+                raise VerificationReceiptError("Candidate evidence receipt must record a passed outcome")
         if self.delivery_kind == "code":
             if not self.pull_request_head_by_url_map or self.evidence_receipt_by_kind_map:
                 raise VerificationReceiptError("Code candidate requires only one or more exact pull-request heads")

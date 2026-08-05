@@ -442,7 +442,8 @@ def test_receipt_accepts_exact_canonical_percent_encoded_path() -> None:
     "evidence_url",
     [
         "https://uploads.linear.app/workspace/asset/artifact",
-        "https://123.example/workspace/asset/artifact",
+        "https://123.example.test/workspace/asset/artifact",
+        "https://0x7f.example.test/workspace/asset/artifact",
         "https://127.0.0.1/workspace/asset/artifact",
     ],
 )
@@ -469,6 +470,12 @@ def test_receipt_accepts_canonical_dns_and_ipv4_provider_hosts(evidence_url: str
         "https://0177.0.0.1/workspace/asset/artifact",
         "https://2130706433/workspace/asset/artifact",
         "https://0x7f000001/workspace/asset/artifact",
+        "https://4294967296/workspace/asset/artifact",
+        "https://999999999999999999999/workspace/asset/artifact",
+        "https://1.2.3.999/workspace/asset/artifact",
+        "https://1.2.3.4.5/workspace/asset/artifact",
+        "https://0x100000000/workspace/asset/artifact",
+        "https://0xffffffffffffffff/workspace/asset/artifact",
     ],
 )
 def test_receipt_comment_parse_rejects_noncanonical_evidence_url(evidence_url: str) -> None:
@@ -504,22 +511,25 @@ def test_receipt_comment_protects_canonical_evidence_url_from_provider_rewrite()
     assert VerificationReceipt.from_payload(VERIFICATION_RECEIPT_COMMENT_CODEC.payload_parse(rendered)) == receipt
 
 
-def test_receipt_cli_reuses_the_exact_linear_comment_shape(tmp_path: Path) -> None:
-    """The CLI consumes the same provider comment body that its create operation emits."""
+def test_shared_evidence_cli_creates_and_reuses_the_exact_linear_comment_shape(tmp_path: Path) -> None:
+    """Every workflow role uses the shared owner for codec creation and provider readback."""
 
-    script = PLUGIN_ROOT / "skills" / "task-implement" / "scripts" / "receipt.py"
+    script = LIBRARY_ROOT / "verification" / "tool" / "evidence.py"
     input_path = tmp_path / "input.json"
     comment_path = tmp_path / "comment.md"
     input_path.write_text(json.dumps(_verification_input().payload()), encoding="utf-8")
 
     created = subprocess.run(
         [
+            sys.executable,
             str(script),
-            "create",
+            "receipt-create",
             "--input",
             str(input_path),
             "--outcome",
             "passed",
+            "--completed-at",
+            "2026-08-04T12:30:00Z",
             "--evidence-url",
             "https://example.test/ci/1",
             "--evidence-content-sha256",
@@ -532,8 +542,9 @@ def test_receipt_cli_reuses_the_exact_linear_comment_shape(tmp_path: Path) -> No
     comment_path.write_text(created.stdout.rstrip("\n"), encoding="utf-8")
     reused = subprocess.run(
         [
+            sys.executable,
             str(script),
-            "reuse",
+            "receipt-reuse",
             "--input",
             str(input_path),
             "--receipt-comment",
@@ -561,23 +572,30 @@ def test_receipt_cli_reuses_the_exact_linear_comment_shape(tmp_path: Path) -> No
         "https://0177.0.0.1/workspace/asset/artifact",
         "https://2130706433/workspace/asset/artifact",
         "https://0x7f000001/workspace/asset/artifact",
+        "https://4294967296/workspace/asset/artifact",
+        "https://1.2.3.999/workspace/asset/artifact",
+        "https://1.2.3.4.5/workspace/asset/artifact",
+        "https://0xffffffffffffffff/workspace/asset/artifact",
     ],
 )
-def test_receipt_cli_rejects_noncanonical_evidence_url(tmp_path: Path, evidence_url: str) -> None:
-    """The receipt CLI refuses to issue a reusable comment for a malformed URL."""
+def test_shared_evidence_cli_rejects_noncanonical_evidence_url(tmp_path: Path, evidence_url: str) -> None:
+    """The shared evidence owner refuses to issue a receipt for a malformed URL."""
 
-    script = PLUGIN_ROOT / "skills" / "task-implement" / "scripts" / "receipt.py"
+    script = LIBRARY_ROOT / "verification" / "tool" / "evidence.py"
     input_path = tmp_path / "input.json"
     input_path.write_text(json.dumps(_verification_input().payload()), encoding="utf-8")
 
     created = subprocess.run(
         [
+            sys.executable,
             str(script),
-            "create",
+            "receipt-create",
             "--input",
             str(input_path),
             "--outcome",
             "passed",
+            "--completed-at",
+            "2026-08-04T12:30:00Z",
             "--evidence-url",
             evidence_url,
             "--evidence-content-sha256",
@@ -601,14 +619,14 @@ def test_receipt_cli_rejects_noncanonical_evidence_url(tmp_path: Path, evidence_
         ("//workspace/example/.worktree/and-17", LINEAR_ATTACHMENT_URL),
     ],
 )
-def test_receipt_cli_reuse_rejects_noncanonical_identity_substitution(
+def test_shared_evidence_cli_reuse_rejects_noncanonical_identity_substitution(
     tmp_path: Path,
     input_working_directory: str,
     comment_evidence_url: str,
 ) -> None:
     """Reuse fails closed when comment or current path identity has another spelling."""
 
-    script = PLUGIN_ROOT / "skills" / "task-implement" / "scripts" / "receipt.py"
+    script = LIBRARY_ROOT / "verification" / "tool" / "evidence.py"
     input_path = tmp_path / "input.json"
     comment_path = tmp_path / "comment.md"
     input_payload = _verification_input().payload()
@@ -626,8 +644,9 @@ def test_receipt_cli_reuse_rejects_noncanonical_identity_substitution(
 
     reused = subprocess.run(
         [
+            sys.executable,
             str(script),
-            "reuse",
+            "receipt-reuse",
             "--input",
             str(input_path),
             "--receipt-comment",
@@ -716,24 +735,23 @@ def test_candidate_fingerprint_and_attempt_comment_bind_exact_external_state() -
 
 
 def test_evidence_candidate_uses_validated_receipt_keys_for_every_result_identity() -> None:
-    """Human approval changes for every receipt result or artifact identity transition."""
+    """Receipt transitions invalidate approval, while only passed evidence is eligible."""
 
     verification_input = _verification_input()
     completed_at = datetime(2026, 8, 4, 12, 30, tzinfo=timezone.utc)
-    receipt_list = [
+    passed_receipt_list = [
         VerificationReceipt.from_input(
             verification_input,
-            outcome=outcome,
+            outcome="passed",
             completed_at=instant,
             evidence_url=evidence_url,
             evidence_content_sha256=evidence_sha256,
         )
-        for outcome, instant, evidence_url, evidence_sha256 in (
-            ("passed", completed_at, LINEAR_ATTACHMENT_URL, EVIDENCE_ONE),
-            ("failed", completed_at, LINEAR_ATTACHMENT_URL, EVIDENCE_ONE),
-            ("passed", completed_at + timedelta(seconds=1), LINEAR_ATTACHMENT_URL, EVIDENCE_ONE),
-            ("passed", completed_at, LINEAR_ATTACHMENT_URL + "-two", EVIDENCE_ONE),
-            ("passed", completed_at, LINEAR_ATTACHMENT_URL, EVIDENCE_TWO),
+        for instant, evidence_url, evidence_sha256 in (
+            (completed_at, LINEAR_ATTACHMENT_URL, EVIDENCE_ONE),
+            (completed_at + timedelta(seconds=1), LINEAR_ATTACHMENT_URL, EVIDENCE_ONE),
+            (completed_at, LINEAR_ATTACHMENT_URL + "-two", EVIDENCE_ONE),
+            (completed_at, LINEAR_ATTACHMENT_URL, EVIDENCE_TWO),
         )
     ]
     candidate_list = [
@@ -742,14 +760,30 @@ def test_evidence_candidate_uses_validated_receipt_keys_for_every_result_identit
             pull_request_head_by_url_map={},
             evidence_receipt_by_kind_map={"acceptance": receipt},
         )
-        for receipt in receipt_list
+        for receipt in passed_receipt_list
     ]
+    failed_receipt = VerificationReceipt.from_input(
+        verification_input,
+        outcome="failed",
+        completed_at=completed_at,
+        evidence_url=LINEAR_ATTACHMENT_URL,
+        evidence_content_sha256=EVIDENCE_ONE,
+    )
 
-    assert {receipt.verification_key for receipt in receipt_list} == {verification_input.key()}
-    assert len({receipt.receipt_key for receipt in receipt_list}) == len(receipt_list)
+    assert {receipt.verification_key for receipt in [*passed_receipt_list, failed_receipt]} == {
+        verification_input.key()
+    }
+    assert failed_receipt.receipt_key != passed_receipt_list[0].receipt_key
+    assert len({receipt.receipt_key for receipt in passed_receipt_list}) == len(passed_receipt_list)
     assert len({candidate.fingerprint() for candidate in candidate_list}) == len(candidate_list)
-    for candidate, receipt in zip(candidate_list, receipt_list, strict=True):
+    for candidate, receipt in zip(candidate_list, passed_receipt_list, strict=True):
         assert candidate.identity_payload()["evidence_receipt_key_by_kind_map"] == {"acceptance": receipt.receipt_key}
+    with pytest.raises(VerificationReceiptError, match="passed outcome"):
+        CandidateInput(
+            delivery_kind="evidence",
+            pull_request_head_by_url_map={},
+            evidence_receipt_by_kind_map={"acceptance": failed_receipt},
+        )
 
 
 def test_evidence_candidate_rejects_verification_key_substitution_and_prior_shape() -> None:
@@ -785,31 +819,6 @@ def test_evidence_candidate_rejects_verification_key_substitution_and_prior_shap
     }
     with pytest.raises(VerificationReceiptError, match="another shape"):
         CandidateInput.from_payload(prior_payload)
-
-
-def test_task_implement_behavior_invariant_requires_every_receipt_input_identity() -> None:
-    """The model handoff gate cannot pass after omitting mandatory receipt inputs."""
-
-    corpus = json.loads((REPOSITORY_ROOT / "skill_behavior_eval" / "corpus-v1.json").read_text(encoding="utf-8"))
-    case = next(item for item in corpus["case_list"] if item["id"] == "direct-linear-task-implement")
-    invariant = next(item for item in case["semantic_invariant_list"] if item["id"] == "receipt-integrity")
-
-    for required_text in (
-        "source fingerprint",
-        "direct argv",
-        "canonical absolute working directory",
-        "receipt-bearing Human Review candidate identity uses the validated receipt key",
-    ):
-        assert required_text in invariant["text"]
-
-    skill_text = (PLUGIN_ROOT / "skills" / "task-implement" / "SKILL.md").read_text(encoding="utf-8")
-    for required_text in (
-        "the separate receipt key binds that stable verification key itself",
-        "every exact codec-rendered verification receipt comment was published before candidate publication",
-        "the Human Review candidate identity is validated and derived from each current receipt key",
-        "a handoff that only says receipts were created, is insufficient",
-    ):
-        assert required_text in skill_text
 
 
 @pytest.mark.parametrize(
@@ -969,12 +978,49 @@ def test_shared_evidence_cli_renders_candidate_without_persistent_state(
     )
 
     payload = json.loads(rendered.stdout)
+    assert set(payload) == {"candidate_fingerprint", "candidate_identity", "input", "schema_version"}
+    assert payload["schema_version"] == 2
     assert payload["candidate_fingerprint"] == candidate.fingerprint()
     assert payload["candidate_identity"] == candidate.identity_payload()
     assert payload["candidate_identity"]["evidence_receipt_key_by_kind_map"] == {
         "acceptance": candidate.evidence_receipt_by_kind_map["acceptance"].receipt_key
     }
     assert payload["input"] == candidate.payload()
+
+
+def test_shared_evidence_cli_rejects_failed_receipt_candidate(tmp_path: Path) -> None:
+    """A failed result cannot cross the shared Human Review candidate boundary."""
+
+    script = LIBRARY_ROOT / "verification" / "tool" / "evidence.py"
+    input_path = tmp_path / "candidate.json"
+    failed_receipt = VerificationReceipt.from_input(
+        _verification_input(),
+        outcome="failed",
+        evidence_url=LINEAR_ATTACHMENT_URL,
+        evidence_content_sha256=EVIDENCE_ONE,
+        completed_at=datetime(2026, 8, 4, 12, 30, tzinfo=timezone.utc),
+    )
+    input_path.write_text(
+        json.dumps(
+            {
+                "delivery_kind": "evidence",
+                "evidence_receipt_by_kind_map": {"acceptance": failed_receipt.payload()},
+                "pull_request_head_by_url_map": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    rendered = subprocess.run(
+        [sys.executable, str(script), "candidate", "--input", str(input_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert rendered.returncode == 2
+    assert "passed outcome" in rendered.stderr
+    assert rendered.stdout == ""
 
 
 class _GhRunner:

@@ -22,10 +22,11 @@
   - Submodule and lock keys use canonical checkout-relative paths.
   - Repeated repository URLs remain separate checkout records.
   - The receipt key binds the verification key, outcome, UTC instant, canonical artifact URL, and content SHA-256.
-  - An evidence candidate carries complete current-schema receipts keyed by evidence kind. The shared candidate tool validates every derived receipt key and fingerprints only the compact evidence-kind-to-receipt-key map; verification keys remain reuse identities and cannot stand in for receipt-bearing approval evidence.
+  - The shared verification tool creates a receipt with the exact result-completion instant, renders its provider comment, and evaluates reuse from the exact provider readback. Every role publishes and byte-compares that codec comment before deleting transient inputs or publishing a candidate.
+  - An evidence candidate carries complete passed current-schema receipts keyed by evidence kind. The shared candidate tool validates every derived receipt key and fingerprints only the compact evidence-kind-to-receipt-key map; failed receipts are ineligible, and verification keys remain reuse identities that cannot stand in for receipt-bearing approval evidence.
   - Artifact URLs use durable HTTPS provider identities without credentials, ports, query strings, or fragments.
   - The receipt comment renders JSON forward slashes as escapes so Linear readback cannot replace that stable identity with a presigned URL; JSON parsing restores the exact canonical URL value.
-  - Receipts live in Linear comments or GitHub checks.
+  - Receipts live in Linear comments or GitHub checks and become candidate inputs only after exact authenticated provider readback.
 - No local task graph or execution database exists.
 
 For a `project-goals` source, provenance is one canonical commit-pinned directory URL. The directory contains the exact sibling `goal.md` and `spec.md`; mutable `main`, a repository root, or separate file URLs are not equivalent source identities.

@@ -9,7 +9,6 @@ import ipaddress
 import json
 from pathlib import PurePosixPath
 import re
-import socket
 from urllib.parse import urlsplit, urlunsplit
 
 from verification._validation import (
@@ -27,28 +26,25 @@ _EVIDENCE_URL_HOST_PATTERN = re.compile(
     r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
 )
 _EVIDENCE_URL_PATH_PATTERN = re.compile(r"/(?:[A-Za-z0-9._~!$&'()*+,;=:@/-]|%[0-9A-F]{2})*")
+_NUMERIC_HOST_LABEL_PATTERN = re.compile(r"(?:[0-9]+|0x[0-9a-f]+)")
 _URI_PERCENT_ENCODING_PATTERN = re.compile(r"%([0-9A-F]{2})")
 _URI_UNRESERVED_CHARACTER_SET = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
 
 
-def _evidence_url_host_is_noncanonical_numeric_ipv4(hostname: str) -> bool:
-    """Return whether a host is a legacy spelling of one IPv4 address.
+def _is_evidence_url_host_noncanonical_numeric(hostname: str) -> bool:
+    """Return whether a numeric host is not canonical dotted-decimal IPv4.
 
     Args:
         hostname: Lowercase URL hostname returned by ``urlsplit``.
 
     Returns:
-        True for a numeric IPv4 form that is not canonical dotted decimal.
+        True for an all-numeric literal form other than canonical IPv4.
     """
 
     try:
         canonical_address = ipaddress.IPv4Address(hostname)
     except ipaddress.AddressValueError:
-        try:
-            socket.inet_aton(hostname)
-        except OSError:
-            return False
-        return True
+        return all(_NUMERIC_HOST_LABEL_PATTERN.fullmatch(label) is not None for label in hostname.split("."))
     return str(canonical_address) != hostname
 
 
@@ -98,7 +94,7 @@ def _evidence_url_validate(value: object) -> str:
         or hostname is None
         or len(hostname) > 253
         or _EVIDENCE_URL_HOST_PATTERN.fullmatch(hostname) is None
-        or _evidence_url_host_is_noncanonical_numeric_ipv4(hostname)
+        or _is_evidence_url_host_noncanonical_numeric(hostname)
         or parsed.netloc != hostname
         or not parsed.path
         or _EVIDENCE_URL_PATH_PATTERN.fullmatch(parsed.path) is None
