@@ -556,7 +556,7 @@
       "id": "indirect-workflow-input-migrate",
       "working_directory": "../../brand-size-chart",
       "working_directory_mode": "synchronized-main",
-      "prompt": "Migrate one saved complete Workflow input from its exact source version to a newer selected source version through the source-declared migration graph. Validate the source and target objects and replace the destination atomically. Do not launch the run.",
+      "prompt": "Determine whether the current source declares one unique forward migration path for a saved complete Workflow input. Only when that path exists, validate the exact source object, execute its declared edges, validate the complete target object, and replace the destination atomically; otherwise report the exact blocker without writing. Do not launch the run.",
       "expected_skill_list": [
         "workflow-container-agent-tools:workflow-container-input-create",
         "project-standards:project-foundation"
@@ -569,7 +569,7 @@
       "semantic_invariant_list": [
         {
           "id": "declared-chain-only",
-          "text": "The response validates the unchanged complete source input, resolves the one declared forward path, executes each source-owned edge in order, and validates the complete target object."
+          "text": "The response requires one unique source-declared forward path before mutation. If none or more than one exists it reports the exact blocker and writes nothing; if one exists it validates the unchanged complete source input, executes every source-owned edge in order, and validates the complete target object."
         },
         {
           "id": "no-heuristic-migration",
