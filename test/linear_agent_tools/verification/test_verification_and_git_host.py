@@ -23,7 +23,7 @@ from verification.attempt import AttemptSummary
 from verification.baseline import LocalPhaseBaseline, TaskWorkspaceBaseline
 from verification.candidate import CandidateInput
 from verification.invalidation import ReceiptReuseEvaluator
-from verification.model import VerificationInput, VerificationReceipt
+from verification.model import VerificationCheckout, VerificationInput, VerificationReceipt
 from verification.receipt import (
     ATTEMPT_COMMENT_CODEC,
     LOCAL_PHASE_BASELINE_COMMENT_CODEC,
@@ -33,6 +33,9 @@ from verification.receipt import (
 
 COMMIT_ONE = "a" * 40
 COMMIT_TWO = "b" * 40
+CORPUS_ONE = "1" * 64
+CORPUS_TWO = "2" * 64
+EVIDENCE_ONE = "3" * 64
 LOCK_ONE = "c" * 64
 LOCK_TWO = "d" * 64
 
@@ -42,6 +45,9 @@ def _verification_input(
     commit: str = COMMIT_ONE,
     lock: str = LOCK_ONE,
     environment: str = "development:release-one",
+    corpus: str = CORPUS_ONE,
+    model: str = "gpt-5.6-sol",
+    reasoning_effort: str = "medium",
 ) -> VerificationInput:
     """Return one complete deterministic verification input.
 
@@ -49,6 +55,9 @@ def _verification_input(
         commit: Repository commit.
         lock: Dependency lock fingerprint.
         environment: Exact external environment identity.
+        corpus: Exact corpus content identity.
+        model: Exact model identity.
+        reasoning_effort: Exact model reasoning configuration.
 
     Returns:
         Typed input.
@@ -56,12 +65,21 @@ def _verification_input(
 
     return VerificationInput(
         command_argument_list=["pytest", "-q"],
-        working_directory=".",
-        repository_url="git@github.com:antonov-andrey/example.git",
+        working_directory="/workspace/example/.worktree/and-17",
         source_fingerprint="f" * 64,
-        repository_commit_by_url_map={"git@github.com:antonov-andrey/example.git": commit},
-        recursive_submodule_commit_by_path_map={"module/provider": COMMIT_ONE},
-        dependency_lock_sha256_by_path_map={"requirements-dev.txt": lock},
+        checkout_list=[
+            VerificationCheckout(
+                path="/workspace/example/.worktree/and-17",
+                role_list=["verification", "corpus"],
+                repository_url="git@github.com:antonov-andrey/example.git",
+                commit=commit,
+                recursive_submodule_commit_by_path_map={"module/provider": COMMIT_ONE},
+                dependency_lock_sha256_by_path_map={"requirements-dev.txt": lock},
+            )
+        ],
+        corpus_content_sha256=corpus,
+        model_identity=model,
+        model_configuration_by_name_map={"reasoning-effort": reasoning_effort},
         environment_identity=environment,
         release_identity="sha256:" + "e" * 64,
     )
@@ -75,6 +93,7 @@ def test_receipt_roundtrip_and_exact_reuse_key() -> None:
         current,
         outcome="passed",
         evidence_url="https://github.com/antonov-andrey/example/actions/runs/1",
+        evidence_content_sha256=EVIDENCE_ONE,
         completed_at=datetime(2026, 8, 4, 12, 30, tzinfo=timezone.utc),
     )
     parsed = VerificationReceipt.from_payload(
@@ -84,46 +103,31 @@ def test_receipt_roundtrip_and_exact_reuse_key() -> None:
     assert parsed == receipt
     assert ReceiptReuseEvaluator(current).decision_get(parsed).reusable
     changed_commit = ReceiptReuseEvaluator(_verification_input(commit=COMMIT_TWO)).decision_get(parsed)
-    assert changed_commit.reason_list == ["repository-commit-set-changed"]
+    assert changed_commit.reason_list == ["checkout-set-changed"]
     changed_lock = ReceiptReuseEvaluator(_verification_input(lock=LOCK_TWO)).decision_get(parsed)
-    assert changed_lock.reason_list == ["dependency-lock-set-changed"]
+    assert changed_lock.reason_list == ["checkout-set-changed"]
+    changed_corpus = ReceiptReuseEvaluator(_verification_input(corpus=CORPUS_TWO)).decision_get(parsed)
+    assert changed_corpus.reason_list == ["corpus-content-changed"]
+    changed_model = ReceiptReuseEvaluator(_verification_input(model="gpt-5.6-terra")).decision_get(parsed)
+    assert changed_model.reason_list == ["model-identity-changed"]
+    changed_model_configuration = ReceiptReuseEvaluator(_verification_input(reasoning_effort="high")).decision_get(
+        parsed
+    )
+    assert changed_model_configuration.reason_list == ["model-configuration-changed"]
     changed_environment = ReceiptReuseEvaluator(
         _verification_input(environment="development:release-two")
     ).decision_get(parsed)
     assert changed_environment.reason_list == ["environment-identity-changed"]
-    changed_repository = ReceiptReuseEvaluator(
-        VerificationInput(
-            command_argument_list=["pytest", "-q"],
-            working_directory=".",
-            repository_url="git@github.com:antonov-andrey/other.git",
-            source_fingerprint="f" * 64,
-            repository_commit_by_url_map={
-                "git@github.com:antonov-andrey/example.git": COMMIT_ONE,
-                "git@github.com:antonov-andrey/other.git": COMMIT_ONE,
-            },
-            recursive_submodule_commit_by_path_map={"module/provider": COMMIT_ONE},
-            dependency_lock_sha256_by_path_map={"requirements-dev.txt": LOCK_ONE},
-            environment_identity="development:release-one",
-            release_identity="sha256:" + "e" * 64,
-        )
-    ).decision_get(parsed)
-    assert changed_repository.reason_list == [
-        "verification-repository-changed",
-        "repository-commit-set-changed",
-    ]
+    changed_repository_payload = _verification_input().payload()
+    changed_repository_payload["checkout_list"][0]["repository_url"] = "git@github.com:antonov-andrey/other.git"
+    changed_repository = ReceiptReuseEvaluator(VerificationInput.from_payload(changed_repository_payload)).decision_get(
+        parsed
+    )
+    assert changed_repository.reason_list == ["checkout-set-changed"]
 
-    changed_source = ReceiptReuseEvaluator(
-        VerificationInput(
-            **{
-                **_verification_input().payload(),
-                "command_argument_list": ["pytest", "-q"],
-                "source_fingerprint": "0" * 64,
-                "repository_commit_by_url_map": {"git@github.com:antonov-andrey/example.git": COMMIT_ONE},
-                "recursive_submodule_commit_by_path_map": {"module/provider": COMMIT_ONE},
-                "dependency_lock_sha256_by_path_map": {"requirements-dev.txt": LOCK_ONE},
-            }
-        )
-    ).decision_get(parsed)
+    changed_source_payload = _verification_input().payload()
+    changed_source_payload["source_fingerprint"] = "0" * 64
+    changed_source = ReceiptReuseEvaluator(VerificationInput.from_payload(changed_source_payload)).decision_get(parsed)
     assert changed_source.reason_list == ["source-fingerprint-changed"]
 
 
@@ -132,12 +136,12 @@ def test_external_evidence_receipt_can_bind_source_without_a_repository_commit()
 
     value = VerificationInput(
         command_argument_list=["linear-provider-probe"],
-        working_directory=".",
-        repository_url="",
+        working_directory="/workspace",
         source_fingerprint="f" * 64,
-        repository_commit_by_url_map={},
-        recursive_submodule_commit_by_path_map={},
-        dependency_lock_sha256_by_path_map={},
+        checkout_list=[],
+        corpus_content_sha256="",
+        model_identity="",
+        model_configuration_by_name_map={},
         environment_identity="linear:workspace-one",
         release_identity="",
     )
@@ -145,24 +149,73 @@ def test_external_evidence_receipt_can_bind_source_without_a_repository_commit()
     assert (
         ReceiptReuseEvaluator(value)
         .decision_get(
-            VerificationReceipt.from_input(value, outcome="passed", evidence_url="https://linear.app/example")
+            VerificationReceipt.from_input(
+                value,
+                outcome="passed",
+                evidence_url="https://linear.app/example",
+                evidence_content_sha256=EVIDENCE_ONE,
+            )
         )
         .reusable
     )
 
 
-def test_repository_scoped_inputs_require_the_exact_verification_repository() -> None:
-    """Submodule and lock paths cannot float across repositories in one task."""
+def test_checkout_list_represents_two_revisions_of_one_repository_without_collision() -> None:
+    """Separate paths preserve distinct commits for one repeated repository URL."""
 
     payload = _verification_input().payload()
-    payload["repository_url"] = ""
+    second_checkout = dict(payload["checkout_list"][0])
+    second_checkout["path"] = "/workspace/example"
+    second_checkout["role_list"] = ["synchronized-main"]
+    second_checkout["commit"] = COMMIT_TWO
+    payload["checkout_list"].append(second_checkout)
 
-    with pytest.raises(VerificationReceiptError, match="Repository-scoped"):
+    parsed = VerificationInput.from_payload(payload)
+
+    assert [checkout.commit for checkout in parsed.checkout_list] == [COMMIT_TWO, COMMIT_ONE]
+    assert {checkout.repository_url for checkout in parsed.checkout_list} == {
+        "git@github.com:antonov-andrey/example.git"
+    }
+
+    payload["checkout_list"][1]["path"] = payload["checkout_list"][0]["path"]
+    with pytest.raises(VerificationReceiptError, match="paths must be unique"):
         VerificationInput.from_payload(payload)
 
+
+@pytest.mark.parametrize(
+    ("payload_path", "value", "message"),
+    [
+        (("working_directory",), "workspace/example", "absolute POSIX"),
+        (("checkout_list", 0, "path"), "/workspace/../example", "absolute POSIX"),
+        (
+            ("checkout_list", 0, "recursive_submodule_commit_by_path_map"),
+            {"../provider": COMMIT_ONE},
+            "repository-relative POSIX",
+        ),
+        (
+            ("checkout_list", 0, "dependency_lock_sha256_by_path_map"),
+            {"/workspace/requirements-dev.txt": LOCK_ONE},
+            "repository-relative POSIX",
+        ),
+        (
+            ("checkout_list", 0, "dependency_lock_sha256_by_path_map"),
+            {".": LOCK_ONE},
+            "repository-relative POSIX",
+        ),
+    ],
+)
+def test_verification_paths_are_canonical_and_unambiguous(
+    payload_path: tuple[object, ...], value: object, message: str
+) -> None:
+    """Receipt paths cannot depend on an undeclared anchor or escape a checkout."""
+
     payload = _verification_input().payload()
-    payload["repository_url"] = "git@github.com:antonov-andrey/other.git"
-    with pytest.raises(VerificationReceiptError, match="no exact repository commit"):
+    target = payload
+    for part in payload_path[:-1]:
+        target = target[part]
+    target[payload_path[-1]] = value
+
+    with pytest.raises(VerificationReceiptError, match=message):
         VerificationInput.from_payload(payload)
 
 
@@ -170,8 +223,8 @@ def test_repository_scoped_inputs_require_the_exact_verification_repository() ->
     ("payload_field", "pair_list"),
     [
         (
-            "repository_commit_by_url_map",
-            [["git@github.com:antonov-andrey/example.git", COMMIT_ONE]],
+            "model_configuration_by_name_map",
+            [["reasoning-effort", "medium"]],
         ),
         (
             "recursive_submodule_commit_by_path_map",
@@ -190,7 +243,10 @@ def test_verification_mapping_boundaries_reject_pair_list_carriers(
     """Verification identities use explicit JSON mappings, never positional pairs."""
 
     payload = _verification_input().payload()
-    payload[payload_field] = pair_list
+    if payload_field == "model_configuration_by_name_map":
+        payload[payload_field] = pair_list
+    else:
+        payload["checkout_list"][0][payload_field] = pair_list
 
     with pytest.raises(VerificationReceiptError, match="mapping"):
         VerificationInput.from_payload(payload)
@@ -200,6 +256,7 @@ def test_verification_mapping_boundaries_reject_pair_list_carriers(
     ("field_name", "value"),
     [
         ("working_directory", "unsafe\npath"),
+        ("model_identity", "gpt-5.6-sol\nother"),
         ("environment_identity", "development\nother"),
         ("release_identity", "release\rother"),
     ],
@@ -222,6 +279,7 @@ def test_receipt_normalizes_utc_and_rejects_naive_instant() -> None:
         _verification_input(),
         outcome="passed",
         evidence_url="https://example.test/evidence",
+        evidence_content_sha256=EVIDENCE_ONE,
         completed_at=datetime(2026, 8, 4, 16, 30, tzinfo=offset),
     )
     assert receipt.completed_at == datetime(2026, 8, 4, 12, 30, tzinfo=timezone.utc)
@@ -231,7 +289,15 @@ def test_receipt_normalizes_utc_and_rejects_naive_instant() -> None:
             _verification_input(),
             outcome="passed",
             evidence_url="https://example.test/evidence",
+            evidence_content_sha256=EVIDENCE_ONE,
             completed_at=datetime(2026, 8, 4, 12, 30),
+        )
+    with pytest.raises(VerificationReceiptError, match="content identity"):
+        VerificationReceipt.from_input(
+            _verification_input(),
+            outcome="passed",
+            evidence_url="https://example.test/evidence",
+            evidence_content_sha256="not-a-sha256",
         )
 
 
@@ -253,6 +319,8 @@ def test_receipt_cli_reuses_the_exact_linear_comment_shape(tmp_path: Path) -> No
             "passed",
             "--evidence-url",
             "https://example.test/ci/1",
+            "--evidence-content-sha256",
+            EVIDENCE_ONE,
         ],
         check=True,
         capture_output=True,
@@ -275,6 +343,31 @@ def test_receipt_cli_reuses_the_exact_linear_comment_shape(tmp_path: Path) -> No
 
     assert reused.returncode == 0
     assert json.loads(reused.stdout)["reusable"] is True
+    assert created.stdout.startswith("<!-- linear-agent-tools-verification:v2 -->")
+
+
+def test_receipt_rejects_prior_schema_without_a_compatibility_branch() -> None:
+    """Only the current receipt schema and provider marker are accepted."""
+
+    receipt = VerificationReceipt.from_input(
+        _verification_input(),
+        outcome="passed",
+        evidence_url="https://example.test/evidence",
+        evidence_content_sha256=EVIDENCE_ONE,
+    )
+    payload = receipt.payload()
+    payload["schema_version"] = 1
+
+    with pytest.raises(VerificationReceiptError, match="another shape"):
+        VerificationReceipt.from_payload(payload)
+    with pytest.raises(VerificationReceiptError, match="another shape"):
+        VERIFICATION_RECEIPT_COMMENT_CODEC.payload_parse(
+            VERIFICATION_RECEIPT_COMMENT_CODEC.render(receipt.payload()).replace(
+                "linear-agent-tools-verification:v2",
+                "linear-agent-tools-verification:v1",
+                1,
+            )
+        )
 
 
 def test_candidate_fingerprint_and_attempt_comment_bind_exact_external_state() -> None:

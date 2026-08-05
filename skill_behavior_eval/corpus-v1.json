@@ -329,6 +329,10 @@
           "text": "It creates or adopts exact linked PRs, waits for applicable required CI, publishes receipts, a deterministic candidate fingerprint and concise structured attempt summary, moves to Human Review, stops, and preserves workspace."
         },
         {
+          "id": "receipt-integrity",
+          "text": "Each reusable receipt binds every result-affecting checkout path, role, repository, revision, recursive submodule and dependency lock, plus exact corpus, model, configuration, environment or release inputs and one immutable result artifact URL with its content checksum."
+        },
+        {
           "id": "exclusive-attempt",
           "text": "Before dispatch or status mutation it acquires the exact issue process-lifetime host-local attempt guard, holds that same guard through final readback and nested cleanup, and relies on process exit to release ownership."
         }

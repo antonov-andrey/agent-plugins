@@ -36,6 +36,7 @@ def _args_parse(argv: list[str] | None = None) -> argparse.Namespace:
     create.add_argument("--input", required=True, type=Path)
     create.add_argument("--outcome", choices=("passed", "failed"), required=True)
     create.add_argument("--evidence-url", required=True)
+    create.add_argument("--evidence-content-sha256", required=True)
     reuse = subparsers.add_parser("reuse")
     reuse.add_argument(
         "--receipt-comment",
@@ -103,6 +104,7 @@ def main(argv: list[str] | None = None) -> int:
                 current,
                 outcome=args.outcome,
                 evidence_url=args.evidence_url,
+                evidence_content_sha256=args.evidence_content_sha256,
             )
             print(VERIFICATION_RECEIPT_COMMENT_CODEC.render(receipt.payload()))
             return 0

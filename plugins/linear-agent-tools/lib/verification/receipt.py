@@ -75,6 +75,6 @@ TASK_WORKSPACE_BASELINE_COMMENT_CODEC = VerificationCommentCodec(
     label="Workspace baseline",
 )
 VERIFICATION_RECEIPT_COMMENT_CODEC = VerificationCommentCodec(
-    prefix="<!-- linear-agent-tools-verification:v1 -->\n```json\n",
+    prefix="<!-- linear-agent-tools-verification:v2 -->\n```json\n",
     label="Verification receipt",
 )
