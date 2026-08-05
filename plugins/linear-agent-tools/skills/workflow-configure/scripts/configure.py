@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Plan or apply the GraphQL-owned part of Linear workflow configuration."""
+"""Plan or apply GraphQL-owned statuses and Git status automation removal."""
 
 from __future__ import annotations
 
@@ -39,7 +39,9 @@ def _args_parse(argv: list[str] | None) -> argparse.Namespace:
         Parsed arguments.
     """
 
-    parser = argparse.ArgumentParser(description="Plan or apply the GraphQL-owned Linear workflow status delta.")
+    parser = argparse.ArgumentParser(
+        description="Plan or apply GraphQL-owned Linear workflow statuses and Git status automation removal."
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
     for command in ("plan", "apply"):
         operation = subparsers.add_parser(command)
@@ -201,7 +203,7 @@ def main(argv: list[str] | None = None) -> int:
         ):
             raise LinearContractError("Approved plan destination differs from apply arguments")
         plan.subset_require(approved_plan)
-        service.missing_statuses_create(
+        service.approved_configuration_apply(
             expected_workspace_id=args.workspace_id,
             expected_viewer_id=args.viewer_id,
             expected_team_id=args.team_id,

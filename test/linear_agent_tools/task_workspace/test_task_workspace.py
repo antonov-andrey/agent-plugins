@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 import os
 from pathlib import Path
 import subprocess
@@ -16,10 +17,12 @@ if str(LIBRARY_ROOT) not in sys.path:
     sys.path.insert(0, str(LIBRARY_ROOT))
 
 import task_workspace.lock as lock_module
+from git_host.model import PullRequestSnapshot, RepositoryIdentity
 from git_host.pull_request import GitHubPullRequestBoundary
 from task_cleanup.model import (
     CleanupAuthority,
     CleanupRequest,
+    PullRequestReference,
     TaskCleanupError,
 )
 from task_cleanup.reconciliation import CleanupState, TaskCleanupReconciler
@@ -1236,6 +1239,97 @@ def test_cleanup_requires_complete_exact_pull_request_set(tmp_path: Path) -> Non
                 },
             )
         )
+
+
+@pytest.mark.parametrize(
+    ("issue_status", "project_status", "pull_request_state", "expected_close_count"),
+    [
+        ("Done", "In Progress", "MERGED", 0),
+        ("Canceled", "Canceled", "OPEN", 1),
+    ],
+)
+def test_cleanup_reconciles_complete_exact_pull_request_set(
+    tmp_path: Path,
+    issue_status: str,
+    project_status: str,
+    pull_request_state: str,
+    expected_close_count: int,
+) -> None:
+    """Exact terminal PR targets are validated, proved merged or closed."""
+
+    repository_identity = RepositoryIdentity("antonov-andrey/example")
+    merged = pull_request_state == "MERGED"
+    snapshot = PullRequestSnapshot(
+        repository=repository_identity,
+        number=17,
+        url="https://github.com/antonov-andrey/example/pull/17",
+        title="AND-121 reconcile terminal pull request",
+        state=pull_request_state,
+        draft=False,
+        base_branch="main",
+        head_branch="linear/and-121",
+        head_commit="a" * 40,
+        merge_state="CLEAN",
+        review_decision="APPROVED",
+        merged_at=datetime.now(timezone.utc) if merged else None,
+        merge_commit="b" * 40 if merged else "",
+        required_check_list=[],
+    )
+
+    class Repository:
+        origin_identity = "https://github.com/antonov-andrey/example"
+        request = RepositoryRequest(
+            "https://github.com/antonov-andrey/example.git",
+            "main",
+            "",
+        )
+
+    class GitHub:
+        close_count = 0
+
+        @staticmethod
+        def matching_number_list(**_kwargs: object) -> list[int]:
+            return [17]
+
+        @staticmethod
+        def inspect(**_kwargs: object) -> PullRequestSnapshot:
+            return snapshot
+
+        def close_if_open(self, **_kwargs: object) -> PullRequestSnapshot:
+            self.close_count += 1
+            return replace(snapshot, state="CLOSED")
+
+    request = CleanupRequest(
+        issue_identifier="AND-121",
+        authority=CleanupAuthority(
+            scope="terminal-issue",
+            issue_status=issue_status,
+            project_status=project_status,
+            final_acceptance_done=False,
+            all_other_project_nodes_terminal=False,
+            unresolved_remediation_blocker_count=0,
+        ),
+        repository_list=[Repository.request],
+        pull_request_list=[PullRequestReference(repository=repository_identity, number=17)],
+        resource_list=[],
+    )
+    github = GitHub()
+    reconciler = _task_cleanup_reconciler(
+        WorkspaceConfig(tmp_path.resolve()),
+        github=github,  # type: ignore[arg-type]
+    )
+    state = CleanupState(
+        request=request,
+        repository_by_origin_url_map={
+            Repository.request.origin_url: Repository(),  # type: ignore[dict-item]
+        },
+    )
+
+    reconciler._pull_request_contract_require(state)
+    reconciler._pull_request_reconcile(state)
+
+    assert state.closed_pull_request_count == expected_close_count
+    assert github.close_count == expected_close_count
 
 
 def test_project_final_cleanup_requires_acceptance_other_terminal_nodes_and_no_remediation(

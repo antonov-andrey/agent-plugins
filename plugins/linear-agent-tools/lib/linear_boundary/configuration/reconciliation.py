@@ -63,6 +63,7 @@ class WorkflowConfigurationReconciler:
             issue_status_create_list=issue_status_create_list,
             project_status_create_list=project_status_create_list,
             label_create_list=label_create_list,
+            git_status_automation_delete_list=list(snapshot.git_status_automation_list),
             conflict_list=conflict_list,
         )
 

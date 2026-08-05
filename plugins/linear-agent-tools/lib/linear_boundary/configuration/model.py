@@ -16,6 +16,7 @@ from linear_boundary.contract import (
 )
 
 _HEX_COLOR_PATTERN = re.compile(r"#[0-9a-fA-F]{6}")
+_GIT_AUTOMATION_EVENT_SET = frozenset({"draft", "start", "review", "mergeable", "merge"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -248,6 +249,130 @@ class LinearLabel:
         return label_list
 
 
+@dataclass(frozen=True, slots=True)
+class GitStatusAutomation:
+    """Describe one team-level Git event to issue-status transition rule."""
+
+    id: str
+    event: str
+    workflow_state_id: str
+    target_branch_id: str
+    target_branch_pattern: str
+    target_branch_is_regex: bool
+    legacy_branch_pattern: str
+
+    def __post_init__(self) -> None:
+        """Validate the complete rule identity used for exact deletion."""
+
+        uuid_validate(self.id, label="Git status automation ID")
+        if self.event not in _GIT_AUTOMATION_EVENT_SET:
+            raise LinearContractError("Git status automation event is unsupported")
+        if self.workflow_state_id:
+            uuid_validate(self.workflow_state_id, label="Git status automation workflow state ID")
+        if not isinstance(self.target_branch_is_regex, bool):
+            raise LinearContractError("Git status automation target branch regex flag must be boolean")
+        if self.target_branch_id:
+            uuid_validate(self.target_branch_id, label="Git status automation target branch ID")
+            single_line_text_validate(
+                self.target_branch_pattern,
+                label="Git status automation target branch pattern",
+            )
+        elif self.target_branch_pattern or self.target_branch_is_regex:
+            raise LinearContractError("Git status automation target branch fields are incomplete")
+        if self.legacy_branch_pattern:
+            single_line_text_validate(
+                self.legacy_branch_pattern,
+                label="Git status automation legacy branch pattern",
+            )
+
+    def payload(self) -> dict[str, object]:
+        """Return one canonical deletion target payload."""
+
+        return {
+            "id": self.id,
+            "event": self.event,
+            "legacy_branch_pattern": self.legacy_branch_pattern,
+            "target_branch_id": self.target_branch_id,
+            "target_branch_is_regex": self.target_branch_is_regex,
+            "target_branch_pattern": self.target_branch_pattern,
+            "workflow_state_id": self.workflow_state_id,
+        }
+
+    @classmethod
+    def list_from_payload(cls, value: object) -> list["GitStatusAutomation"]:
+        """Parse one strict canonical automation list."""
+
+        expected = {
+            "id",
+            "event",
+            "legacy_branch_pattern",
+            "target_branch_id",
+            "target_branch_is_regex",
+            "target_branch_pattern",
+            "workflow_state_id",
+        }
+        automation_list: list[GitStatusAutomation] = []
+        for item in _object_list_parse(value, label="Git status automation list"):
+            if set(item) != expected:
+                raise LinearContractError("Configuration plan Git status automation has another shape")
+            automation_list.append(cls(**item))
+        return automation_list
+
+    @classmethod
+    def list_from_graphql_connection(cls, connection: dict[str, object]) -> list["GitStatusAutomation"]:
+        """Parse one strict page of Linear Git automation rules."""
+
+        node_list = connection.get("nodes")
+        if not isinstance(node_list, list) or any(not isinstance(item, dict) for item in node_list):
+            raise LinearContractError("Linear Git status automation connection nodes have another shape")
+        automation_list: list[GitStatusAutomation] = []
+        for item in node_list:
+            identifier = item.get("id")
+            event = item.get("event")
+            if not isinstance(identifier, str) or not isinstance(event, str):
+                raise LinearContractError("Linear Git status automation identity has another shape")
+            state = item.get("state")
+            if state is None:
+                workflow_state_id = ""
+            elif isinstance(state, dict) and isinstance(state.get("id"), str):
+                workflow_state_id = state["id"]
+            else:
+                raise LinearContractError("Linear Git status automation workflow state has another shape")
+            target_branch = item.get("targetBranch")
+            if target_branch is None:
+                target_branch_id = ""
+                target_branch_pattern = ""
+                target_branch_is_regex = False
+            elif (
+                isinstance(target_branch, dict)
+                and isinstance(target_branch.get("id"), str)
+                and isinstance(target_branch.get("branchPattern"), str)
+                and isinstance(target_branch.get("isRegex"), bool)
+            ):
+                target_branch_id = target_branch["id"]
+                target_branch_pattern = target_branch["branchPattern"]
+                target_branch_is_regex = target_branch["isRegex"]
+            else:
+                raise LinearContractError("Linear Git status automation target branch has another shape")
+            legacy_branch_pattern = item.get("branchPattern")
+            if legacy_branch_pattern is None:
+                legacy_branch_pattern = ""
+            if not isinstance(legacy_branch_pattern, str):
+                raise LinearContractError("Linear Git status automation legacy branch has another shape")
+            automation_list.append(
+                cls(
+                    id=identifier,
+                    event=event,
+                    workflow_state_id=workflow_state_id,
+                    target_branch_id=target_branch_id,
+                    target_branch_pattern=target_branch_pattern,
+                    target_branch_is_regex=target_branch_is_regex,
+                    legacy_branch_pattern=legacy_branch_pattern,
+                )
+            )
+        return automation_list
+
+
 def _snapshot_definition_list_validate(value: object, *, expected_type: type[object], label: str) -> None:
     """Validate one complete external definition list.
 
@@ -292,6 +417,7 @@ class WorkflowConfigurationSnapshot:
     issue_status_list: list[StatusDefinition]
     project_status_list: list[StatusDefinition]
     label_list: list[LinearLabel]
+    git_status_automation_list: list[GitStatusAutomation]
 
     def __post_init__(self) -> None:
         """Reject duplicate external identities in one snapshot."""
@@ -305,9 +431,19 @@ class WorkflowConfigurationSnapshot:
             label="Project status",
         )
         _snapshot_definition_list_validate(self.label_list, expected_type=LinearLabel, label="label")
+        _snapshot_definition_list_validate(
+            self.git_status_automation_list,
+            expected_type=GitStatusAutomation,
+            label="Git status automation",
+        )
         object.__setattr__(self, "issue_status_list", list(self.issue_status_list))
         object.__setattr__(self, "project_status_list", list(self.project_status_list))
         object.__setattr__(self, "label_list", list(self.label_list))
+        object.__setattr__(
+            self,
+            "git_status_automation_list",
+            sorted(self.git_status_automation_list, key=lambda item: item.id),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -353,6 +489,7 @@ class ConfigurationPlan:
     issue_status_create_list: list[StatusDefinition]
     project_status_create_list: list[StatusDefinition]
     label_create_list: list[LinearLabel]
+    git_status_automation_delete_list: list[GitStatusAutomation]
     conflict_list: list[ConfigurationConflict]
 
     def __post_init__(self) -> None:
@@ -372,6 +509,11 @@ class ConfigurationPlan:
             label="Project status",
         )
         _plan_definition_list_validate(self.label_create_list, expected_type=LinearLabel, label="label")
+        _snapshot_definition_list_validate(
+            self.git_status_automation_delete_list,
+            expected_type=GitStatusAutomation,
+            label="Git status automation deletion",
+        )
         _plan_definition_list_validate(
             self.conflict_list,
             expected_type=ConfigurationConflict,
@@ -380,6 +522,11 @@ class ConfigurationPlan:
         object.__setattr__(self, "issue_status_create_list", list(self.issue_status_create_list))
         object.__setattr__(self, "project_status_create_list", list(self.project_status_create_list))
         object.__setattr__(self, "label_create_list", list(self.label_create_list))
+        object.__setattr__(
+            self,
+            "git_status_automation_delete_list",
+            sorted(self.git_status_automation_delete_list, key=lambda item: item.id),
+        )
         object.__setattr__(self, "conflict_list", list(self.conflict_list))
 
     def can_mutate(self) -> bool:
@@ -399,7 +546,10 @@ class ConfigurationPlan:
         """
 
         return self.can_mutate() and not (
-            self.issue_status_create_list or self.project_status_create_list or self.label_create_list
+            self.issue_status_create_list
+            or self.project_status_create_list
+            or self.label_create_list
+            or self.git_status_automation_delete_list
         )
 
     def status_identifier_allocate(self) -> "ConfigurationPlan":
@@ -456,6 +606,9 @@ class ConfigurationPlan:
         approved_label_by_name_map = {item.name: item for item in approved.label_create_list}
         if any(approved_label_by_name_map.get(item.name) != item for item in self.label_create_list):
             raise LinearContractError("Linear label plan changed after approval")
+        approved_automation_by_id_map = {item.id: item for item in approved.git_status_automation_delete_list}
+        if any(approved_automation_by_id_map.get(item.id) != item for item in self.git_status_automation_delete_list):
+            raise LinearContractError("Linear Git status automation plan changed after approval")
 
     def payload(self) -> dict[str, object]:
         """Return the canonical approved-delta payload.
@@ -478,6 +631,7 @@ class ConfigurationPlan:
                 {"kind": item.kind, "name": item.name, "reason": item.reason} for item in self.conflict_list
             ],
             "issue_status_create_list": [item.payload() for item in self.issue_status_create_list],
+            "git_status_automation_delete_list": [item.payload() for item in self.git_status_automation_delete_list],
             "label_create_list": [item.payload() for item in self.label_create_list],
             "project_status_create_list": [item.payload() for item in self.project_status_create_list],
         }
@@ -514,6 +668,7 @@ class ConfigurationPlan:
             "destination",
             "conflict_list",
             "issue_status_create_list",
+            "git_status_automation_delete_list",
             "label_create_list",
             "project_status_create_list",
         }
@@ -535,6 +690,9 @@ class ConfigurationPlan:
             issue_status_create_list=StatusDefinition.list_from_payload(payload["issue_status_create_list"]),
             project_status_create_list=StatusDefinition.list_from_payload(payload["project_status_create_list"]),
             label_create_list=LinearLabel.list_from_payload(payload["label_create_list"]),
+            git_status_automation_delete_list=GitStatusAutomation.list_from_payload(
+                payload["git_status_automation_delete_list"]
+            ),
             conflict_list=ConfigurationConflict.list_from_payload(payload["conflict_list"]),
         )
 

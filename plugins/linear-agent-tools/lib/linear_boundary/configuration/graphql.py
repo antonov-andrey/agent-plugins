@@ -7,12 +7,13 @@ from dataclasses import dataclass
 from linear_boundary.configuration.model import (
     ConfigurationPlan,
     DestinationIdentity,
+    GitStatusAutomation,
     LinearLabel,
     StatusDefinition,
     WorkflowConfigurationSnapshot,
 )
 from linear_boundary.configuration.reconciliation import WorkflowConfigurationReconciler
-from linear_boundary.contract import LinearContractError
+from linear_boundary.contract import LinearContractError, uuid_validate
 from linear_boundary.transport import LinearGraphQLTransport, LinearTransportError
 
 _IDENTITY_AND_WORKFLOW_QUERY = """
@@ -40,6 +41,24 @@ query LinearAgentProjectStatuses($after: String) {
 }
 """
 
+_GIT_STATUS_AUTOMATION_QUERY = """
+query LinearAgentGitStatusAutomations($teamId: String!, $after: String) {
+  team(id: $teamId) {
+    id
+    gitAutomationStates(first: 100, after: $after, includeArchived: false) {
+      nodes {
+        id
+        event
+        branchPattern
+        state { id }
+        targetBranch { id branchPattern isRegex }
+      }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+}
+"""
+
 _WORKFLOW_STATE_CREATE = """
 mutation LinearAgentWorkflowStateCreate($input: WorkflowStateCreateInput!) {
   workflowStateCreate(input: $input) {
@@ -58,6 +77,16 @@ mutation LinearAgentProjectStatusCreate($input: ProjectStatusCreateInput!) {
 }
 """
 
+_GIT_STATUS_AUTOMATION_DELETE = """
+mutation LinearAgentGitStatusAutomationDelete($id: String!) {
+  gitAutomationStateDelete(id: $id) {
+    entityId
+    lastSyncId
+    success
+  }
+}
+"""
+
 
 @dataclass(frozen=True, slots=True)
 class WorkflowConfigurationGraphQLRead:
@@ -66,6 +95,7 @@ class WorkflowConfigurationGraphQLRead:
     destination: DestinationIdentity
     issue_status_list: list[StatusDefinition]
     project_status_list: list[StatusDefinition]
+    git_status_automation_list: list[GitStatusAutomation]
 
     def __post_init__(self) -> None:
         """Detach one trusted typed GraphQL read from pagination builders."""
@@ -80,12 +110,21 @@ class WorkflowConfigurationGraphQLRead:
             not isinstance(item, StatusDefinition) for item in self.project_status_list
         ):
             raise LinearContractError("Linear GraphQL Project status list has another shape")
+        if not isinstance(self.git_status_automation_list, list) or any(
+            not isinstance(item, GitStatusAutomation) for item in self.git_status_automation_list
+        ):
+            raise LinearContractError("Linear GraphQL Git status automation list has another shape")
         object.__setattr__(self, "issue_status_list", list(self.issue_status_list))
         object.__setattr__(self, "project_status_list", list(self.project_status_list))
+        object.__setattr__(
+            self,
+            "git_status_automation_list",
+            sorted(self.git_status_automation_list, key=lambda item: item.id),
+        )
 
 
 class LinearWorkflowConfigurationGraphQL:
-    """Read and create only missing issue and Project workflow statuses."""
+    """Read and reconcile GraphQL-owned statuses and Git automation rules."""
 
     def __init__(
         self,
@@ -172,6 +211,27 @@ class LinearWorkflowConfigurationGraphQL:
             if after is None:
                 break
 
+        if destination is None:
+            raise LinearContractError("Linear destination read produced no page")
+
+        git_status_automation_list: list[GitStatusAutomation] = []
+        after = None
+        while True:
+            data = self._transport.execute(
+                operation_name="LinearAgentGitStatusAutomations",
+                document=_GIT_STATUS_AUTOMATION_QUERY,
+                variables={"teamId": expected_team_id, "after": after},
+                repeat_safe=True,
+            )
+            team = _object_get(data, "team")
+            if _text_get(team, "id") != destination.team_id:
+                raise LinearContractError("Linear team changed while Git status automations were read")
+            connection = _object_get(team, "gitAutomationStates")
+            git_status_automation_list.extend(GitStatusAutomation.list_from_graphql_connection(connection))
+            after = _next_cursor_get(connection)
+            if after is None:
+                break
+
         project_status_list: list[StatusDefinition] = []
         after = None
         while True:
@@ -190,12 +250,11 @@ class LinearWorkflowConfigurationGraphQL:
             after = _next_cursor_get(connection)
             if after is None:
                 break
-        if destination is None:
-            raise LinearContractError("Linear destination read produced no page")
         return WorkflowConfigurationGraphQLRead(
             destination=destination,
             issue_status_list=workflow_status_list,
             project_status_list=project_status_list,
+            git_status_automation_list=git_status_automation_list,
         )
 
     def plan(
@@ -230,10 +289,11 @@ class LinearWorkflowConfigurationGraphQL:
                 issue_status_list=current.issue_status_list,
                 project_status_list=current.project_status_list,
                 label_list=list(label_list),
+                git_status_automation_list=current.git_status_automation_list,
             )
         )
 
-    def missing_statuses_create(
+    def approved_configuration_apply(
         self,
         *,
         expected_workspace_id: str,
@@ -241,7 +301,7 @@ class LinearWorkflowConfigurationGraphQL:
         expected_team_id: str,
         approved_plan: ConfigurationPlan,
     ) -> None:
-        """Create only the exact missing GraphQL-owned statuses from one approved plan.
+        """Apply the exact remaining GraphQL-owned part of one approved plan.
 
         Args:
             expected_workspace_id: Exact workspace ID.
@@ -271,23 +331,28 @@ class LinearWorkflowConfigurationGraphQL:
                 issue_status_list=current.issue_status_list,
                 project_status_list=current.project_status_list,
                 label_list=[],
+                git_status_automation_list=current.git_status_automation_list,
             )
         )
-        current_status_plan = ConfigurationPlan(
+        current_graphql_plan = ConfigurationPlan(
             destination=current_plan.destination,
             issue_status_create_list=current_plan.issue_status_create_list,
             project_status_create_list=current_plan.project_status_create_list,
             label_create_list=[],
+            git_status_automation_delete_list=current_plan.git_status_automation_delete_list,
             conflict_list=current_plan.conflict_list,
         )
-        approved_status_plan = ConfigurationPlan(
+        approved_graphql_plan = ConfigurationPlan(
             destination=approved_plan.destination,
             issue_status_create_list=approved_plan.issue_status_create_list,
             project_status_create_list=approved_plan.project_status_create_list,
             label_create_list=[],
+            git_status_automation_delete_list=approved_plan.git_status_automation_delete_list,
             conflict_list=approved_plan.conflict_list,
         )
-        current_status_plan.subset_require(approved_status_plan)
+        current_graphql_plan.subset_require(approved_graphql_plan)
+        for automation in current_plan.git_status_automation_delete_list:
+            self._delete_once(automation.id)
         approved_issue_status_by_name_map = {item.name: item for item in approved_plan.issue_status_create_list}
         for status in current_plan.issue_status_create_list:
             approved_status = approved_issue_status_by_name_map[status.name]
@@ -336,10 +401,30 @@ class LinearWorkflowConfigurationGraphQL:
                 issue_status_list=current.issue_status_list,
                 project_status_list=current.project_status_list,
                 label_list=[],
+                git_status_automation_list=current.git_status_automation_list,
             )
         )
-        if readback.conflict_list or readback.issue_status_create_list or readback.project_status_create_list:
-            raise LinearContractError("Linear status read-back differs from the approved configuration plan")
+        if (
+            readback.conflict_list
+            or readback.issue_status_create_list
+            or readback.project_status_create_list
+            or readback.git_status_automation_delete_list
+        ):
+            raise LinearContractError("Linear workflow read-back differs from the approved configuration plan")
+
+    def _delete_once(self, identifier: str) -> None:
+        """Delete one exact approved Git status automation rule."""
+
+        uuid_validate(identifier, label="Git status automation deletion ID")
+        data = self._transport.execute(
+            operation_name="LinearAgentGitStatusAutomationDelete",
+            document=_GIT_STATUS_AUTOMATION_DELETE,
+            variables={"id": identifier},
+            repeat_safe=False,
+        )
+        result = _object_get(data, "gitAutomationStateDelete")
+        if result.get("success") is not True or result.get("entityId") != identifier:
+            raise LinearTransportError("Linear Git status automation deletion did not confirm exact success")
 
     def _create_once(
         self,

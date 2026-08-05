@@ -21,6 +21,22 @@ class TaskCleanupError(RuntimeError):
 _NODE_KEY_PATTERN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 
 
+def _single_line(value: object, *, label: str) -> str:
+    """Return one non-empty single-line cleanup identity.
+
+    Args:
+        value: Candidate external text.
+        label: Diagnostic field name.
+
+    Returns:
+        The validated text.
+    """
+
+    if not isinstance(value, str) or not value or any(character in value for character in ("\x00", "\n", "\r")):
+        raise TaskCleanupError(f"{label} must be non-empty single-line text")
+    return value
+
+
 @dataclass(frozen=True, slots=True)
 class CleanupAuthority:
     """Bind explicit Linear state that authorizes one cleanup scope."""

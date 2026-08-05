@@ -13,6 +13,7 @@
 - Linear Project issues and blocker relations are the task graph and lifecycle owner after activation.
 - A Linear Project represents one agreed source outcome, not one Git repository. Repository/base/branch/PR identities belong to the individual issues; a Project may span repositories and one repository may participate in multiple Projects.
 - Git owns branches and commits. GitHub owns PRs, required checks, reviews and merge results.
+- GitHub integration owns official issue-to-branch/PR linking only. Every team Git status automation, including target-branch rules, is absent so that PR events cannot bypass provider-owned `Human Review`, `Merging`, evidence publication or cleanup transitions.
 - Source systems such as `project-goals` own authoring before handoff and immutable Git provenance for the exact revision published at handoff.
 - Git administration state contains only local ownership and crash recovery. Verification receipts bind the exact source fingerprint and all applicable code, dependency and environment identities; they live in Linear comments or GitHub checks. No local task graph or execution database exists.
 
@@ -47,7 +48,7 @@ Project statuses are `Planned`, `In Progress`, `Completed` and `Canceled`. `Plan
 - Secrets stay in user-level provider storage or one no-echo host process. They never enter issues, argv, files, logs, receipts or child-agent environments.
 - The first read-only configuration plan may discover the workspace UUID from the authenticated destination. Its approved fingerprint binds workspace, viewer and team; every apply requires those same exact IDs.
 - The plan allocates Linear-required UUID v4 identities for every missing issue or Project status before approval. Apply and recovery reuse those exact plan identities; a fresh provider read may reduce the remaining delta but never replaces its create IDs.
-- Configuration apply proves and creates the credential-gated status delta before the official MCP creates approved missing labels. An absent admin credential therefore cannot leave a labels-only partial configuration; any later provider failure is resumed by the same destination-bound reconciliation plan.
+- Configuration apply proves the credential-gated status and Git-automation delta, deletes only exact approved automation rules and creates only exact approved missing statuses before the official MCP creates approved missing labels. An absent admin credential therefore cannot leave a labels-only partial configuration; any later provider failure is resumed by the same destination-bound reconciliation plan.
 - Review and acceptance never hide Product fixes. They own the finding and no-fix boundary; `task-graph-create` owns the approved active-Project delta that creates remediation implementation blockers and forces a fresh complete pass after correction.
 
 Before every status mutation, save a complete transient task snapshot and run `lib/linear_boundary/tool/task.py dispatch` or `transition`. Exit `0` proves the requested boundary, exit `1` means a well-formed task is currently non-dispatchable, and exit `2` means the input contract is malformed. Delete the transient input after the provider read-back.
