@@ -24,3 +24,5 @@ Every receipt-bearing zero-finding preview and handoff MUST state this complete 
 - the separate receipt key binds that stable key, outcome, UTC completion instant, exact durable canonical HTTPS artifact URL and artifact content SHA-256, and the URL has no credentials, port, query or fragment;
 - every exact codec-rendered receipt comment is published, fully paginated through authenticated provider readback, byte-identically compared, and evaluated for reuse from that exact readback; and
 - the evidence candidate uses every validated passed receipt key rather than any stable verification key.
+
+Naming the issuer and inputs is part of the semantic handoff: explicitly say that the shared verification owner creates the receipts and that the stable key binds corpus content. Generic wording such as only “create receipts” or “bind the corpus” is incomplete.
