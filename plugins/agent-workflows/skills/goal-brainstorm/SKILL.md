@@ -19,7 +19,7 @@ Read `references/specification-contract.md` completely before changing a specifi
 6. Run `scripts/source.py write` with the explicit canonical `project-goals` root, common prefix and both input paths. The command publishes exactly the pair through one serialized direct-main transaction and pushes it immediately.
 7. Run `scripts/source.py validate`, report the exact source commit, fingerprint and root-relative paths, and stop. Recommend a fresh thread with `linear-agent-tools:task-graph-create` for handoff.
 
-Every publication or publication-preview response MUST say explicitly that the complete pair remains freely revisable through the same ordinary atomic `write` operation until successful Linear handoff. It MUST also state that authoring creates no task graph, checkpoint, branch, worktree, persistent harness goal, seal, implementation change or other hidden lifecycle state.
+Every publication or publication-preview response MUST say explicitly that initial publication and every pre-handoff revision use one serialized atomic direct-main `write` transaction in the canonical `project-goals/main` checkout, followed by an immediate push and `source.py validate` of the exact published pair. It MUST say that successful validation reports the exact source commit and fingerprint, and that the complete pair remains freely revisable through that same ordinary transaction until successful Linear handoff. It MUST also state that authoring creates no task graph, checkpoint, branch, worktree, persistent harness goal, seal, implementation change or other hidden lifecycle state.
 
 ## Revision Boundary
 
@@ -36,6 +36,8 @@ After handoff, the Linear Project and its issues own operational changes. The di
 
 ## Required Handoff
 
+Render this identity block only after `write` and `validate` succeed. A pre-approval or publication-preview response MUST NOT render it with placeholder, pending, or `not created` commit/fingerprint values.
+
 Report one contiguous source identity block:
 
 ```text
@@ -45,6 +47,7 @@ Goal: <common-prefix>/goal.md
 Specification: <common-prefix>/spec.md
 Source commit: <full-git-commit>
 Source fingerprint: <sha256>
+Publication: one serialized atomic direct-main write transaction for initial authoring and every pre-handoff revision
 Next owner: linear-agent-tools:task-graph-create in a fresh Codex thread
 ```
 

@@ -9,6 +9,8 @@ Execute only one `task:implementation` issue. Every `Todo` or `Rework` attempt s
 
 Read `../../references/manual-workflow.md` and the complete issue, relations, comments, exact published source revision and relevant sections, repository instructions, Git/PR state and current verification evidence.
 
+Every preview or handoff response MUST state that one exact issue process-lifetime host-local attempt guard is acquired before dispatch or status mutation, held continuously through nested attempt cleanup and the final Linear provider readback, and released only by process exit after that boundary.
+
 ## Start
 
 1. Set `LINEAR_AGENT_WORKSPACE_ROOT` to the explicit user workspace. Start `../../lib/task_workspace/tool/attempt.py hold --issue-identifier <exact-identifier>` as the exact issue process-lifetime host-local guard, require its initial `status=held` JSON, and keep the same process alive through the complete attempt, nested attempt-resource cleanup and final Linear read-back. A nonzero exit means another local attempt owns the issue; do not continue. Do not describe or perform an earlier explicit unlock: process exit after final read-back is the release mechanism for the kernel lock.
