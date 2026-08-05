@@ -5,10 +5,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 import re
+from urllib.parse import urlsplit
 
 from task_graph.model import TaskGraphError, TaskRole
 from task_graph.publication import GraphPublicationView, IssuePublication
 
+_ISSUE_IDENTIFIER_PATTERN = re.compile(r"[A-Z][A-Z0-9]*-[1-9][0-9]*")
+_ISSUE_REFERENCE_ELEMENT_PATTERN = re.compile(
+    r'<issue id="(?P<id>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})" '
+    r'href="(?P<href>[^"\x00\r\n]+)">(?P<identifier>[A-Z][A-Z0-9]*-[1-9][0-9]*)</issue>'
+)
 _KNOWN_ISSUE_STATUS_SET = frozenset(
     {
         "Backlog",
@@ -22,13 +28,70 @@ _KNOWN_ISSUE_STATUS_SET = frozenset(
     }
 )
 _KNOWN_PROJECT_STATUS_SET = frozenset({"Planned", "In Progress", "Completed", "Canceled"})
+_LINEAR_SLUG_PATTERN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 _NODE_KEY_PATTERN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 _PROJECT_KEY_PATTERN = re.compile(
     r"linear-agent-tools:v1:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}:[0-9a-f]{64}"
 )
 _ROLE_VALUE_SET = frozenset(item.value for item in TaskRole)
 _UUID_PATTERN = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
-_ISSUE_IDENTIFIER_PATTERN = re.compile(r"[A-Z][A-Z0-9]*-[1-9][0-9]*")
+
+
+def match_issue_description(actual_description: str, desired_description: str) -> bool:
+    """Match exact provider content after strict Linear issue-reference enrichment.
+
+    Args:
+        actual_description: Current description returned by Linear.
+        desired_description: Exact provider-rendered description.
+
+    Returns:
+        Whether only canonical Linear issue-reference elements differ.
+    """
+
+    if actual_description == desired_description:
+        return True
+    normalized_part_list: list[str] = []
+    previous_end_index = 0
+    for match in _ISSUE_REFERENCE_ELEMENT_PATTERN.finditer(actual_description):
+        href = match.group("href")
+        identifier = match.group("identifier")
+        parsed = urlsplit(href)
+        path_part_list = parsed.path.split("/")
+        if (
+            parsed.scheme != "https"
+            or parsed.netloc != "linear.app"
+            or parsed.query
+            or parsed.fragment
+            or len(path_part_list) != 5
+            or path_part_list[0] != ""
+            or _LINEAR_SLUG_PATTERN.fullmatch(path_part_list[1]) is None
+            or path_part_list[2] != "issue"
+            or path_part_list[3] != identifier
+            or _ISSUE_IDENTIFIER_PATTERN.fullmatch(path_part_list[3]) is None
+            or _LINEAR_SLUG_PATTERN.fullmatch(path_part_list[4]) is None
+            or href != f"https://linear.app/{path_part_list[1]}/issue/{identifier}/{path_part_list[4]}"
+        ):
+            return False
+        normalized_part_list.extend(
+            (
+                actual_description[previous_end_index : match.start()],
+                identifier,
+            )
+        )
+        previous_end_index = match.end()
+    if not normalized_part_list:
+        return False
+    normalized_part_list.append(actual_description[previous_end_index:])
+    return "".join(normalized_part_list) == desired_description
+
+
+def _issue_identity_require(value: object) -> None:
+    """Accept the exact issue identity exposed by the official Linear MCP."""
+
+    if not isinstance(value, str) or (
+        _UUID_PATTERN.fullmatch(value) is None and _ISSUE_IDENTIFIER_PATTERN.fullmatch(value) is None
+    ):
+        raise TaskGraphError("Remote issue ID must be one lowercase UUID or canonical Linear identifier")
 
 
 def _node_key_require(value: object, *, label: str) -> None:
@@ -50,15 +113,6 @@ def _uuid_require(value: object, *, label: str) -> None:
 
     if not isinstance(value, str) or _UUID_PATTERN.fullmatch(value) is None:
         raise TaskGraphError(f"{label} must be one lowercase UUID")
-
-
-def _issue_identity_require(value: object) -> None:
-    """Accept the exact issue identity exposed by the official Linear MCP."""
-
-    if not isinstance(value, str) or (
-        _UUID_PATTERN.fullmatch(value) is None and _ISSUE_IDENTIFIER_PATTERN.fullmatch(value) is None
-    ):
-        raise TaskGraphError("Remote issue ID must be one lowercase UUID or canonical Linear identifier")
 
 
 class PublicationPhase(StrEnum):
@@ -127,7 +181,7 @@ class RemoteIssue:
     def delta_owned_fields_require(self, desired: IssuePublication) -> None:
         """Reject a delta stable-key collision or unsupported lifecycle."""
 
-        if self.title != desired.title or self.description != desired.description:
+        if self.title != desired.title or not match_issue_description(self.description, desired.description):
             raise TaskGraphError(f"Delta issue {desired.node_key} conflicts with its approved stable key")
         if self.status_name not in _KNOWN_ISSUE_STATUS_SET:
             raise TaskGraphError(f"Delta issue {desired.node_key} has an unsupported lifecycle status")
@@ -175,7 +229,7 @@ class RemoteIssue:
     def staged_owned_fields_require(self, desired: IssuePublication) -> None:
         """Reject an initial stable-key collision with other owned content."""
 
-        if self.title != desired.title or self.description != desired.description:
+        if self.title != desired.title or not match_issue_description(self.description, desired.description):
             raise TaskGraphError(f"Issue {desired.node_key} conflicts with its stable source key")
         if self.status_name not in {"Backlog", "Todo"}:
             raise TaskGraphError(f"Staged issue {desired.node_key} has an invalid pre-activation status")

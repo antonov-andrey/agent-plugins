@@ -23,11 +23,17 @@ from task_graph.reconciliation.model import (
     RemoteDocument,
     RemoteIssue,
     RemoteProject,
+    match_issue_description,
 )
 
 TEAM_ID = "33333333-3333-4333-8333-333333333333"
 ASSIGNEE_ID = "22222222-2222-4222-8222-222222222222"
 PROJECT_ID = "44444444-4444-4444-8444-444444444444"
+ISSUE_REFERENCE = (
+    '<issue id="427cdaa8-807c-483d-8337-cadcb7fd5545" '
+    'href="https://linear.app/antonov-andrey/issue/AND-29/review-task-review-exclusive-attempt-boundary">'
+    "AND-29</issue>"
+)
 
 
 def _verification(key: str, kind: str = "targeted") -> dict[str, object]:
@@ -199,6 +205,127 @@ def test_remote_issue_accepts_the_canonical_identifier_returned_by_linear_mcp() 
     )
 
     assert issue.id == "AND-5"
+
+
+def test_issue_description_accepts_only_canonical_linear_issue_reference_enrichment() -> None:
+    """Linear may enrich one plain identifier without changing provider-owned meaning."""
+
+    desired = "Repeat AND-29 from scratch."
+
+    assert match_issue_description(desired.replace("AND-29", ISSUE_REFERENCE), desired)
+
+
+@pytest.mark.parametrize(
+    "issue_reference",
+    [
+        '<issue id="427CDAA8-807C-483D-8337-CADCB7FD5545" '
+        'href="https://linear.app/antonov-andrey/issue/AND-29/review-task-review-exclusive-attempt-boundary">'
+        "AND-29</issue>",
+        '<issue id="not-a-uuid" '
+        'href="https://linear.app/antonov-andrey/issue/AND-29/review-task-review-exclusive-attempt-boundary">'
+        "AND-29</issue>",
+        ISSUE_REFERENCE.replace("https://", "http://"),
+        ISSUE_REFERENCE.replace("linear.app", "example.com"),
+        ISSUE_REFERENCE.replace("linear.app", "linear.app:443"),
+        ISSUE_REFERENCE.replace("/issue/", "/issues/"),
+        ISSUE_REFERENCE.replace("/AND-29/", "/AND-30/"),
+        ISSUE_REFERENCE.replace(">AND-29</issue>", ">AND-30</issue>"),
+        ISSUE_REFERENCE.replace(" id=", ' data-kind="issue" id='),
+        ISSUE_REFERENCE.replace(' id="427c', ' href="https://linear.app/example/issue/AND-29/example" id="427c'),
+        "<strong>AND-29</strong>",
+        "<issue>AND-29</issue>",
+    ],
+)
+def test_issue_description_rejects_noncanonical_or_mismatched_enrichment(issue_reference: str) -> None:
+    """Malformed, foreign, mismatched and arbitrary HTML remain real description drift."""
+
+    desired = "Repeat AND-29 from scratch."
+
+    assert not match_issue_description(desired.replace("AND-29", issue_reference), desired)
+    assert not match_issue_description(
+        desired.replace("AND-29", ISSUE_REFERENCE).replace("from scratch", "with changed scope"),
+        desired,
+    )
+
+
+def test_initial_issue_readback_accepts_enrichment_during_staging_and_activation() -> None:
+    """Initial recovery and exact activation readback share the strict enrichment comparison."""
+
+    payload = _graph_payload()
+    payload["node_list"][0]["outcome"] = "Repeat AND-29 from scratch."
+    graph = TaskGraph.from_payload(payload)
+    staged = _remote(graph, document=True, issues=True)
+    staged = replace(
+        staged,
+        issue_list=[
+            (
+                replace(item, description=item.description.replace("AND-29", ISSUE_REFERENCE))
+                if item.node_key == "implementation"
+                else item
+            )
+            for item in staged.issue_list
+        ],
+    )
+
+    assert TaskGraphReconciler(graph).plan(staged).phase is PublicationPhase.RELATIONS
+
+    activated = _remote(
+        graph,
+        document=True,
+        issues=True,
+        relations=True,
+        activated=True,
+        project_status="In Progress",
+    )
+    activated = replace(
+        activated,
+        issue_list=[
+            (
+                replace(item, description=item.description.replace("AND-29", ISSUE_REFERENCE))
+                if item.node_key == "implementation"
+                else item
+            )
+            for item in activated.issue_list
+        ],
+    )
+    assert TaskGraphReconciler(graph).activation_readback_require(activated).activation_ready
+
+
+def test_delta_issue_readback_accepts_canonical_issue_reference_enrichment() -> None:
+    """Delta stable-key recovery accepts the same exact provider enrichment."""
+
+    graph = TaskGraph.from_payload(_graph_payload())
+    payload = _delta_payload(graph)
+    payload["provenance"]["decision"] = "Repeat AND-29 from scratch."
+    delta = TaskGraphDelta.from_payload(payload)
+    view = DeltaPublicationView.from_delta(delta)
+    remote = _delta_receipt_add(
+        delta,
+        _remote(
+            graph,
+            document=True,
+            issues=True,
+            relations=True,
+            activated=True,
+            project_status="In Progress",
+        ),
+    )
+    remediation = RemoteIssue(
+        id="70000000-0000-4000-8000-000000000001",
+        node_key="remediation",
+        title=view.issue_list[0].title,
+        description=view.issue_list[0].description.replace("AND-29", ISSUE_REFERENCE),
+        status_name="Backlog",
+        label_name_list=[],
+        assignee_id="",
+        delegate_id="",
+        blocker_key_list=[],
+    )
+
+    assert (
+        TaskGraphDeltaReconciler(delta).plan(replace(remote, issue_list=[*remote.issue_list, remediation])).phase
+        is PublicationPhase.DELTA_RELATIONS
+    )
 
 
 def _delta_payload(graph: TaskGraph) -> dict[str, object]:
