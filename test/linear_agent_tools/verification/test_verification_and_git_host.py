@@ -802,6 +802,14 @@ def test_task_implement_behavior_invariant_requires_every_receipt_input_identity
     ):
         assert required_text in invariant["text"]
 
+    skill_text = (PLUGIN_ROOT / "skills" / "task-implement" / "SKILL.md").read_text(encoding="utf-8")
+    for required_text in (
+        "the separate receipt key binds that stable verification key itself",
+        "every exact codec-rendered verification receipt comment was published before candidate publication",
+        "a handoff that only says receipts were created, is insufficient",
+    ):
+        assert required_text in skill_text
+
 
 @pytest.mark.parametrize(
     ("replacement", "message"),

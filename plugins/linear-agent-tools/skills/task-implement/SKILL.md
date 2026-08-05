@@ -35,6 +35,7 @@ Every preview or handoff response MUST state that one exact issue process-lifeti
   - Preserve the exact machine-readable result as one independently readable immutable provider artifact.
   - Use a durable canonical HTTPS provider URL without credentials, ports, query strings, or fragments.
   - Publish the exact codec-rendered receipt comment; its JSON slash escapes preserve that URL value across Linear readback instead of exposing an autolink target that Linear can replace with a presigned URL.
+  - A receipt-bearing handoff is invalid unless it explicitly reports that every exact codec-rendered receipt comment was published.
   - The receipt key binds the verification key, outcome, UTC completion instant, exact artifact URL, and artifact content SHA-256.
   - Create and evaluate only the current receipt schema through `scripts/receipt.py`.
   - An evidence candidate input carries the complete current-schema receipt by evidence kind. `../../lib/verification/tool/evidence.py candidate` validates each receipt and derives the compact candidate identity only from its receipt key; a stable verification key is never an evidence approval identity.
@@ -44,7 +45,14 @@ Every preview or handoff response MUST state that one exact issue process-lifeti
 
 ## Handoff
 
-Every receipt-bearing preview or handoff MUST explicitly state that the stable verification key binds the source fingerprint, direct argv, canonical absolute working directory, corpus content, model identity, model configuration, applicable environment and release identity, plus each checkout's canonical absolute path, roles, repository URL, full commit, recursive submodules and dependency locks. It MUST distinguish the receipt key, which binds that verification key plus the outcome, UTC completion instant, exact artifact URL and artifact content SHA-256. It MUST also state that the durable canonical HTTPS artifact URL contains no credentials, port, query string or fragment. A generic claim that a receipt binds inputs and evidence is insufficient.
+Every receipt-bearing preview or handoff MUST explicitly state all of these facts:
+
+- the stable verification key binds the source fingerprint, exact direct argv, canonical absolute working directory, corpus content, model identity, model configuration, applicable environment and release identity, plus each checkout's canonical absolute path, roles, repository URL, full commit, recursive submodules and dependency locks;
+- the separate receipt key binds that stable verification key itself plus the outcome, UTC completion instant, exact artifact URL and artifact content SHA-256;
+- every exact codec-rendered verification receipt comment was published before candidate publication; and
+- each durable canonical HTTPS artifact URL contains no credentials, port, query string or fragment.
+
+A generic claim that a receipt binds inputs and evidence, or a handoff that only says receipts were created, is insufficient.
 
 Before publishing the attempt result, invoke `task-cleanup` for all current `attempt`-lifetime resources. Build the exact code or evidence candidate fingerprint with `../../lib/verification/tool/evidence.py candidate`. Evidence delivery supplies a map of evidence kind to complete current-schema verification receipt; the tool validates the derived receipt key and emits the compact map of evidence kind to receipt key that Human Review approves. Never substitute the stable verification key. Build the concise structured attempt comment with its `attempt` operation: attempt ID, role, delivery kind, UTC start/end, outcome, delivery-applicable commit set, receipt hit/miss counts, external wait duration, token usage only when directly exposed, candidate fingerprint, PR/CI links and bounded evidence. Publish that exact comment to Linear. Exclude prompts, secrets and raw logs; delete transient input files.
 
