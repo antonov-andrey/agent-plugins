@@ -158,6 +158,8 @@ class AttemptSummary:
             raise VerificationReceiptError("Attempt candidate identity has another shape")
         if have_candidate != (self.candidate_identity is not None):
             raise VerificationReceiptError("Attempt candidate identity is incompatible with its outcome")
+        if have_candidate and self.candidate_identity.delivery_kind != self.delivery_kind:
+            raise VerificationReceiptError("Attempt delivery kind differs from its candidate identity")
         if have_candidate and self.candidate_identity.fingerprint() != self.candidate_fingerprint:
             raise VerificationReceiptError("Attempt candidate fingerprint differs from its persisted identity")
         if not have_candidate and self.candidate_fingerprint:

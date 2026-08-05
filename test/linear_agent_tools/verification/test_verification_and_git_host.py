@@ -624,7 +624,7 @@ def test_shared_evidence_cli_creates_and_reuses_the_exact_linear_comment_shape(t
         capture_output=True,
         text=True,
     )
-    comment_path.write_text(created.stdout.rstrip("\n"), encoding="utf-8")
+    comment_path.write_text(created.stdout, encoding="utf-8")
     reused = subprocess.run(
         [
             str(script),
@@ -642,6 +642,7 @@ def test_shared_evidence_cli_creates_and_reuses_the_exact_linear_comment_shape(t
     assert reused.returncode == 0
     assert json.loads(reused.stdout)["reusable"] is True
     assert created.stdout.startswith("<!-- linear-agent-tools-verification:v4 -->")
+    assert created.stdout.endswith("```")
     assert "https://example.test/ci/1" not in created.stdout
     assert r"https:\/\/example.test\/ci\/1" in created.stdout
 
@@ -1025,6 +1026,111 @@ def test_attempt_summary_rejects_commits_for_evidence_delivery() -> None:
             candidate_fingerprint="",
             evidence_url_list=[],
         )
+
+
+@pytest.mark.parametrize(
+    ("role_label", "delivery_kind", "changed_commit_by_repository_map", "candidate_identity"),
+    [
+        (
+            "task:review",
+            "evidence",
+            {},
+            CandidateIdentity(
+                delivery_kind="code",
+                evidence_receipt_key_by_kind_map={},
+                pull_request_head_by_url_map={
+                    "https://github.com/antonov-andrey/example/pull/17": COMMIT_ONE,
+                },
+            ),
+        ),
+        (
+            "task:implementation",
+            "code",
+            {"antonov-andrey/example": COMMIT_ONE},
+            CandidateIdentity(
+                delivery_kind="evidence",
+                evidence_receipt_key_by_kind_map={"review": "a" * 64},
+                pull_request_head_by_url_map={},
+            ),
+        ),
+    ],
+)
+def test_attempt_summary_rejects_candidate_from_another_delivery_surface(
+    role_label: str,
+    delivery_kind: str,
+    changed_commit_by_repository_map: dict[str, str],
+    candidate_identity: CandidateIdentity,
+) -> None:
+    """A code identity cannot approve evidence and receipt evidence cannot approve code."""
+
+    payload = {
+        "schema_version": 2,
+        "attempt_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "issue_identifier": "AND-17",
+        "role_label": role_label,
+        "delivery_kind": delivery_kind,
+        "started_at": "2026-08-04T12:00:00Z",
+        "completed_at": "2026-08-04T12:30:00Z",
+        "outcome": "human-review",
+        "changed_commit_by_repository_map": changed_commit_by_repository_map,
+        "receipt_hit_count": 0,
+        "receipt_miss_count": 1,
+        "external_wait_seconds": 0.0,
+        "candidate_identity": candidate_identity.payload(),
+        "candidate_fingerprint": candidate_identity.fingerprint(),
+        "evidence_url_list": ["https://example.test/evidence/17"],
+    }
+
+    with pytest.raises(VerificationReceiptError, match="delivery kind differs"):
+        AttemptSummary.from_payload(payload)
+    comment = ATTEMPT_COMMENT_CODEC.render(payload)
+    with pytest.raises(VerificationReceiptError, match="delivery kind differs"):
+        AttemptSummary.from_payload(ATTEMPT_COMMENT_CODEC.payload_parse(comment))
+
+
+def test_shared_evidence_cli_rejects_candidate_from_another_delivery_surface(tmp_path: Path) -> None:
+    """The public attempt boundary rejects a code identity on an evidence attempt."""
+
+    script = LIBRARY_ROOT / "verification" / "tool" / "evidence.py"
+    input_path = tmp_path / "attempt.json"
+    candidate_identity = CandidateIdentity(
+        delivery_kind="code",
+        evidence_receipt_key_by_kind_map={},
+        pull_request_head_by_url_map={"https://github.com/antonov-andrey/example/pull/17": COMMIT_ONE},
+    )
+    input_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "attempt_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                "issue_identifier": "AND-17",
+                "role_label": "task:review",
+                "delivery_kind": "evidence",
+                "started_at": "2026-08-04T12:00:00Z",
+                "completed_at": "2026-08-04T12:30:00Z",
+                "outcome": "human-review",
+                "changed_commit_by_repository_map": {},
+                "receipt_hit_count": 0,
+                "receipt_miss_count": 1,
+                "external_wait_seconds": 0.0,
+                "candidate_identity": candidate_identity.payload(),
+                "candidate_fingerprint": candidate_identity.fingerprint(),
+                "evidence_url_list": ["https://example.test/evidence/17"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    rendered = subprocess.run(
+        [str(script), "attempt", "--input", str(input_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert rendered.returncode == 2
+    assert rendered.stdout == ""
+    assert "delivery kind differs" in rendered.stderr
 
 
 def test_local_phase_baseline_requires_every_phase_and_round_trips() -> None:

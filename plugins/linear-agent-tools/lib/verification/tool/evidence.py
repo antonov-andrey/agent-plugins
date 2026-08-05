@@ -126,7 +126,7 @@ def main(argv: list[str] | None = None) -> int:
                 evidence_url=args.evidence_url,
                 evidence_content_sha256=args.evidence_content_sha256,
             )
-            print(VERIFICATION_RECEIPT_COMMENT_CODEC.render(receipt.payload()))
+            sys.stdout.write(VERIFICATION_RECEIPT_COMMENT_CODEC.render(receipt.payload()))
         elif args.command == "receipt-reuse":
             current = VerificationInput.from_payload(payload)
             receipt = VerificationReceipt.from_payload(
@@ -160,11 +160,15 @@ def main(argv: list[str] | None = None) -> int:
                 )
             )
         elif args.command == "attempt":
-            print(ATTEMPT_COMMENT_CODEC.render(AttemptSummary.from_payload(payload).payload()))
+            sys.stdout.write(ATTEMPT_COMMENT_CODEC.render(AttemptSummary.from_payload(payload).payload()))
         elif args.command == "baseline":
-            print(LOCAL_PHASE_BASELINE_COMMENT_CODEC.render(LocalPhaseBaseline.from_payload(payload).payload()))
+            sys.stdout.write(
+                LOCAL_PHASE_BASELINE_COMMENT_CODEC.render(LocalPhaseBaseline.from_payload(payload).payload())
+            )
         else:
-            print(TASK_WORKSPACE_BASELINE_COMMENT_CODEC.render(TaskWorkspaceBaseline.from_payload(payload).payload()))
+            sys.stdout.write(
+                TASK_WORKSPACE_BASELINE_COMMENT_CODEC.render(TaskWorkspaceBaseline.from_payload(payload).payload())
+            )
         return 0
     except VerificationReceiptError as error:
         print(str(error), file=sys.stderr)

@@ -1,6 +1,6 @@
 ---
 name: workflow-container-developer
-description: Use only when changing workflow-container code, contracts, runtimes, integration, VPN or browser capabilities, DBOS steps, prompts, or artifacts. Never use for input-only JSON preparation, validation, export, or migration; those belong exclusively to workflow-container-input-create.
+description: Develop, refactor, or provide owner context while auditing workflow-container code, contracts, runtimes, integration, VPN or browser capabilities, DBOS steps, prompts, or artifacts. Never use for input-only JSON preparation, validation, export, or migration; those belong exclusively to workflow-container-input-create.
 ---
 
 # Workflow Container Developer
