@@ -7,7 +7,8 @@ from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import PurePosixPath
-from urllib.parse import urlsplit
+import re
+from urllib.parse import urlsplit, urlunsplit
 
 from verification._validation import (
     COMMIT_PATTERN,
@@ -19,6 +20,13 @@ from verification._validation import (
     text_by_text_map_parse,
     utc_validate,
 )
+
+_EVIDENCE_URL_HOST_PATTERN = re.compile(
+    r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+)
+_EVIDENCE_URL_PATH_PATTERN = re.compile(r"/(?:[A-Za-z0-9._~!$&'()*+,;=:@/-]|%[0-9A-F]{2})*")
+_URI_PERCENT_ENCODING_PATTERN = re.compile(r"%([0-9A-F]{2})")
+_URI_UNRESERVED_CHARACTER_SET = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
 
 
 def _absolute_path_validate(value: object, *, label: str) -> str:
@@ -32,10 +40,16 @@ def _absolute_path_validate(value: object, *, label: str) -> str:
         Validated path.
     """
 
-    path = PurePosixPath(single_line_validate(value, label=label))
-    if not path.is_absolute() or str(path) != value or any(part in {".", ".."} for part in path.parts):
+    path_text = single_line_validate(value, label=label)
+    path = PurePosixPath(path_text)
+    if (
+        not path.is_absolute()
+        or path_text.startswith("//")
+        or str(path) != path_text
+        or any(part in {".", ".."} for part in path.parts)
+    ):
         raise VerificationReceiptError(f"{label} must be a canonical absolute POSIX path")
-    return value
+    return path_text
 
 
 def _evidence_url_validate(value: object) -> str:
@@ -53,13 +67,25 @@ def _evidence_url_validate(value: object) -> str:
         parsed = urlsplit(evidence_url)
     except ValueError as error:
         raise VerificationReceiptError("Verification evidence URL must be one canonical HTTPS provider URL") from error
+    hostname = parsed.hostname
+    canonical_url = "" if hostname is None else urlunsplit(("https", hostname, parsed.path, "", ""))
     if (
-        parsed.scheme != "https"
-        or not parsed.hostname
-        or parsed.netloc != parsed.hostname
+        not evidence_url.isascii()
+        or parsed.scheme != "https"
+        or hostname is None
+        or len(hostname) > 253
+        or _EVIDENCE_URL_HOST_PATTERN.fullmatch(hostname) is None
+        or parsed.netloc != hostname
         or not parsed.path
+        or _EVIDENCE_URL_PATH_PATTERN.fullmatch(parsed.path) is None
+        or any(part in {".", ".."} for part in parsed.path.split("/"))
         or parsed.query
         or parsed.fragment
+        or evidence_url != canonical_url
+        or any(
+            chr(int(match.group(1), 16)) in _URI_UNRESERVED_CHARACTER_SET
+            for match in _URI_PERCENT_ENCODING_PATTERN.finditer(parsed.path)
+        )
     ):
         raise VerificationReceiptError("Verification evidence URL must be one canonical HTTPS provider URL")
     return evidence_url

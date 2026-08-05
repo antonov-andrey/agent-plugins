@@ -31,6 +31,29 @@ def issue_identifier_validate(value: str) -> str:
     return value
 
 
+def _absolute_path_text_validate(value: str, *, label: str) -> str:
+    """Return one canonical absolute host path identity.
+
+    Args:
+        value: Candidate path text.
+        label: Diagnostic owner label.
+
+    Returns:
+        Validated path text.
+    """
+
+    path_text = _single_line(value, label=label)
+    path = Path(path_text)
+    if (
+        not path.is_absolute()
+        or path_text.startswith("//")
+        or str(path) != path_text
+        or any(part in {".", ".."} for part in path.parts)
+    ):
+        raise TaskWorkspaceError(f"{label} must be one canonical absolute path")
+    return path_text
+
+
 def _single_line(value: str, *, label: str) -> str:
     """Return one non-empty single-line string.
 
@@ -56,8 +79,7 @@ class WorkspaceConfig:
     def __post_init__(self) -> None:
         """Validate one existing absolute directory without searching ancestors."""
 
-        if not self.root.is_absolute():
-            raise TaskWorkspaceError("LINEAR_AGENT_WORKSPACE_ROOT must be an absolute path")
+        _absolute_path_text_validate(str(self.root), label="LINEAR_AGENT_WORKSPACE_ROOT")
         try:
             resolved = self.root.resolve(strict=True)
         except OSError as error:
@@ -82,6 +104,7 @@ class WorkspaceConfig:
         value = environment_by_name_map["LINEAR_AGENT_WORKSPACE_ROOT"]
         if value == "":
             raise TaskWorkspaceError("LINEAR_AGENT_WORKSPACE_ROOT is present but empty")
+        _absolute_path_text_validate(value, label="LINEAR_AGENT_WORKSPACE_ROOT")
         return cls(Path(value))
 
 
@@ -281,10 +304,10 @@ class RepositoryWorkspaceState:
             ("origin identity", self.origin_identity),
             ("base branch", self.base_branch),
             ("branch name", self.branch_name),
-            ("main root", self.main_root),
-            ("task root", self.task_root),
         ):
             _single_line(value, label=label)
+        _absolute_path_text_validate(self.main_root, label="Workspace main root")
+        _absolute_path_text_validate(self.task_root, label="Workspace task root")
         if _COMMIT_PATTERN.fullmatch(self.baseline_commit) is None:
             raise TaskWorkspaceError("Workspace baseline must be one full Git commit")
         if _SHA256_PATTERN.fullmatch(self.manifest_sha256) is None:

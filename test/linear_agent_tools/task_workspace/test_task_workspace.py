@@ -31,6 +31,7 @@ from task_graph.model import ResourceDeclaration, ResourceLifetime
 from task_workspace.lock import IssueAttemptLock, IssueWorkspaceLock
 from task_workspace.model import (
     RepositoryRequest,
+    RepositoryWorkspaceState,
     TaskWorkspaceError,
     WorkspaceConfig,
     WorkspaceRequest,
@@ -519,6 +520,29 @@ def test_attempt_guard_holds_issue_ownership_for_its_process_lifetime(
 
     with IssueAttemptLock(WorkspaceConfig(workspace.resolve()), "AND-104"):
         pass
+
+
+def test_workspace_and_lock_path_identities_reject_equivalent_spellings(tmp_path: Path) -> None:
+    """External workspace, lock, and recovery paths require one canonical spelling."""
+
+    workspace_path = str(tmp_path.resolve())
+    for substituted_path in (
+        "//" + workspace_path.lstrip("/"),
+        workspace_path + "/",
+        str(tmp_path.parent.resolve()) + "/./" + tmp_path.name,
+    ):
+        with pytest.raises(TaskWorkspaceError, match="canonical absolute path"):
+            WorkspaceConfig.from_environment({"LINEAR_AGENT_WORKSPACE_ROOT": substituted_path})
+
+    repository_fixture = _repository_create(tmp_path)
+    state = TaskWorkspaceTransaction(WorkspaceConfig(tmp_path.resolve())).prepare(
+        _request(repository_fixture.remote, issue="AND-124")
+    )[0]
+    for field_name in ("main_root", "task_root"):
+        payload = state.payload()
+        payload[field_name] = "//" + str(payload[field_name]).lstrip("/")
+        with pytest.raises(TaskWorkspaceError, match="canonical absolute path"):
+            RepositoryWorkspaceState.from_payload(payload)
 
 
 def test_issue_lock_rejects_attacker_symlink_parent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

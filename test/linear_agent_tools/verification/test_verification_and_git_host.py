@@ -212,15 +212,27 @@ def test_checkout_list_represents_two_revisions_of_one_repository_without_collis
     ("payload_path", "value", "message"),
     [
         (("working_directory",), "workspace/example", "absolute POSIX"),
+        (("working_directory",), "//workspace/example/.worktree/and-17", "absolute POSIX"),
         (("checkout_list", 0, "path"), "/workspace/../example", "absolute POSIX"),
+        (("checkout_list", 0, "path"), "//workspace/example/.worktree/and-17", "absolute POSIX"),
         (
             ("checkout_list", 0, "recursive_submodule_commit_by_path_map"),
             {"../provider": COMMIT_ONE},
             "repository-relative POSIX",
         ),
         (
+            ("checkout_list", 0, "recursive_submodule_commit_by_path_map"),
+            {"module//provider": COMMIT_ONE},
+            "repository-relative POSIX",
+        ),
+        (
             ("checkout_list", 0, "dependency_lock_sha256_by_path_map"),
             {"/workspace/requirements-dev.txt": LOCK_ONE},
+            "repository-relative POSIX",
+        ),
+        (
+            ("checkout_list", 0, "dependency_lock_sha256_by_path_map"),
+            {"config/./requirements-dev.txt": LOCK_ONE},
             "repository-relative POSIX",
         ),
         (
@@ -297,6 +309,17 @@ def test_verification_identity_fields_reject_multiline_values(field_name: str, v
         VerificationInput.from_payload(payload)
 
 
+def test_verification_models_reject_double_root_path_substitution_directly() -> None:
+    """Direct model construction cannot create a second identity for one Linux path."""
+
+    current = _verification_input()
+
+    with pytest.raises(VerificationReceiptError, match="absolute POSIX"):
+        replace(current, working_directory="//workspace/example/.worktree/and-17")
+    with pytest.raises(VerificationReceiptError, match="absolute POSIX"):
+        replace(current.checkout_list[0], path="//workspace/example/.worktree/and-17")
+
+
 def test_receipt_normalizes_utc_and_rejects_naive_instant() -> None:
     """Receipt instants preserve the exact UTC moment and reject timezone absence."""
 
@@ -367,9 +390,22 @@ def test_receipt_rejects_evidence_identity_substitution(
     [
         LINEAR_ATTACHMENT_URL + "?signature=short-lived",
         LINEAR_ATTACHMENT_URL + "#download",
+        LINEAR_ATTACHMENT_URL + "?",
+        LINEAR_ATTACHMENT_URL + "#",
         "http://uploads.linear.app/workspace/asset/artifact",
+        "HTTPS://uploads.linear.app/workspace/asset/artifact",
+        "https://uploads.linear.app./workspace/asset/artifact",
         "https://user@uploads.linear.app/workspace/asset/artifact",
         "https://uploads.linear.app:443/workspace/asset/artifact",
+        "https://uploads.linear.app/workspace/../asset/artifact",
+        "https://uploads.linear.app/workspace/asset/not an artifact",
+        "https://uploads.linear.app/workspace/asset/%61rtifact",
+        "https://uploads.linear.app/workspace/asset/%2fartifact",
+        "https://uploads.linear.app/workspace/asset/%ZZ",
+        "https://uploads.linear.app/workspace/asset/artifact\\download",
+        "https://uploads.linear.app/workspace/asset/artifact\tother",
+        "https://uploads.linear.app/workspace/asset/артефакт",
+        " https://uploads.linear.app/workspace/asset/artifact",
     ],
 )
 def test_receipt_rejects_noncanonical_evidence_url(evidence_url: str) -> None:
@@ -382,6 +418,45 @@ def test_receipt_rejects_noncanonical_evidence_url(evidence_url: str) -> None:
             evidence_url=evidence_url,
             evidence_content_sha256=EVIDENCE_ONE,
         )
+
+
+def test_receipt_accepts_exact_canonical_percent_encoded_path() -> None:
+    """A canonical encoded reserved path byte remains one exact artifact identity."""
+
+    evidence_url = LINEAR_ATTACHMENT_URL + "%2Fidentity"
+    receipt = VerificationReceipt.from_input(
+        _verification_input(),
+        outcome="passed",
+        evidence_url=evidence_url,
+        evidence_content_sha256=EVIDENCE_ONE,
+    )
+
+    assert receipt.evidence_url == evidence_url
+
+
+@pytest.mark.parametrize(
+    "evidence_url",
+    [
+        LINEAR_ATTACHMENT_URL + "?",
+        LINEAR_ATTACHMENT_URL + "#",
+        "https://uploads.linear.app/workspace/asset/not an artifact",
+    ],
+)
+def test_receipt_comment_parse_rejects_noncanonical_evidence_url(evidence_url: str) -> None:
+    """A provider comment cannot restore a malformed artifact identity as one receipt."""
+
+    receipt = VerificationReceipt.from_input(
+        _verification_input(),
+        outcome="passed",
+        evidence_url=LINEAR_ATTACHMENT_URL,
+        evidence_content_sha256=EVIDENCE_ONE,
+    )
+    payload = receipt.payload()
+    payload["evidence_url"] = evidence_url
+    rendered = VERIFICATION_RECEIPT_COMMENT_CODEC.render(payload)
+
+    with pytest.raises(VerificationReceiptError, match="canonical HTTPS provider URL"):
+        VerificationReceipt.from_payload(VERIFICATION_RECEIPT_COMMENT_CODEC.payload_parse(rendered))
 
 
 def test_receipt_comment_protects_canonical_evidence_url_from_provider_rewrite() -> None:
@@ -445,6 +520,93 @@ def test_receipt_cli_reuses_the_exact_linear_comment_shape(tmp_path: Path) -> No
     assert created.stdout.startswith("<!-- linear-agent-tools-verification:v3 -->")
     assert "https://example.test/ci/1" not in created.stdout
     assert r"https:\/\/example.test\/ci\/1" in created.stdout
+
+
+@pytest.mark.parametrize(
+    "evidence_url",
+    [
+        LINEAR_ATTACHMENT_URL + "?",
+        LINEAR_ATTACHMENT_URL + "#",
+        "https://uploads.linear.app/workspace/asset/not an artifact",
+    ],
+)
+def test_receipt_cli_rejects_noncanonical_evidence_url(tmp_path: Path, evidence_url: str) -> None:
+    """The receipt CLI refuses to issue a reusable comment for a malformed URL."""
+
+    script = PLUGIN_ROOT / "skills" / "task-implement" / "scripts" / "receipt.py"
+    input_path = tmp_path / "input.json"
+    input_path.write_text(json.dumps(_verification_input().payload()), encoding="utf-8")
+
+    created = subprocess.run(
+        [
+            str(script),
+            "create",
+            "--input",
+            str(input_path),
+            "--outcome",
+            "passed",
+            "--evidence-url",
+            evidence_url,
+            "--evidence-content-sha256",
+            EVIDENCE_ONE,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert created.returncode == 2
+    assert "canonical HTTPS provider URL" in created.stderr
+    assert "linear-agent-tools-verification:v3" not in created.stdout
+
+
+@pytest.mark.parametrize(
+    ("input_working_directory", "comment_evidence_url"),
+    [
+        ("/workspace/example/.worktree/and-17", LINEAR_ATTACHMENT_URL + "?"),
+        ("/workspace/example/.worktree/and-17", LINEAR_ATTACHMENT_URL + "#"),
+        ("//workspace/example/.worktree/and-17", LINEAR_ATTACHMENT_URL),
+    ],
+)
+def test_receipt_cli_reuse_rejects_noncanonical_identity_substitution(
+    tmp_path: Path,
+    input_working_directory: str,
+    comment_evidence_url: str,
+) -> None:
+    """Reuse fails closed when comment or current path identity has another spelling."""
+
+    script = PLUGIN_ROOT / "skills" / "task-implement" / "scripts" / "receipt.py"
+    input_path = tmp_path / "input.json"
+    comment_path = tmp_path / "comment.md"
+    input_payload = _verification_input().payload()
+    input_payload["working_directory"] = input_working_directory
+    input_path.write_text(json.dumps(input_payload), encoding="utf-8")
+    receipt = VerificationReceipt.from_input(
+        _verification_input(),
+        outcome="passed",
+        evidence_url=LINEAR_ATTACHMENT_URL,
+        evidence_content_sha256=EVIDENCE_ONE,
+    )
+    receipt_payload = receipt.payload()
+    receipt_payload["evidence_url"] = comment_evidence_url
+    comment_path.write_text(VERIFICATION_RECEIPT_COMMENT_CODEC.render(receipt_payload), encoding="utf-8")
+
+    reused = subprocess.run(
+        [
+            str(script),
+            "reuse",
+            "--input",
+            str(input_path),
+            "--receipt-comment",
+            str(comment_path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert reused.returncode == 2
+    assert "reusable" not in reused.stdout
 
 
 def test_receipt_rejects_prior_schema_without_a_compatibility_branch() -> None:
