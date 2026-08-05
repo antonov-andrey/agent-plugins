@@ -17,7 +17,7 @@
 - Source systems such as `project-goals` own authoring before handoff and immutable Git provenance for the exact revision published at handoff.
 - Git administration state contains only local ownership and crash recovery.
 - Verification receipts use one current schema.
-  - The verification key binds the source, command, working directory, corpus, model, configuration, environment, and release inputs.
+  - The stable verification key binds the exact source fingerprint, exact direct argv, canonical absolute working directory, corpus content, model identity, model configuration, and applicable environment and release identity.
   - Each checkout binds its path, roles, repository URL, full commit, recursive submodules, and dependency locks.
   - Submodule and lock keys use canonical checkout-relative paths.
   - Repeated repository URLs remain separate checkout records.
