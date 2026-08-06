@@ -31,12 +31,13 @@ from task_graph.model import ResourceDeclaration, ResourceLifetime
 from task_workspace.lock import IssueAttemptLock, IssueWorkspaceLock
 from task_workspace.model import (
     RepositoryRequest,
+    RepositoryWorkspaceState,
     TaskWorkspaceError,
     WorkspaceConfig,
     WorkspaceRequest,
 )
 from task_workspace.bootstrap import BootstrapPlan, BootstrapResource
-from task_workspace.repository import WorkspaceRepository, origin_identity_get
+from task_workspace.repository import WorkspaceRepository
 from task_workspace.submodule import WorkspaceSubmoduleReader
 from task_workspace.transaction import TaskWorkspaceTransaction
 
@@ -297,6 +298,123 @@ def test_prepare_preserves_dirty_main_and_rework_adopts_existing_workspace(
     assert (task_root / "unfinished.txt").read_text(encoding="utf-8") == "preserve me\n"
 
 
+def test_v1_git_ssh_identity_migrates_for_prepare_validate_and_cleanup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The exact old ``git``-omitting identity remains recoverable through terminal cleanup."""
+
+    class GitHub:
+        @staticmethod
+        def matching_number_list(**_kwargs: object) -> list[int]:
+            return []
+
+    repository_fixture = _repository_create(tmp_path, resources=False)
+    root = repository_fixture.root
+    config = WorkspaceConfig(tmp_path.resolve())
+    initial_request = _request(repository_fixture.remote, issue="AND-125")
+    initial_state = TaskWorkspaceTransaction(config).prepare(initial_request)[0]
+    current_origin = "git@github.com:antonov-andrey/example.git"
+    current_identity = "ssh://git@github.com/antonov-andrey/example"
+    legacy_identity = "ssh://github.com/antonov-andrey/example"
+    _git(root, "remote", "set-url", "origin", current_origin)
+    request = WorkspaceRequest(
+        issue_identifier="AND-125",
+        repository_list=[RepositoryRequest(current_origin, "main", initial_state.baseline_commit)],
+    )
+    repository = WorkspaceRepository.from_config(config, request.repository_list[0])
+
+    def legacy_state_restore() -> None:
+        current_state = repository.state_read("AND-125")
+        assert current_state is not None
+        repository.state_write(replace(current_state, origin_identity=legacy_identity))
+
+    legacy_state_restore()
+    prepared = TaskWorkspaceTransaction(config).prepare(request)[0]
+    assert prepared.origin_identity == current_identity
+    assert repository.state_read("AND-125") == prepared
+
+    legacy_state_restore()
+    state_bytes_before_validate = repository.state_path_get("AND-125").read_bytes()
+    validated = TaskWorkspaceTransaction(config).validate(request)[0]
+    stored_after_validate = repository.state_read("AND-125")
+    assert validated.origin_identity == current_identity
+    assert stored_after_validate is not None
+    assert stored_after_validate.origin_identity == legacy_identity
+    assert repository.state_path_get("AND-125").read_bytes() == state_bytes_before_validate
+
+    legacy_state_restore()
+    monkeypatch.setattr(WorkspaceRepository, "fetch", lambda _self: None)
+    result = _task_cleanup_reconciler(
+        config,
+        github=GitHub(),  # type: ignore[arg-type]
+    ).cleanup(_canceled_cleanup_request(request, issue="AND-125"))
+
+    assert result.removed_worktree_count == 1
+    assert repository.state_read("AND-125") is None
+    assert not Path(initial_state.task_root).exists()
+
+
+def test_v1_file_identity_migrates_for_prepare_validate_and_cleanup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Encoded and symlink-resolved v1 file identities remain recoverable without validate writes."""
+
+    class GitHub:
+        @staticmethod
+        def matching_number_list(**_kwargs: object) -> list[int]:
+            return []
+
+    workspace = tmp_path / "workspace with space"
+    workspace.mkdir()
+    repository_fixture = _repository_create(workspace, resources=False)
+    root = repository_fixture.root
+    config = WorkspaceConfig(workspace.resolve())
+    initial_request = _request(repository_fixture.remote, issue="AND-126")
+    initial_state = TaskWorkspaceTransaction(config).prepare(initial_request)[0]
+    alias = workspace / "origin alias.git"
+    alias.symlink_to(repository_fixture.remote)
+    _git(root, "remote", "set-url", "origin", str(alias))
+    request = WorkspaceRequest(
+        issue_identifier="AND-126",
+        repository_list=[RepositoryRequest(str(alias), "main", initial_state.baseline_commit)],
+    )
+    repository = WorkspaceRepository.from_config(config, request.repository_list[0])
+    current_identity = alias.as_uri()
+    legacy_identity = f"file://{repository_fixture.remote.resolve(strict=False)}"
+    assert current_identity != legacy_identity
+
+    def legacy_state_restore() -> None:
+        current_state = repository.state_read("AND-126")
+        assert current_state is not None
+        repository.state_write(replace(current_state, origin_identity=legacy_identity))
+
+    legacy_state_restore()
+    state_bytes_before_validate = repository.state_path_get("AND-126").read_bytes()
+    validated = TaskWorkspaceTransaction(config).validate(request)[0]
+    stored_after_validate = repository.state_read("AND-126")
+    assert validated.origin_identity == current_identity
+    assert stored_after_validate is not None
+    assert stored_after_validate.origin_identity == legacy_identity
+    assert repository.state_path_get("AND-126").read_bytes() == state_bytes_before_validate
+
+    prepared = TaskWorkspaceTransaction(config).prepare(request)[0]
+    assert prepared.origin_identity == current_identity
+    assert repository.state_read("AND-126") == prepared
+
+    legacy_state_restore()
+    monkeypatch.setattr(WorkspaceRepository, "fetch", lambda _self: None)
+    result = _task_cleanup_reconciler(
+        config,
+        github=GitHub(),  # type: ignore[arg-type]
+    ).cleanup(_canceled_cleanup_request(request, issue="AND-126"))
+
+    assert result.removed_worktree_count == 1
+    assert repository.state_read("AND-126") is None
+    assert not Path(initial_state.task_root).exists()
+
+
 def test_prepare_initializes_recursive_submodules_and_retry_never_resets_them(
     tmp_path: Path,
 ) -> None:
@@ -402,6 +520,43 @@ def test_direct_workspace_and_cleanup_models_require_strict_typed_lists(
         terminal_consumer_node_key_list=["review"],
     )
     assert request.terminal_consumer_node_key_list == ["review"]
+
+
+def test_workspace_request_rejects_duplicate_normalized_repository_identity() -> None:
+    """Equivalent SCP and explicit SSH origins cannot create two worktrees for one repository."""
+
+    with pytest.raises(TaskWorkspaceError, match="repeats one repository origin"):
+        WorkspaceRequest(
+            "AND-121",
+            [
+                RepositoryRequest("git@github.com:antonov-andrey/example.git", "main", ""),
+                RepositoryRequest("ssh://git@github.com/antonov-andrey/example.git", "main", ""),
+            ],
+        )
+
+
+def test_cleanup_request_rejects_duplicate_normalized_repository_identity() -> None:
+    """Cleanup cannot address one physical repository twice through URL aliases."""
+
+    authority = CleanupAuthority(
+        scope="terminal-issue",
+        issue_status="Canceled",
+        project_status="Canceled",
+        final_acceptance_done=False,
+        all_other_project_nodes_terminal=False,
+        unresolved_remediation_blocker_count=0,
+    )
+    with pytest.raises(TaskCleanupError, match="repeats one repository"):
+        CleanupRequest(
+            issue_identifier="AND-121",
+            authority=authority,
+            repository_list=[
+                RepositoryRequest("git@github.com:antonov-andrey/example.git", "main", ""),
+                RepositoryRequest("ssh://git@github.com/antonov-andrey/example.git", "main", ""),
+            ],
+            pull_request_list=[],
+            resource_list=[],
+        )
 
 
 def test_interrupted_bootstrap_recovers_from_durable_planned_resource(
@@ -519,6 +674,29 @@ def test_attempt_guard_holds_issue_ownership_for_its_process_lifetime(
 
     with IssueAttemptLock(WorkspaceConfig(workspace.resolve()), "AND-104"):
         pass
+
+
+def test_workspace_and_lock_path_identities_reject_equivalent_spellings(tmp_path: Path) -> None:
+    """External workspace, lock, and recovery paths require one canonical spelling."""
+
+    workspace_path = str(tmp_path.resolve())
+    for substituted_path in (
+        "//" + workspace_path.lstrip("/"),
+        workspace_path + "/",
+        str(tmp_path.parent.resolve()) + "/./" + tmp_path.name,
+    ):
+        with pytest.raises(TaskWorkspaceError, match="canonical absolute path"):
+            WorkspaceConfig.from_environment({"LINEAR_AGENT_WORKSPACE_ROOT": substituted_path})
+
+    repository_fixture = _repository_create(tmp_path)
+    state = TaskWorkspaceTransaction(WorkspaceConfig(tmp_path.resolve())).prepare(
+        _request(repository_fixture.remote, issue="AND-124")
+    )[0]
+    for field_name in ("main_root", "task_root"):
+        payload = state.payload()
+        payload[field_name] = "//" + str(payload[field_name]).lstrip("/")
+        with pytest.raises(TaskWorkspaceError, match="canonical absolute path"):
+            RepositoryWorkspaceState.from_payload(payload)
 
 
 def test_issue_lock_rejects_attacker_symlink_parent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -689,19 +867,6 @@ resource:
     assert source.read_text(encoding="utf-8") == "source\n"
 
 
-def test_origin_identity_preserves_security_relevant_url_components() -> None:
-    """Ports and SSH users cannot collapse distinct repository origins."""
-
-    assert origin_identity_get("git@github.com:owner/example.git") == "ssh://github.com/owner/example"
-    assert origin_identity_get("ssh://git@github.com/owner/example.git") == "ssh://github.com/owner/example"
-    assert origin_identity_get("ssh://git@github.com:2222/owner/example.git") == ("ssh://github.com:2222/owner/example")
-    assert origin_identity_get("ssh://deploy@github.com/owner/example.git") == ("ssh://deploy@github.com/owner/example")
-    with pytest.raises(TaskWorkspaceError, match="credentials"):
-        origin_identity_get("https://token@github.com/owner/example.git")
-    with pytest.raises(TaskWorkspaceError, match="suffixes"):
-        origin_identity_get("https://github.com/owner/example.git?ref=main")
-
-
 def test_discovery_ignores_unrelated_checkout_with_noncanonical_origin(
     tmp_path: Path,
 ) -> None:
@@ -862,6 +1027,50 @@ def test_terminal_cleanup_removes_exact_workspace_and_is_idempotent(
     assert second.removed_worktree_count == 0
     assert not Path(state.task_root).exists()
     assert _git(root, "branch", "--list", "linear/and-106") == ""
+
+
+def test_cleanup_resolves_resource_repository_by_normalized_identity(tmp_path: Path) -> None:
+    """A graph-approved URL alias selects the same checkout throughout terminal cleanup."""
+
+    repository_fixture = _repository_create(tmp_path, resources=False)
+    remote = repository_fixture.remote
+    config = WorkspaceConfig(tmp_path.resolve())
+    request = _request(remote, issue="AND-124")
+    TaskWorkspaceTransaction(config).prepare(request)
+    cleanup_argument_list: list[list[str]] = []
+
+    def runner(argument_list: list[str], **_kwargs: object) -> object:
+        cleanup_argument_list.append(argument_list)
+        return subprocess.CompletedProcess(argument_list, 0, b"", b"")
+
+    resource = ResourceDeclaration(
+        key="issue-environment",
+        lifetime=ResourceLifetime.ISSUE,
+        owner_identity="AND-124:environment",
+        repository_url=remote.as_uri(),
+        cleanup_argument_list=["python", "manage.py", "destroy"],
+        consumer_node_key_list=[],
+    )
+    result = _task_cleanup_reconciler(config, resources=ResourceCleaner(runner)).cleanup(
+        CleanupRequest(
+            issue_identifier="AND-124",
+            authority=CleanupAuthority(
+                scope="terminal-issue",
+                issue_status="Canceled",
+                project_status="Canceled",
+                final_acceptance_done=False,
+                all_other_project_nodes_terminal=False,
+                unresolved_remediation_blocker_count=0,
+            ),
+            repository_list=request.repository_list,
+            pull_request_list=[],
+            resource_list=[resource],
+            approved_resource_fingerprint_list=[resource.fingerprint()],
+        )
+    )
+
+    assert result.cleaned_resource_count == 1
+    assert cleanup_argument_list == [["python", "manage.py", "destroy"]]
 
 
 def test_done_cleanup_rejects_unintegrated_branch_commits(tmp_path: Path) -> None:
@@ -1234,7 +1443,7 @@ def test_cleanup_requires_complete_exact_pull_request_set(tmp_path: Path) -> Non
         )._pull_request_contract_require(
             CleanupState(
                 request=request,
-                repository_by_origin_url_map={
+                repository_by_origin_identity_map={
                     request.repository_list[0].origin_url: Repository(),  # type: ignore[dict-item]
                 },
             )
@@ -1320,7 +1529,7 @@ def test_cleanup_reconciles_complete_exact_pull_request_set(
     )
     state = CleanupState(
         request=request,
-        repository_by_origin_url_map={
+        repository_by_origin_identity_map={
             Repository.request.origin_url: Repository(),  # type: ignore[dict-item]
         },
     )

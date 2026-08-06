@@ -62,7 +62,7 @@ class TaskWorkspaceTransaction:
                 state = repository.state_read(request.issue_identifier)
                 if state is None:
                     raise TaskWorkspaceError("Issue workspace has no private ownership state")
-                repository.state_identity_require(request.issue_identifier, state)
+                state = repository.state_current_view_require(request.issue_identifier, state)
                 if state.phase != "bootstrap-ready" or any(item.phase != "ready" for item in state.resource_list):
                     raise TaskWorkspaceError("Issue workspace transaction is incomplete")
                 repository.task_worktree_require(state)
@@ -93,7 +93,7 @@ class TaskWorkspaceTransaction:
             state = TaskWorkspaceStatePlanner(repository, request).plan()
             repository.state_write(state)
         else:
-            repository.state_identity_require(request.issue_identifier, state)
+            state = repository.state_migrate_and_require(request.issue_identifier, state)
         repository.task_worktree_create_or_accept(state)
         if state.phase == "planned":
             WorkspaceSubmoduleReader(Path(state.task_root)).prepare()

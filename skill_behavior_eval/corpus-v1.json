@@ -284,13 +284,13 @@
       "id": "direct-linear-task-graph-create",
       "working_directory": "..",
       "working_directory_mode": "same-branch",
-      "prompt": "Use $linear-agent-tools:task-graph-create to decompose an agreed incident report into implementation, review, acceptance, and cleanup issues. Explain idempotent publication and activation; do not mutate Linear in this evaluation.",
+      "prompt": "Use $linear-agent-tools:task-graph-create for this complete agreed incident source: one independently verifiable code fix in the agent-plugins repository on base main, followed after merge by one independent semantic review, one whole-outcome acceptance, and final cleanup; there are no external resources. Preview the complete concrete issue DAG and exact blockers, then explain idempotent publication and activation. Do not mutate Linear in this evaluation.",
       "expected_skill_list": ["linear-agent-tools:task-graph-create"],
       "forbidden_skill_list": ["agent-workflows:goal-brainstorm", "linear-agent-tools:task-implement"],
       "semantic_invariant_list": [
         {
           "id": "linear-owned-dag",
-          "text": "The response previews a complete source-independent DAG whose Linear issues and blocker relations become canonical, with no task-graph.yaml or per-task goal artifact."
+          "text": "The response previews the complete concrete implementation to review to acceptance to cleanup DAG with exact blocker relations. Linear issues and blocker relations become canonical, with no task-graph.yaml or per-task goal artifact."
         },
         {
           "id": "activation-barrier",
@@ -326,7 +326,11 @@
         },
         {
           "id": "human-boundary",
-          "text": "It creates or adopts exact linked PRs, waits for applicable required CI, publishes receipts, a deterministic candidate fingerprint and concise structured attempt summary, moves to Human Review, stops, and preserves workspace."
+          "text": "It creates or adopts exact linked PRs, waits for applicable required CI, publishes receipts, and persists both the complete compact candidate identity and its derived fingerprint in a concise structured attempt summary. It rereads that identity before moving to Human Review, stopping, and preserving the workspace."
+        },
+        {
+          "id": "receipt-integrity",
+          "text": "The response applies the shared receipt owner to every result-affecting input, including each consumed external evidence file's immutable provider URL, content digest and semantic identity. It demonstrates actual receipt creation at result completion, exact authenticated comment readback and reuse evaluation before candidate publication. It keeps reuse identity, result identity and the code candidate's exact PR URL/head identity distinct without relying on prescribed handoff wording."
         },
         {
           "id": "exclusive-attempt",
@@ -348,7 +352,11 @@
         },
         {
           "id": "fresh-zero-pass",
-          "text": "After remediation the review restarts from scratch in a fresh thread and reaches Human Review only with a new zero-finding evidence fingerprint and structured attempt comment."
+          "text": "After remediation the review restarts from scratch in a fresh thread and reaches Human Review only with a new zero-finding complete compact evidence identity and its derived fingerprint persisted and reread through the structured attempt comment."
+        },
+        {
+          "id": "evidence-receipt-integrity",
+          "text": "For every zero-finding result the review applies the shared receipt contract to all result-affecting inputs, cryptographically binds every consumed external evidence file, and demonstrates actual current-schema receipt creation at result completion, exact authenticated comment readback and reuse evaluation. Only validated passed receipt identities form the evidence candidate; no exact phrase or copied field checklist can substitute for that evidence."
         },
         {
           "id": "exclusive-attempt",
@@ -370,7 +378,11 @@
         },
         {
           "id": "baseline-and-approval",
-          "text": "It publishes exact evidence fingerprint and attempt telemetry, and when required records queue, startup, execution, review, and merge durations from provider history before stopping at Human Review."
+          "text": "It persists and rereads the complete compact evidence identity together with its derived fingerprint in attempt telemetry, and when required records queue, startup, execution, review, and merge durations from provider history before stopping at Human Review."
+        },
+        {
+          "id": "evidence-receipt-integrity",
+          "text": "For every whole-outcome result acceptance applies the shared receipt contract to all result-affecting inputs, cryptographically binds every consumed external evidence file, and demonstrates actual current-schema receipt creation at result completion, exact authenticated comment readback and reuse evaluation. Only validated passed receipt identities form the evidence candidate; no exact phrase or copied field checklist can substitute for that evidence."
         },
         {
           "id": "exclusive-attempt",
@@ -388,7 +400,7 @@
       "semantic_invariant_list": [
         {
           "id": "exact-approved-candidate",
-          "text": "The response verifies exact PR heads, bases, Linear links, branch protection and required checks; any candidate mutation returns the issue to Rework instead of being fixed in the merge attempt."
+          "text": "The response reconstructs the complete compact PR URL/head identity from the provider-read attempt comment, reproduces its approved fingerprint, verifies exact PR heads, bases, Linear links, branch protection and required checks, and returns any candidate mutation to Rework instead of fixing it in the merge attempt."
         },
         {
           "id": "ordered-recovery",
@@ -544,7 +556,7 @@
       "id": "indirect-workflow-input-migrate",
       "working_directory": "../../brand-size-chart",
       "working_directory_mode": "synchronized-main",
-      "prompt": "Migrate one saved complete Workflow input from its exact source version to a newer selected source version through the source-declared migration graph. Validate the source and target objects and replace the destination atomically. Do not launch the run.",
+      "prompt": "Determine whether the current source declares one unique forward migration path for a saved complete Workflow input. Only when that path exists, validate the exact source object, execute its declared edges, validate the complete target object, and replace the destination atomically; otherwise report the exact blocker without writing. Do not launch the run.",
       "expected_skill_list": [
         "workflow-container-agent-tools:workflow-container-input-create",
         "project-standards:project-foundation"
@@ -557,7 +569,7 @@
       "semantic_invariant_list": [
         {
           "id": "declared-chain-only",
-          "text": "The response validates the unchanged complete source input, resolves the one declared forward path, executes each source-owned edge in order, and validates the complete target object."
+          "text": "The response requires one unique source-declared forward path before mutation. If none or more than one exists it reports the exact blocker and writes nothing; if one exists it validates the unchanged complete source input, executes every source-owned edge in order, and validates the complete target object."
         },
         {
           "id": "no-heuristic-migration",

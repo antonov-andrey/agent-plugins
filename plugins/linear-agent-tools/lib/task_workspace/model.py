@@ -7,6 +7,8 @@ import os
 from pathlib import Path
 import re
 
+from git_origin.identity import GitOriginError, origin_identity_get
+
 _ISSUE_IDENTIFIER_PATTERN = re.compile(r"[A-Z][A-Z0-9]*-[1-9][0-9]*")
 _COMMIT_PATTERN = re.compile(r"[0-9a-f]{40,64}")
 _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
@@ -29,6 +31,29 @@ def issue_identifier_validate(value: str) -> str:
     if not isinstance(value, str) or _ISSUE_IDENTIFIER_PATTERN.fullmatch(value) is None:
         raise TaskWorkspaceError("Linear issue identifier must use the canonical TEAM-123 form")
     return value
+
+
+def _absolute_path_text_validate(value: str, *, label: str) -> str:
+    """Return one canonical absolute host path identity.
+
+    Args:
+        value: Candidate path text.
+        label: Diagnostic owner label.
+
+    Returns:
+        Validated path text.
+    """
+
+    path_text = _single_line(value, label=label)
+    path = Path(path_text)
+    if (
+        not path.is_absolute()
+        or path_text.startswith("//")
+        or str(path) != path_text
+        or any(part in {".", ".."} for part in path.parts)
+    ):
+        raise TaskWorkspaceError(f"{label} must be one canonical absolute path")
+    return path_text
 
 
 def _single_line(value: str, *, label: str) -> str:
@@ -56,8 +81,7 @@ class WorkspaceConfig:
     def __post_init__(self) -> None:
         """Validate one existing absolute directory without searching ancestors."""
 
-        if not self.root.is_absolute():
-            raise TaskWorkspaceError("LINEAR_AGENT_WORKSPACE_ROOT must be an absolute path")
+        _absolute_path_text_validate(str(self.root), label="LINEAR_AGENT_WORKSPACE_ROOT")
         try:
             resolved = self.root.resolve(strict=True)
         except OSError as error:
@@ -82,6 +106,7 @@ class WorkspaceConfig:
         value = environment_by_name_map["LINEAR_AGENT_WORKSPACE_ROOT"]
         if value == "":
             raise TaskWorkspaceError("LINEAR_AGENT_WORKSPACE_ROOT is present but empty")
+        _absolute_path_text_validate(value, label="LINEAR_AGENT_WORKSPACE_ROOT")
         return cls(Path(value))
 
 
@@ -97,6 +122,10 @@ class RepositoryRequest:
         """Validate external repository identity text and Git ref shape."""
 
         _single_line(self.origin_url, label="Repository origin URL")
+        try:
+            origin_identity_get(self.origin_url)
+        except GitOriginError as error:
+            raise TaskWorkspaceError("Repository origin URL is unsafe or unsupported") from error
         _single_line(self.base_branch, label="Repository base branch")
         if (
             self.base_branch.startswith("-")
@@ -170,8 +199,8 @@ class WorkspaceRequest:
             raise TaskWorkspaceError("Workspace repository list must contain only repository requests")
         if not self.repository_list:
             raise TaskWorkspaceError("Code-mutating task requires at least one repository")
-        origin_url_list = [item.origin_url for item in self.repository_list]
-        if len(origin_url_list) != len(set(origin_url_list)):
+        origin_identity_list = [origin_identity_get(item.origin_url) for item in self.repository_list]
+        if len(origin_identity_list) != len(set(origin_identity_list)):
             raise TaskWorkspaceError("Workspace request repeats one repository origin")
         object.__setattr__(self, "repository_list", list(self.repository_list))
 
@@ -281,10 +310,10 @@ class RepositoryWorkspaceState:
             ("origin identity", self.origin_identity),
             ("base branch", self.base_branch),
             ("branch name", self.branch_name),
-            ("main root", self.main_root),
-            ("task root", self.task_root),
         ):
             _single_line(value, label=label)
+        _absolute_path_text_validate(self.main_root, label="Workspace main root")
+        _absolute_path_text_validate(self.task_root, label="Workspace task root")
         if _COMMIT_PATTERN.fullmatch(self.baseline_commit) is None:
             raise TaskWorkspaceError("Workspace baseline must be one full Git commit")
         if _SHA256_PATTERN.fullmatch(self.manifest_sha256) is None:
