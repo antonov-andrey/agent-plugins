@@ -189,6 +189,7 @@ class VerificationCheckout:
         if (
             not isinstance(self.role_list, list)
             or not self.role_list
+            or any(not isinstance(role, str) for role in self.role_list)
             or len(self.role_list) != len(set(self.role_list))
         ):
             raise VerificationReceiptError("Verification checkout roles must be a non-empty duplicate-free list")
@@ -278,6 +279,63 @@ class VerificationCheckout:
 
 
 @dataclass(frozen=True, slots=True)
+class VerificationInputArtifact:
+    """Bind one externally stored file consumed by a verification command."""
+
+    path: str
+    role_list: list[str]
+    url: str
+    content_sha256: str
+
+    def __post_init__(self) -> None:
+        """Validate one local consumption identity and immutable provider artifact."""
+
+        _absolute_path_validate(self.path, label="Verification input artifact path")
+        evidence_url_validate(self.url)
+        if not isinstance(self.content_sha256, str) or SHA256_PATTERN.fullmatch(self.content_sha256) is None:
+            raise VerificationReceiptError("Verification input artifact content identity must be SHA-256")
+        if (
+            not isinstance(self.role_list, list)
+            or not self.role_list
+            or any(not isinstance(role, str) for role in self.role_list)
+            or len(self.role_list) != len(set(self.role_list))
+        ):
+            raise VerificationReceiptError(
+                "Verification input artifact roles must be a non-empty duplicate-free list"
+            )
+        for role in self.role_list:
+            single_line_validate(role, label="Verification input artifact role")
+        object.__setattr__(self, "role_list", sorted(self.role_list))
+
+    @classmethod
+    def from_payload(cls, payload: object) -> "VerificationInputArtifact":
+        """Parse one strict external input-artifact identity."""
+
+        expected = {"content_sha256", "path", "role_list", "url"}
+        if not isinstance(payload, dict) or set(payload) != expected:
+            raise VerificationReceiptError("Verification input artifact has another shape")
+        role_list = payload["role_list"]
+        if not isinstance(role_list, list) or any(not isinstance(item, str) for item in role_list):
+            raise VerificationReceiptError("Verification input artifact roles must be a string list")
+        return cls(
+            path=payload["path"],
+            role_list=list(role_list),
+            url=payload["url"],
+            content_sha256=payload["content_sha256"],
+        )
+
+    def payload(self) -> dict[str, object]:
+        """Return the canonical JSON-ready external input-artifact identity."""
+
+        return {
+            "content_sha256": self.content_sha256,
+            "path": self.path,
+            "role_list": list(self.role_list),
+            "url": self.url,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class VerificationInput:
     """Own every input that can change one verification result."""
 
@@ -286,6 +344,7 @@ class VerificationInput:
     source_fingerprint: str
     verification_contract_fingerprint: str
     checkout_list: list[VerificationCheckout]
+    input_artifact_list: list[VerificationInputArtifact]
     corpus_content_sha256: str
     model_identity: str
     model_configuration_by_name_map: dict[str, str]
@@ -316,6 +375,15 @@ class VerificationInput:
         checkout_path_list = [item.path for item in self.checkout_list]
         if len(checkout_path_list) != len(set(checkout_path_list)):
             raise VerificationReceiptError("Verification checkout paths must be unique")
+        if not isinstance(self.input_artifact_list, list) or any(
+            not isinstance(item, VerificationInputArtifact) for item in self.input_artifact_list
+        ):
+            raise VerificationReceiptError(
+                "Verification input artifacts must be a list of exact external artifact identities"
+            )
+        input_artifact_path_list = [item.path for item in self.input_artifact_list]
+        if len(input_artifact_path_list) != len(set(input_artifact_path_list)):
+            raise VerificationReceiptError("Verification input artifact paths must be unique")
         if not isinstance(self.corpus_content_sha256, str) or (
             self.corpus_content_sha256 and SHA256_PATTERN.fullmatch(self.corpus_content_sha256) is None
         ):
@@ -338,6 +406,11 @@ class VerificationInput:
             self,
             "checkout_list",
             sorted(self.checkout_list, key=lambda item: item.path),
+        )
+        object.__setattr__(
+            self,
+            "input_artifact_list",
+            sorted(self.input_artifact_list, key=lambda item: item.path),
         )
         object.__setattr__(
             self,
@@ -373,6 +446,7 @@ class VerificationInput:
             "command_argument_list": list(self.command_argument_list),
             "corpus_content_sha256": self.corpus_content_sha256,
             "environment_identity": self.environment_identity,
+            "input_artifact_list": [item.payload() for item in self.input_artifact_list],
             "model_configuration_by_name_map": dict(self.model_configuration_by_name_map),
             "model_identity": self.model_identity,
             "release_identity": self.release_identity,
@@ -397,6 +471,7 @@ class VerificationInput:
             "command_argument_list",
             "corpus_content_sha256",
             "environment_identity",
+            "input_artifact_list",
             "model_configuration_by_name_map",
             "model_identity",
             "release_identity",
@@ -412,10 +487,14 @@ class VerificationInput:
         checkout_list = payload["checkout_list"]
         if not isinstance(checkout_list, list):
             raise VerificationReceiptError("Verification checkouts must be a list")
+        input_artifact_list = payload["input_artifact_list"]
+        if not isinstance(input_artifact_list, list):
+            raise VerificationReceiptError("Verification input artifacts must be a list")
         return cls(
             command_argument_list=list(command_list),
             working_directory=payload["working_directory"],
             checkout_list=[VerificationCheckout.from_payload(item) for item in checkout_list],
+            input_artifact_list=[VerificationInputArtifact.from_payload(item) for item in input_artifact_list],
             corpus_content_sha256=payload["corpus_content_sha256"],
             model_identity=payload["model_identity"],
             model_configuration_by_name_map=text_by_text_map_parse(
@@ -526,7 +605,7 @@ class VerificationReceipt:
         """
 
         return {
-            "schema_version": 4,
+            "schema_version": 5,
             "completed_at": instant_render(self.completed_at),
             "evidence_content_sha256": self.evidence_content_sha256,
             "evidence_url": self.evidence_url,
@@ -557,7 +636,7 @@ class VerificationReceipt:
             "receipt_key",
             "verification_key",
         }
-        if not isinstance(payload, dict) or set(payload) != expected or payload["schema_version"] != 4:
+        if not isinstance(payload, dict) or set(payload) != expected or payload["schema_version"] != 5:
             raise VerificationReceiptError("Verification receipt has another shape")
         return cls(
             verification_key=payload["verification_key"],

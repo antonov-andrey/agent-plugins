@@ -16,21 +16,20 @@
 - GitHub integration owns official issue-to-branch/PR linking only. Every team Git status automation, including target-branch rules, is absent so that PR events cannot bypass provider-owned `Human Review`, `Merging`, evidence publication or cleanup transitions.
 - Source systems such as `project-goals` own authoring before handoff and immutable Git provenance for the exact revision published at handoff.
 - Git administration state contains only local ownership and crash recovery.
-- Verification receipts use one current schema.
-  - The stable verification key binds the exact source fingerprint, semantic verification-contract fingerprint, exact direct argv, canonical absolute working directory, corpus content, model identity, model configuration, and applicable environment and release identity.
-  - The verification-contract fingerprint covers only the actual assertions, expected behavior, output schema, and invariants of that verification. Do not bind issue, delta, attempt, Codex version, or other orchestration identity unless it changes result semantics.
-  - Each checkout binds its path, roles, credential-free supported repository URL, full commit, recursive submodules, and dependency locks.
-  - Submodule and lock keys use canonical checkout-relative paths.
-  - Repeated repository URLs remain separate checkout records.
-  - The receipt key binds the verification key, outcome, UTC instant, canonical artifact URL, and content SHA-256.
-  - The shared verification tool creates a receipt with the exact result-completion instant, renders its provider comment, and evaluates reuse from the exact provider readback. Every role publishes and byte-compares that codec comment before deleting transient inputs or publishing a candidate.
-  - An evidence candidate carries complete passed current-schema receipts keyed by evidence kind. The shared candidate tool validates every derived receipt key and fingerprints only the compact evidence-kind-to-receipt-key map; failed receipts are ineligible, and verification keys remain reuse identities that cannot stand in for receipt-bearing approval evidence.
-  - Artifact URLs use durable HTTPS provider identities without credentials, ports, query strings, or fragments.
-  - The receipt comment renders JSON forward slashes as escapes so Linear readback cannot replace that stable identity with a presigned URL; JSON parsing restores the exact canonical URL value.
-  - Receipts live in Linear comments or GitHub checks and become candidate inputs only after exact authenticated provider readback.
+- The [Verification Receipt Contract](#verification-receipt-contract) owns the complete shared receipt semantics for every task role.
 - No local task graph or execution database exists.
 
 For a `project-goals` source, provenance is one canonical commit-pinned directory URL. The directory contains the exact sibling `goal.md` and `spec.md`; mutable `main`, a repository root, or separate file URLs are not equivalent source identities.
+
+## Verification Receipt Contract
+
+Only one current receipt schema is supported. Its stable verification key binds every declared result-affecting input: source fingerprint; semantic verification-contract fingerprint; direct argv; canonical absolute working directory; corpus content; model identity and configuration; applicable environment and release identity; exact checkout identities; and immutable external input-artifact identities. The verification-contract fingerprint covers only the actual assertions, expected behavior, output schema and invariants of the verification; issue, delta, attempt, Codex version and other orchestration identities are excluded unless they change result semantics.
+
+Each result-affecting checkout is a separate record containing its canonical absolute path, semantic roles, credential-free supported repository URL, full commit, recursive submodule commits and dependency locks. Submodule and lock keys are canonical checkout-relative paths, and repeated repository URLs do not collapse distinct checkouts. Each externally stored file consumed by the verification command is a separate input-artifact record containing its canonical absolute local consumption path, semantic roles, durable canonical HTTPS provider URL and exact content SHA-256. Its URL has no credentials, port, query string or fragment. A command with no external input file uses an empty input-artifact list; an external file may not be represented only by local path, argv, corpus identity or prose.
+
+The separate receipt key binds the stable verification key, outcome, exact UTC result-completion instant, durable canonical HTTPS output-artifact URL and output content SHA-256. The shared `../lib/verification/tool/evidence.py` owner creates the current-schema receipt and renders its codec comment. Every role publishes the exact rendered comment, fully paginates authenticated provider comments, requires one byte-identical readback and evaluates reuse from that exact readback before deleting transient inputs or publishing a candidate. JSON forward slashes remain escaped in the comment so provider autolinking cannot replace a stable URL; parsing restores the exact URL value. Any changed declared input, including any external artifact path, role, URL or digest, invalidates reuse. Any changed outcome, completion instant or output artifact identity requires a coherently reissued receipt.
+
+An evidence candidate carries complete passed read-back receipts keyed by evidence kind. The shared candidate operation validates every derived receipt key and fingerprints only the compact evidence-kind-to-receipt-key map; failed receipts are ineligible, and a stable verification key never substitutes for approval evidence. Receipts live in Linear comments or GitHub checks and become candidate inputs only after the creation, exact readback and reuse evidence above exists.
 
 ## Publication And Recovery
 

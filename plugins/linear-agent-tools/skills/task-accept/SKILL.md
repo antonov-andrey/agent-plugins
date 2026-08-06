@@ -18,12 +18,4 @@ Accept one `task:acceptance` / `evidence` issue. Read `../../references/manual-w
 
 Every preview or handoff response MUST state that one exact issue process-lifetime host-local attempt guard is acquired before dispatch or status mutation, held continuously through nested attempt cleanup and the final Linear provider readback, and released only by process exit after that boundary.
 
-Every receipt-bearing acceptance preview and handoff MUST also state this complete checklist:
-
-- before candidate publication, the shared verification owner creates one current-schema passed receipt for every evidence kind;
-- each stable verification key binds the exact source fingerprint, semantic verification-contract fingerprint, exact direct argv, canonical absolute working directory, corpus content, model identity, model configuration, applicable environment and release identity, plus every result-affecting checkout's canonical absolute path, roles, credential-free supported repository URL, full commit, recursive submodules and dependency locks with canonical checkout-relative paths; the verification-contract fingerprint contains only actual assertions, expected behavior, output schema and invariants rather than unrelated orchestration identity;
-- the separate receipt key binds that stable key, outcome, UTC completion instant, exact durable canonical HTTPS artifact URL and artifact content SHA-256, and the URL has no credentials, port, query or fragment;
-- every exact codec-rendered receipt comment is published, fully paginated through authenticated provider readback, byte-identically compared, and evaluated for reuse from that exact readback; and
-- the evidence candidate uses every validated passed receipt key rather than any stable verification key, and the attempt comment persists its complete compact identity plus the derived fingerprint.
-
-Naming the issuer and inputs is part of the semantic handoff: explicitly say that the shared verification owner creates the receipts and that the stable key binds corpus content. Generic wording such as only “create receipts” or “bind the corpus” is incomplete.
+Every acceptance receipt and handoff follows the complete shared [Verification Receipt Contract](../../references/manual-workflow.md#verification-receipt-contract). Report concrete receipt creation, immutable input/output artifact identities, exact authenticated comment readback, reuse decisions and candidate derivation; literal contract wording is not evidence of those operations.

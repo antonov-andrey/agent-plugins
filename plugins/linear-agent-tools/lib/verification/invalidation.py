@@ -63,6 +63,8 @@ class ReceiptReuseEvaluator:
             reason_list.append("verification-contract-changed")
         if prior.checkout_list != self._current.checkout_list:
             reason_list.append("checkout-set-changed")
+        if prior.input_artifact_list != self._current.input_artifact_list:
+            reason_list.append("input-artifact-set-changed")
         if prior.corpus_content_sha256 != self._current.corpus_content_sha256:
             reason_list.append("corpus-content-changed")
         if prior.model_identity != self._current.model_identity:

@@ -28,6 +28,7 @@ from verification.invalidation import ReceiptReuseEvaluator
 from verification.model import (
     VerificationCheckout,
     VerificationInput,
+    VerificationInputArtifact,
     VerificationReceipt,
 )
 from verification.receipt import (
@@ -46,6 +47,7 @@ CORPUS_TWO = "2" * 64
 EVIDENCE_ONE = "3" * 64
 EVIDENCE_TWO = "4" * 64
 LINEAR_ATTACHMENT_URL = "https://uploads.linear.app/workspace/asset/artifact"
+LINEAR_INPUT_ATTACHMENT_URL = "https://uploads.linear.app/workspace/asset/input"
 LOCK_ONE = "c" * 64
 LOCK_TWO = "d" * 64
 
@@ -88,6 +90,14 @@ def _verification_input(
                 commit=commit,
                 recursive_submodule_commit_by_path_map={"module/provider": COMMIT_ONE},
                 dependency_lock_sha256_by_path_map={"requirements-dev.txt": lock},
+            )
+        ],
+        input_artifact_list=[
+            VerificationInputArtifact(
+                path="/workspace/evidence/accepted-result.json",
+                role_list=["accepted-behavior-result", "verification-input"],
+                url=LINEAR_INPUT_ATTACHMENT_URL,
+                content_sha256="9" * 64,
             )
         ],
         corpus_content_sha256=corpus,
@@ -153,6 +163,12 @@ def test_receipt_roundtrip_and_exact_reuse_key() -> None:
     assert changed_source.reason_list == ["source-fingerprint-changed"]
     changed_contract = ReceiptReuseEvaluator(_verification_input(contract=CONTRACT_TWO)).decision_get(parsed)
     assert changed_contract.reason_list == ["verification-contract-changed"]
+    changed_artifact_payload = _verification_input().payload()
+    changed_artifact_payload["input_artifact_list"][0]["content_sha256"] = "8" * 64
+    changed_artifact = ReceiptReuseEvaluator(
+        VerificationInput.from_payload(changed_artifact_payload)
+    ).decision_get(parsed)
+    assert changed_artifact.reason_list == ["input-artifact-set-changed"]
 
 
 @pytest.mark.parametrize("value", [None, False, 0, [], {}])
@@ -260,6 +276,7 @@ def test_external_evidence_receipt_can_bind_source_without_a_repository_commit()
         source_fingerprint="f" * 64,
         verification_contract_fingerprint=CONTRACT_ONE,
         checkout_list=[],
+        input_artifact_list=[],
         corpus_content_sha256="",
         model_identity="",
         model_configuration_by_name_map={},
@@ -303,6 +320,66 @@ def test_checkout_list_represents_two_revisions_of_one_repository_without_collis
 
     payload["checkout_list"][1]["path"] = payload["checkout_list"][0]["path"]
     with pytest.raises(VerificationReceiptError, match="paths must be unique"):
+        VerificationInput.from_payload(payload)
+
+
+def test_input_artifact_list_is_canonical_and_cryptographically_bound() -> None:
+    """Every externally stored consumed file contributes path, role, URL, and digest to reuse."""
+
+    payload = _verification_input().payload()
+    second_artifact = dict(payload["input_artifact_list"][0])
+    second_artifact["path"] = "/workspace/evidence/targeted-result.json"
+    second_artifact["role_list"] = ["targeted-failed-subset-result"]
+    second_artifact["url"] = "https://uploads.linear.app/workspace/asset/targeted-input"
+    second_artifact["content_sha256"] = "8" * 64
+    payload["input_artifact_list"].append(second_artifact)
+
+    parsed = VerificationInput.from_payload(payload)
+
+    assert [artifact.path for artifact in parsed.input_artifact_list] == [
+        "/workspace/evidence/accepted-result.json",
+        "/workspace/evidence/targeted-result.json",
+    ]
+    assert parsed.key() == VerificationInput.from_payload(parsed.payload()).key()
+
+    payload["input_artifact_list"][1]["path"] = payload["input_artifact_list"][0]["path"]
+    with pytest.raises(VerificationReceiptError, match="artifact paths must be unique"):
+        VerificationInput.from_payload(payload)
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value", "message"),
+    [
+        ("path", "evidence/result.json", "absolute POSIX"),
+        ("path", "/workspace/evidence/../result.json", "absolute POSIX"),
+        ("url", "https://uploads.linear.app/input?signature=temporary", "canonical HTTPS"),
+        ("url", "http://uploads.linear.app/workspace/input", "canonical HTTPS"),
+        ("content_sha256", "not-a-digest", "SHA-256"),
+        ("role_list", [], "non-empty duplicate-free"),
+        ("role_list", ["accepted", "accepted"], "non-empty duplicate-free"),
+    ],
+)
+def test_input_artifact_rejects_open_or_mutable_identity(
+    field_name: str,
+    value: object,
+    message: str,
+) -> None:
+    """External verification inputs have one closed immutable identity shape."""
+
+    payload = _verification_input().payload()
+    payload["input_artifact_list"][0][field_name] = value
+
+    with pytest.raises(VerificationReceiptError, match=message):
+        VerificationInput.from_payload(payload)
+
+
+def test_input_artifact_requires_exact_schema() -> None:
+    """An external input identity cannot carry unchecked metadata."""
+
+    payload = _verification_input().payload()
+    payload["input_artifact_list"][0]["temporary_url"] = "https://example.test/input"
+
+    with pytest.raises(VerificationReceiptError, match="input artifact has another shape"):
         VerificationInput.from_payload(payload)
 
 
@@ -710,7 +787,7 @@ def test_shared_evidence_cli_creates_and_reuses_the_exact_linear_comment_shape(
 
     assert reused.returncode == 0
     assert json.loads(reused.stdout)["reusable"] is True
-    assert created.stdout.startswith("<!-- linear-agent-tools-verification:v4 -->")
+    assert created.stdout.startswith("<!-- linear-agent-tools-verification:v5 -->")
     assert created.stdout.endswith("```")
     assert "https://example.test/ci/1" not in created.stdout
     assert r"https:\/\/example.test\/ci\/1" in created.stdout
@@ -762,7 +839,7 @@ def test_shared_evidence_cli_rejects_noncanonical_evidence_url(tmp_path: Path, e
 
     assert created.returncode == 2
     assert "canonical HTTPS provider URL" in created.stderr
-    assert "linear-agent-tools-verification:v4" not in created.stdout
+    assert "linear-agent-tools-verification:v5" not in created.stdout
 
 
 @pytest.mark.parametrize(
@@ -825,15 +902,15 @@ def test_receipt_rejects_prior_schema_without_a_compatibility_branch() -> None:
         evidence_content_sha256=EVIDENCE_ONE,
     )
     payload = receipt.payload()
-    payload["schema_version"] = 3
+    payload["schema_version"] = 4
 
     with pytest.raises(VerificationReceiptError, match="another shape"):
         VerificationReceipt.from_payload(payload)
     with pytest.raises(VerificationReceiptError, match="another shape"):
         VERIFICATION_RECEIPT_COMMENT_CODEC.payload_parse(
             VERIFICATION_RECEIPT_COMMENT_CODEC.render(receipt.payload()).replace(
+                "linear-agent-tools-verification:v5",
                 "linear-agent-tools-verification:v4",
-                "linear-agent-tools-verification:v3",
                 1,
             )
         )

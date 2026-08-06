@@ -330,7 +330,7 @@
         },
         {
           "id": "receipt-integrity",
-          "text": "Each stable verification key binds the exact source fingerprint, semantic verification-contract fingerprint, exact direct argv, canonical absolute working directory, corpus content, model identity, model configuration, applicable environment and release identity, plus every result-affecting checkout's canonical absolute path, roles, credential-free supported repository URL, full commit, recursive submodules and dependency locks. The contract fingerprint represents actual assertions, expected behavior, output schema and invariants rather than unrelated orchestration identity. A separate receipt key binds that verification key, outcome, UTC completion instant, exact durable canonical HTTPS artifact URL and artifact content SHA-256. The artifact URL has no credentials, port, query or fragment. The Human Review candidate identity follows the delivery kind without a mixed surface: this code delivery uses the exact PR URL/head map, while evidence delivery would use validated receipt keys and never stable verification keys."
+          "text": "The response applies the shared receipt owner to every result-affecting input, including each consumed external evidence file's immutable provider URL, content digest and semantic identity. It demonstrates actual receipt creation at result completion, exact authenticated comment readback and reuse evaluation before candidate publication. It keeps reuse identity, result identity and the code candidate's exact PR URL/head identity distinct without relying on prescribed handoff wording."
         },
         {
           "id": "exclusive-attempt",
@@ -356,7 +356,7 @@
         },
         {
           "id": "evidence-receipt-integrity",
-          "text": "Before candidate publication the review uses the shared verification owner to create a passed current-schema receipt for every evidence kind with the exact result-completion instant, publishes each exact codec-rendered receipt comment, fully paginates provider comments, requires byte-identical authenticated readback, and validates reuse from that readback. The response makes clear, without requiring one literal sentence, that stable verification identity includes the exact source fingerprint, semantic verification-contract fingerprint derived from actual assertions, expected behavior, output schema and invariants, exact direct argv, canonical absolute working directory, corpus content, model identity, model configuration, applicable environment and release identity, plus every result-affecting checkout's canonical absolute path, roles, credential-free supported repository URL, full commit, recursive submodules and dependency locks. A separate receipt key binds that verification key, outcome, UTC completion instant, exact durable canonical HTTPS artifact URL and artifact content SHA-256; the evidence candidate uses each validated passed receipt key rather than a stable verification key."
+          "text": "For every zero-finding result the review applies the shared receipt contract to all result-affecting inputs, cryptographically binds every consumed external evidence file, and demonstrates actual current-schema receipt creation at result completion, exact authenticated comment readback and reuse evaluation. Only validated passed receipt identities form the evidence candidate; no exact phrase or copied field checklist can substitute for that evidence."
         },
         {
           "id": "exclusive-attempt",
@@ -382,7 +382,7 @@
         },
         {
           "id": "evidence-receipt-integrity",
-          "text": "Before candidate publication acceptance uses the shared verification owner to create a passed current-schema receipt for every evidence kind with the exact result-completion instant, publishes each exact codec-rendered receipt comment, fully paginates provider comments, requires byte-identical authenticated readback, and validates reuse from that readback. Each stable verification key binds the exact source fingerprint, semantic verification-contract fingerprint derived from actual assertions, expected behavior, output schema and invariants, exact direct argv, canonical absolute working directory, corpus content, model identity, model configuration, applicable environment and release identity, plus every result-affecting checkout's canonical absolute path, roles, credential-free supported repository URL, full commit, recursive submodules and dependency locks. A separate receipt key binds that verification key, outcome, UTC completion instant, exact durable canonical HTTPS artifact URL and artifact content SHA-256; the evidence candidate uses each validated passed receipt key rather than a stable verification key."
+          "text": "For every whole-outcome result acceptance applies the shared receipt contract to all result-affecting inputs, cryptographically binds every consumed external evidence file, and demonstrates actual current-schema receipt creation at result completion, exact authenticated comment readback and reuse evaluation. Only validated passed receipt identities form the evidence candidate; no exact phrase or copied field checklist can substitute for that evidence."
         },
         {
           "id": "exclusive-attempt",
