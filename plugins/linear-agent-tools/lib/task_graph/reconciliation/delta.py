@@ -219,9 +219,19 @@ class TaskGraphDeltaReconciler:
         for node_key in sorted(existing_target_key_set):
             current = remote_issue_by_node_key_map[node_key]
             role = current.role_get()
-            if role not in {TaskRole.REVIEW, TaskRole.ACCEPTANCE}:
+            if node_key in reverification_key_set and role not in {TaskRole.REVIEW, TaskRole.ACCEPTANCE}:
                 raise TaskGraphError(
                     f"Delta may add a blocker to existing node {node_key} only when it is review or acceptance"
+                )
+            if role is TaskRole.IMPLEMENTATION:
+                if current.status_name == "Rework":
+                    continue
+                raise TaskGraphError(
+                    f"Delta implementation target {node_key} must already be Rework and absent from reverification"
+                )
+            if role not in {TaskRole.REVIEW, TaskRole.ACCEPTANCE}:
+                raise TaskGraphError(
+                    f"Delta target {node_key} must be review, acceptance, or implementation already in Rework"
                 )
             if current.status_name == "Todo":
                 continue
