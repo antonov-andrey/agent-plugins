@@ -240,7 +240,7 @@
       "semantic_invariant_list": [
         {
           "id": "freely-revisable-source",
-          "text": "The response iterates design with the user, then writes and validates the exact goal.md/spec.md pair through one serialized atomic direct-main project-goals transaction; the pair remains freely revisable before Linear handoff."
+          "text": "Because evaluation is read-only and no architecture content is supplied, the response explains the real sequence: iterate a complete design with the user, obtain explicit approval, then write and validate the exact goal.md/spec.md pair through one serialized atomic direct-main project-goals transaction. It does not fabricate or publish a placeholder pair, and the approved pair remains freely revisable before Linear handoff."
         },
         {
           "id": "authoring-boundary",
@@ -356,7 +356,7 @@
         },
         {
           "id": "evidence-receipt-integrity",
-          "text": "Before candidate publication the review uses the shared verification owner to create a passed current-schema receipt for every evidence kind with the exact result-completion instant, publishes each exact codec-rendered receipt comment, fully paginates provider comments, requires byte-identical authenticated readback, and validates reuse from that readback. Each stable verification key binds the exact source fingerprint, semantic verification-contract fingerprint derived from actual assertions, expected behavior, output schema and invariants, exact direct argv, canonical absolute working directory, corpus content, model identity, model configuration, applicable environment and release identity, plus every result-affecting checkout's canonical absolute path, roles, credential-free supported repository URL, full commit, recursive submodules and dependency locks. A separate receipt key binds that verification key, outcome, UTC completion instant, exact durable canonical HTTPS artifact URL and artifact content SHA-256; the evidence candidate uses each validated passed receipt key rather than a stable verification key."
+          "text": "Before candidate publication the review uses the shared verification owner to create a passed current-schema receipt for every evidence kind with the exact result-completion instant, publishes each exact codec-rendered receipt comment, fully paginates provider comments, requires byte-identical authenticated readback, and validates reuse from that readback. The response makes clear, without requiring one literal sentence, that stable verification identity includes the exact source fingerprint, semantic verification-contract fingerprint derived from actual assertions, expected behavior, output schema and invariants, exact direct argv, canonical absolute working directory, corpus content, model identity, model configuration, applicable environment and release identity, plus every result-affecting checkout's canonical absolute path, roles, credential-free supported repository URL, full commit, recursive submodules and dependency locks. A separate receipt key binds that verification key, outcome, UTC completion instant, exact durable canonical HTTPS artifact URL and artifact content SHA-256; the evidence candidate uses each validated passed receipt key rather than a stable verification key."
         },
         {
           "id": "exclusive-attempt",
