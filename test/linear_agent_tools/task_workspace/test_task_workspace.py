@@ -405,6 +405,19 @@ def test_direct_workspace_and_cleanup_models_require_strict_typed_lists(
     assert request.terminal_consumer_node_key_list == ["review"]
 
 
+def test_workspace_request_rejects_duplicate_normalized_repository_identity() -> None:
+    """Equivalent SCP and explicit SSH origins cannot create two worktrees for one repository."""
+
+    with pytest.raises(TaskWorkspaceError, match="repeats one repository origin"):
+        WorkspaceRequest(
+            "AND-121",
+            [
+                RepositoryRequest("git@github.com:antonov-andrey/example.git", "main", ""),
+                RepositoryRequest("ssh://git@github.com/antonov-andrey/example.git", "main", ""),
+            ],
+        )
+
+
 def test_interrupted_bootstrap_recovers_from_durable_planned_resource(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

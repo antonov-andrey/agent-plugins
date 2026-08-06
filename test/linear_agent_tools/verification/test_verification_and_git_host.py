@@ -19,7 +19,7 @@ if str(LIBRARY_ROOT) not in sys.path:
 
 from git_host.model import GitHubContractError, RepositoryIdentity
 from git_host.pull_request import GitHubPullRequestBoundary
-from verification._validation import VerificationReceiptError
+from verification._validation import VerificationReceiptError, instant_parse
 from verification.attempt import AttemptSummary
 from verification.baseline import LocalPhaseBaseline, TaskWorkspaceBaseline
 from verification.candidate import CandidateIdentity, CandidateInput
@@ -422,6 +422,37 @@ def test_receipt_normalizes_utc_and_rejects_naive_instant() -> None:
             evidence_url="https://example.test/evidence",
             evidence_content_sha256="not-a-sha256",
         )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "2026-08-04Z",
+        "2026-08-04 12:30:00Z",
+        "2026-08-04T12:30Z",
+        "20260804T123000Z",
+        "2026-W32-2T12:30:00Z",
+        "2026-08-04T12:30:00.123Z",
+        "2026-08-04T12:30:00.123456789Z",
+        "2026-08-04T12:30:00+00:00",
+    ],
+)
+def test_instant_parser_rejects_noncanonical_or_lossy_utc_text(value: str) -> None:
+    """Evidence timestamps have one exact representation and never lose precision."""
+
+    with pytest.raises(VerificationReceiptError, match="RFC 3339 UTC"):
+        instant_parse(value, label="Evidence instant")
+
+
+def test_instant_parser_accepts_canonical_seconds_and_microseconds() -> None:
+    """Canonical evidence instants support the system's exact microsecond precision."""
+
+    assert instant_parse("2026-08-04T12:30:00Z", label="Evidence instant") == datetime(
+        2026, 8, 4, 12, 30, tzinfo=timezone.utc
+    )
+    assert instant_parse("2026-08-04T12:30:00.123456Z", label="Evidence instant") == datetime(
+        2026, 8, 4, 12, 30, 0, 123456, tzinfo=timezone.utc
+    )
 
 
 @pytest.mark.parametrize(

@@ -548,7 +548,7 @@ class VerificationReceipt:
 
         return {
             "schema_version": 4,
-            "completed_at": self.completed_at.isoformat().replace("+00:00", "Z"),
+            "completed_at": instant_render(self.completed_at),
             "evidence_content_sha256": self.evidence_content_sha256,
             "evidence_url": self.evidence_url,
             "input": self.input.payload(),

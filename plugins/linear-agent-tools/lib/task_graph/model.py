@@ -10,6 +10,7 @@ import json
 import re
 from urllib.parse import unquote, urlsplit
 
+from git_origin.identity import GitOriginError, origin_identity_get
 from task_graph.topology import cycle_node_key_get, exist_ordered_role_path, exist_path
 
 _KEY_PATTERN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
@@ -126,6 +127,16 @@ def _text_validate(value: object, *, label: str, multiline: bool = False) -> str
     if not multiline and any(character in value for character in ("\n", "\r")):
         raise TaskGraphError(f"{label} must be single-line text")
     return value
+
+
+def _origin_identity_validate(value: object, *, label: str) -> str:
+    """Return one safe normalized repository identity without leaking its input."""
+
+    origin_url = _text_validate(value, label=label)
+    try:
+        return origin_identity_get(origin_url)
+    except GitOriginError as error:
+        raise TaskGraphError(f"{label} is unsafe or unsupported") from error
 
 
 def _text_list_parse(value: object, *, label: str, empty_allowed: bool = False) -> list[str]:
@@ -258,7 +269,7 @@ class RepositoryTarget:
     def __post_init__(self) -> None:
         """Validate one repository target."""
 
-        _text_validate(self.origin_url, label="Repository origin URL")
+        _origin_identity_validate(self.origin_url, label="Repository origin URL")
         _text_validate(self.base_branch, label="Repository base branch")
         if (
             self.base_branch.startswith("-")
@@ -494,8 +505,10 @@ class TaskNode:
             raise TaskGraphError("Task repository list must contain only repository targets")
         if self.delivery_kind is DeliveryKind.CODE and not self.repository_list:
             raise TaskGraphError("Code delivery requires at least one canonical repository")
-        repository_url_list = [item.origin_url for item in self.repository_list]
-        if len(repository_url_list) != len(set(repository_url_list)):
+        repository_identity_list = [
+            _origin_identity_validate(item.origin_url, label="Repository origin URL") for item in self.repository_list
+        ]
+        if len(repository_identity_list) != len(set(repository_identity_list)):
             raise TaskGraphError("Task repeats one repository target")
         if not isinstance(self.resource_list, list) or any(
             not isinstance(item, ResourceDeclaration) for item in self.resource_list
@@ -505,12 +518,19 @@ class TaskNode:
             not isinstance(item, VerificationStep) for item in self.verification_list
         ):
             raise TaskGraphError("Task verification list must contain only verification steps")
-        repository_url_set = set(repository_url_list)
+        repository_identity_set = set(repository_identity_list)
         if any(
-            item.repository_url and item.repository_url not in repository_url_set for item in self.verification_list
+            item.repository_url
+            and _origin_identity_validate(item.repository_url, label="Verification repository URL")
+            not in repository_identity_set
+            for item in self.verification_list
         ):
             raise TaskGraphError("Verification repository must be an explicit task repository target")
-        if any(item.repository_url not in repository_url_set for item in self.resource_list):
+        if any(
+            _origin_identity_validate(item.repository_url, label="Resource repository URL")
+            not in repository_identity_set
+            for item in self.resource_list
+        ):
             raise TaskGraphError("Resource repository must be an explicit task repository target")
         if self.delivery_kind is DeliveryKind.CODE and len(self.repository_list) > 1:
             _text_validate(

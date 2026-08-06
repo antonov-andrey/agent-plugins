@@ -7,6 +7,8 @@ import os
 from pathlib import Path
 import re
 
+from git_origin.identity import GitOriginError, origin_identity_get
+
 _ISSUE_IDENTIFIER_PATTERN = re.compile(r"[A-Z][A-Z0-9]*-[1-9][0-9]*")
 _COMMIT_PATTERN = re.compile(r"[0-9a-f]{40,64}")
 _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
@@ -120,6 +122,10 @@ class RepositoryRequest:
         """Validate external repository identity text and Git ref shape."""
 
         _single_line(self.origin_url, label="Repository origin URL")
+        try:
+            origin_identity_get(self.origin_url)
+        except GitOriginError as error:
+            raise TaskWorkspaceError("Repository origin URL is unsafe or unsupported") from error
         _single_line(self.base_branch, label="Repository base branch")
         if (
             self.base_branch.startswith("-")
@@ -193,8 +199,8 @@ class WorkspaceRequest:
             raise TaskWorkspaceError("Workspace repository list must contain only repository requests")
         if not self.repository_list:
             raise TaskWorkspaceError("Code-mutating task requires at least one repository")
-        origin_url_list = [item.origin_url for item in self.repository_list]
-        if len(origin_url_list) != len(set(origin_url_list)):
+        origin_identity_list = [origin_identity_get(item.origin_url) for item in self.repository_list]
+        if len(origin_identity_list) != len(set(origin_identity_list)):
             raise TaskWorkspaceError("Workspace request repeats one repository origin")
         object.__setattr__(self, "repository_list", list(self.repository_list))
 
