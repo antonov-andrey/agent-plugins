@@ -7,6 +7,8 @@ import re
 from string import ascii_letters, digits
 from urllib.parse import unquote_to_bytes, urlsplit
 
+from url_identity.host import UrlHostError, canonical_host_get
+
 _SCP_ORIGIN_PATTERN = re.compile(
     r"(?P<username>[A-Za-z0-9._-]+)@" r"(?P<host>(?:[A-Za-z0-9][A-Za-z0-9.-]*|\[[0-9A-Fa-f:.]+\])):" r"(?P<path>[^?#]+)"
 )
@@ -70,6 +72,16 @@ def _network_authority_render(host: str, port: int | None) -> str:
     return rendered_host if port is None else f"{rendered_host}:{port}"
 
 
+def _network_host_normalize(value: str) -> str:
+    """Return one unambiguous canonical network host."""
+
+    host = value[1:-1] if value.startswith("[") and value.endswith("]") else value
+    try:
+        return canonical_host_get(host, ipv6_allowed=True)
+    except UrlHostError as error:
+        raise GitOriginError("Repository origin URL contains an invalid host") from error
+
+
 def _file_url_identity_get(path_text: str) -> str:
     """Return one location-independent canonical identity for an absolute file URL path."""
 
@@ -104,9 +116,9 @@ def origin_identity_get(value: str) -> str:
     scp_match = _SCP_ORIGIN_PATTERN.fullmatch(value)
     if scp_match is not None:
         username = scp_match.group("username")
-        host = scp_match.group("host").lower()
+        host = _network_host_normalize(scp_match.group("host"))
         normalized_path = _network_path_normalize(scp_match.group("path"))
-        return f"ssh://{username}@{host}/{normalized_path}"
+        return f"ssh://{username}@{_network_authority_render(host, None)}/{normalized_path}"
     try:
         parsed = urlsplit(value)
         port = parsed.port
@@ -118,7 +130,7 @@ def origin_identity_get(value: str) -> str:
         if parsed.scheme in {"http", "https", "git"} and parsed.username is not None:
             raise GitOriginError("Repository origin URL contains unsupported credentials")
         normalized_path = _network_path_normalize(parsed.path)
-        host = parsed.hostname.lower()
+        host = _network_host_normalize(parsed.hostname)
         authority = _network_authority_render(host, port)
         if parsed.scheme == "ssh" and parsed.username is not None:
             if _SSH_USERNAME_PATTERN.fullmatch(parsed.username) is None:

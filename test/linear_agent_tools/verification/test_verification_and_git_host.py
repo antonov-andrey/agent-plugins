@@ -861,6 +861,18 @@ def test_candidate_fingerprint_and_attempt_comment_bind_exact_external_state() -
             evidence_receipt_by_kind_map={},
         )
 
+    for pull_request_url in (
+        "https://GITHUB.com/antonov-andrey/example/pull/17",
+        "https://github.com/.././pull/17",
+        "https://github.com/antonov-andrey/example/pull/17/",
+    ):
+        with pytest.raises(VerificationReceiptError, match="canonical GitHub PR"):
+            CandidateInput(
+                delivery_kind="code",
+                pull_request_head_by_url_map={pull_request_url: COMMIT_ONE},
+                evidence_receipt_by_kind_map={},
+            )
+
 
 def test_evidence_candidate_uses_validated_receipt_keys_for_every_result_identity() -> None:
     """Receipt transitions invalidate approval, while only passed evidence is eligible."""
@@ -1067,6 +1079,35 @@ def test_attempt_summary_rejects_commits_for_evidence_delivery() -> None:
             candidate_identity=None,
             candidate_fingerprint="",
             evidence_url_list=[],
+        )
+
+
+def test_attempt_summary_rejects_noncanonical_or_credential_bearing_evidence_links() -> None:
+    """Concise provider telemetry cannot persist secrets or URL aliases."""
+
+    candidate_identity = CandidateIdentity(
+        delivery_kind="code",
+        evidence_receipt_key_by_kind_map={},
+        pull_request_head_by_url_map={"https://github.com/antonov-andrey/example/pull/17": COMMIT_ONE},
+    )
+
+    with pytest.raises(VerificationReceiptError, match="canonical HTTPS provider URL"):
+        AttemptSummary(
+            attempt_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            issue_identifier="AND-17",
+            role_label="task:implementation",
+            delivery_kind="code",
+            started_at=datetime(2026, 8, 4, 12, 0, tzinfo=timezone.utc),
+            completed_at=datetime(2026, 8, 4, 12, 30, tzinfo=timezone.utc),
+            outcome="human-review",
+            changed_commit_by_repository_map={"antonov-andrey/example": COMMIT_ONE},
+            receipt_hit_count=1,
+            receipt_miss_count=0,
+            external_wait_seconds=0.0,
+            token_count=None,
+            candidate_identity=candidate_identity,
+            candidate_fingerprint=candidate_identity.fingerprint(),
+            evidence_url_list=["https://token:secret@example.test/evidence/17"],
         )
 
 

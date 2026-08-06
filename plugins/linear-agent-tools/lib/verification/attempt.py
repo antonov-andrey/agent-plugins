@@ -19,6 +19,7 @@ from verification._validation import (
     utc_validate,
 )
 from verification.candidate import CandidateIdentity
+from verification.model import evidence_url_validate
 
 _TASK_ROLE_SET = {
     "task:implementation",
@@ -171,7 +172,7 @@ class AttemptSummary:
         ):
             raise VerificationReceiptError("Attempt evidence links must be unique and sorted")
         for value in self.evidence_url_list:
-            single_line_validate(value, label="Attempt evidence URL")
+            evidence_url_validate(value)
         if self.outcome in _EVIDENCE_OUTCOME_SET and not self.evidence_url_list:
             raise VerificationReceiptError("Completed attempt outcome requires bounded evidence links")
         object.__setattr__(

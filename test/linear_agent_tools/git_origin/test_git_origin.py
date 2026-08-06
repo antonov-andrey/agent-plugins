@@ -77,6 +77,13 @@ def test_origin_identity_rejects_credentials_and_suffixes_without_echo(value: st
         "https://github.com/owner/example%23shadow.git",
         "https://github.com/owner/example%5Cshadow.git",
         "https://github.com/owner/example%ZZshadow.git",
+        "https://git hub.com/owner/example.git",
+        "https://github%2ecom/owner/example.git",
+        "https://github_com/owner/example.git",
+        "https://-github.com/owner/example.git",
+        "https://github..com/owner/example.git",
+        "https://127.1/owner/example.git",
+        "https://2130706433/owner/example.git",
     ],
 )
 def test_origin_identity_rejects_malformed_authorities_and_dot_segments(value: str) -> None:

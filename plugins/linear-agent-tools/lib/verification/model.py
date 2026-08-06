@@ -5,13 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
-import ipaddress
 import json
 from pathlib import PurePosixPath
 import re
 from urllib.parse import urlsplit, urlunsplit
 
 from git_origin.identity import GitOriginError, origin_identity_get
+from url_identity.host import UrlHostError, canonical_host_get
 from verification._validation import (
     COMMIT_PATTERN,
     SHA256_PATTERN,
@@ -23,30 +23,9 @@ from verification._validation import (
     utc_validate,
 )
 
-_EVIDENCE_URL_HOST_PATTERN = re.compile(
-    r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
-)
 _EVIDENCE_URL_PATH_PATTERN = re.compile(r"/(?:[A-Za-z0-9._~!$&'()*+,;=:@/-]|%[0-9A-F]{2})*")
-_NUMERIC_HOST_LABEL_PATTERN = re.compile(r"(?:[0-9]+|0x[0-9a-f]+)")
 _URI_PERCENT_ENCODING_PATTERN = re.compile(r"%([0-9A-F]{2})")
 _URI_UNRESERVED_CHARACTER_SET = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
-
-
-def _is_evidence_url_host_noncanonical_numeric(hostname: str) -> bool:
-    """Return whether a numeric host is not canonical dotted-decimal IPv4.
-
-    Args:
-        hostname: Lowercase URL hostname returned by ``urlsplit``.
-
-    Returns:
-        True for an all-numeric literal form other than canonical IPv4.
-    """
-
-    try:
-        canonical_address = ipaddress.IPv4Address(hostname)
-    except ipaddress.AddressValueError:
-        return all(_NUMERIC_HOST_LABEL_PATTERN.fullmatch(label) is not None for label in hostname.split("."))
-    return str(canonical_address) != hostname
 
 
 def _absolute_path_validate(value: object, *, label: str) -> str:
@@ -72,7 +51,7 @@ def _absolute_path_validate(value: object, *, label: str) -> str:
     return path_text
 
 
-def _evidence_url_validate(value: object) -> str:
+def evidence_url_validate(value: object) -> str:
     """Return one durable canonical HTTPS evidence URL.
 
     Args:
@@ -87,15 +66,15 @@ def _evidence_url_validate(value: object) -> str:
         parsed = urlsplit(evidence_url)
     except ValueError as error:
         raise VerificationReceiptError("Verification evidence URL must be one canonical HTTPS provider URL") from error
-    hostname = parsed.hostname
+    try:
+        hostname = canonical_host_get(parsed.hostname, ipv6_allowed=False) if parsed.hostname is not None else None
+    except UrlHostError as error:
+        raise VerificationReceiptError("Verification evidence URL must be one canonical HTTPS provider URL") from error
     canonical_url = "" if hostname is None else urlunsplit(("https", hostname, parsed.path, "", ""))
     if (
         not evidence_url.isascii()
         or parsed.scheme != "https"
         or hostname is None
-        or len(hostname) > 253
-        or _EVIDENCE_URL_HOST_PATTERN.fullmatch(hostname) is None
-        or _is_evidence_url_host_noncanonical_numeric(hostname)
         or parsed.netloc != hostname
         or not parsed.path
         or _EVIDENCE_URL_PATH_PATTERN.fullmatch(parsed.path) is None
@@ -476,7 +455,7 @@ class VerificationReceipt:
         }:
             raise VerificationReceiptError("Verification receipt outcome is unsupported")
         utc_validate(self.completed_at, label="Verification completion instant")
-        _evidence_url_validate(self.evidence_url)
+        evidence_url_validate(self.evidence_url)
         if (
             not isinstance(self.evidence_content_sha256, str)
             or SHA256_PATTERN.fullmatch(self.evidence_content_sha256) is None

@@ -17,7 +17,31 @@ from verification._validation import (
 )
 from verification.model import VerificationReceipt
 
-_GITHUB_PULL_REQUEST_PATH_PATTERN = re.compile(r"/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[1-9][0-9]*")
+_GITHUB_PULL_REQUEST_PATH_PATTERN = re.compile(
+    r"/(?P<owner>[A-Za-z0-9_.-]+)/(?P<repository>[A-Za-z0-9_.-]+)/pull/[1-9][0-9]*"
+)
+
+
+def _github_pull_request_url_validate(value: str) -> None:
+    """Require one exact provider-form GitHub pull-request URL."""
+
+    try:
+        parsed = urlsplit(value)
+    except ValueError as error:
+        raise VerificationReceiptError("Code candidate pull-request URL is not one canonical GitHub PR") from error
+    path_match = _GITHUB_PULL_REQUEST_PATH_PATTERN.fullmatch(parsed.path)
+    if (
+        not value.isascii()
+        or parsed.scheme != "https"
+        or parsed.netloc != "github.com"
+        or parsed.query
+        or parsed.fragment
+        or value != f"https://github.com{parsed.path}"
+        or path_match is None
+        or path_match.group("owner") in {".", ".."}
+        or path_match.group("repository") in {".", ".."}
+    ):
+        raise VerificationReceiptError("Code candidate pull-request URL is not one canonical GitHub PR")
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,15 +72,7 @@ class CandidateIdentity:
             if any(COMMIT_PATTERN.fullmatch(commit) is None for commit in self.pull_request_head_by_url_map.values()):
                 raise VerificationReceiptError("Code candidate pull-request head is not a full lowercase commit")
             for url in self.pull_request_head_by_url_map:
-                parsed = urlsplit(url)
-                if (
-                    parsed.scheme != "https"
-                    or parsed.netloc.lower() != "github.com"
-                    or parsed.query
-                    or parsed.fragment
-                    or _GITHUB_PULL_REQUEST_PATH_PATTERN.fullmatch(parsed.path) is None
-                ):
-                    raise VerificationReceiptError("Code candidate pull-request URL is not one canonical GitHub PR")
+                _github_pull_request_url_validate(url)
         elif self.pull_request_head_by_url_map or not self.evidence_receipt_key_by_kind_map:
             raise VerificationReceiptError("Evidence candidate identity requires only exact receipt keys")
         elif any(SHA256_PATTERN.fullmatch(key) is None for key in self.evidence_receipt_key_by_kind_map.values()):
