@@ -299,17 +299,15 @@ def test_delta_issue_readback_accepts_canonical_issue_reference_enrichment() -> 
     payload["provenance"]["decision"] = "Repeat AND-29 from scratch."
     delta = TaskGraphDelta.from_payload(payload)
     view = DeltaPublicationView.from_delta(delta)
-    remote = _delta_receipt_add(
-        delta,
-        _remote(
-            graph,
-            document=True,
-            issues=True,
-            relations=True,
-            activated=True,
-            project_status="In Progress",
-        ),
+    remote = _remote(
+        graph,
+        document=True,
+        issues=True,
+        relations=True,
+        activated=True,
+        project_status="In Progress",
     )
+    remote = _delta_receipt_add(delta, remote)
     remediation = RemoteIssue(
         id="70000000-0000-4000-8000-000000000001",
         node_key="remediation",
@@ -1188,6 +1186,180 @@ def test_active_project_delta_advances_issue_relation_metadata_and_todo_separate
     assert complete.activation_ready
 
 
+def test_active_project_delta_keeps_blocked_implementation_in_rework_through_activation() -> None:
+    """A Rework implementation stays unchanged while the remediation node activates."""
+
+    graph = TaskGraph.from_payload(_graph_payload())
+    payload = _delta_payload(graph)
+    payload["existing_node_key_list"] = [
+        "implementation",
+        "review",
+        "acceptance",
+        "cleanup",
+    ]
+    payload["reverification_node_key_list"] = []
+    payload["blocker_edge_list"] = [
+        {
+            "blocker_node_key": "remediation",
+            "blocked_node_key": "implementation",
+        }
+    ]
+    delta = TaskGraphDelta.from_payload(payload)
+    view = DeltaPublicationView.from_delta(delta)
+    remote = _delta_receipt_add(
+        delta,
+        _remote(
+            graph,
+            document=True,
+            issues=True,
+            relations=True,
+            activated=True,
+            project_status="In Progress",
+        ),
+    )
+    remediation = RemoteIssue(
+        id="70000000-0000-4000-8000-000000000001",
+        node_key="remediation",
+        title=view.issue_list[0].title,
+        description=view.issue_list[0].description,
+        status_name="Backlog",
+        label_name_list=["task:implementation"],
+        assignee_id=ASSIGNEE_ID,
+        delegate_id="",
+        blocker_key_list=[],
+    )
+    with_issue = replace(
+        remote,
+        issue_list=[
+            *[
+                (
+                    replace(
+                        item,
+                        status_name="Rework",
+                    )
+                    if item.node_key == "implementation"
+                    else item
+                )
+                for item in remote.issue_list
+            ],
+            remediation,
+        ],
+    )
+
+    relation = TaskGraphDeltaReconciler(delta).plan(with_issue)
+    assert relation.phase is PublicationPhase.DELTA_RELATIONS
+    assert relation.action_list[0].kind == "blocker-create"
+    assert relation.action_list[0].stable_key == "remediation->implementation"
+
+    with_relation = replace(
+        with_issue,
+        issue_list=[
+            (
+                replace(item, blocker_key_list=[*item.blocker_key_list, "remediation"])
+                if item.node_key == "implementation"
+                else item
+            )
+            for item in with_issue.issue_list
+        ],
+    )
+
+    metadata = TaskGraphDeltaReconciler(delta).plan(with_relation)
+    assert metadata.phase is PublicationPhase.DELTA_METADATA
+    assert metadata.action_list[0].stable_key == "remediation"
+
+    with_metadata = replace(
+        with_relation,
+        issue_list=[
+            (
+                replace(item, label_name_list=[*item.label_name_list, "agent:codex"])
+                if item.node_key == "remediation"
+                else item
+            )
+            for item in with_relation.issue_list
+        ],
+    )
+    activation = TaskGraphDeltaReconciler(delta).plan(with_metadata)
+    assert activation.phase is PublicationPhase.DELTA_ACTIVATION
+    assert activation.action_list[0].payload["status_name"] == "Todo"
+    assert next(item for item in with_metadata.issue_list if item.node_key == "implementation").status_name == "Rework"
+
+
+@pytest.mark.parametrize(
+    "target_status",
+    ["Todo", "In Progress", "Human Review", "Merging", "Done", "Canceled"],
+)
+def test_active_project_delta_rejects_non_rework_implementation_target(target_status: str) -> None:
+    """An invalid implementation target returns no relation or other mutation plan."""
+
+    graph = TaskGraph.from_payload(_graph_payload())
+    payload = _delta_payload(graph)
+    payload["existing_node_key_list"] = [
+        "implementation",
+        "review",
+        "acceptance",
+        "cleanup",
+    ]
+    payload["reverification_node_key_list"] = []
+    payload["blocker_edge_list"] = [
+        {
+            "blocker_node_key": "remediation",
+            "blocked_node_key": "implementation",
+        }
+    ]
+    delta = TaskGraphDelta.from_payload(payload)
+    view = DeltaPublicationView.from_delta(delta)
+    remote = _remote(
+        graph,
+        document=True,
+        issues=True,
+        relations=True,
+        activated=True,
+        project_status="In Progress",
+    )
+    before_delta_receipt = replace(
+        remote,
+        issue_list=[
+            replace(item, status_name=target_status) if item.node_key == "implementation" else item
+            for item in remote.issue_list
+        ],
+    )
+    with pytest.raises(TaskGraphError, match="must already be Rework and absent from reverification"):
+        TaskGraphDeltaReconciler(delta).plan(before_delta_receipt)
+
+    remote = _delta_receipt_add(delta, remote)
+    remediation = RemoteIssue(
+        id="70000000-0000-4000-8000-000000000001",
+        node_key="remediation",
+        title=view.issue_list[0].title,
+        description=view.issue_list[0].description,
+        status_name="Backlog",
+        label_name_list=[],
+        assignee_id="",
+        delegate_id="",
+        blocker_key_list=[],
+    )
+    relation_absent = replace(
+        remote,
+        issue_list=[
+            *[
+                (
+                    replace(
+                        item,
+                        status_name=target_status,
+                    )
+                    if item.node_key == "implementation"
+                    else item
+                )
+                for item in remote.issue_list
+            ],
+            remediation,
+        ],
+    )
+
+    with pytest.raises(TaskGraphError, match="must already be Rework and absent from reverification"):
+        TaskGraphDeltaReconciler(delta).plan(relation_absent)
+
+
 @pytest.mark.parametrize(
     ("target_status", "declare_reverification"),
     [
@@ -1256,8 +1428,8 @@ def test_active_project_delta_never_bypasses_or_reopens_downstream_verification(
         TaskGraphDeltaReconciler(delta).plan(relation_ready)
 
 
-def test_active_project_delta_may_reverify_only_review_or_acceptance() -> None:
-    """Reverification cannot reset implementation, cleanup or human lifecycle state."""
+def test_active_project_delta_rejects_implementation_rework_in_reverification() -> None:
+    """Malformed implementation reverification returns no mutation plan."""
 
     graph = TaskGraph.from_payload(_graph_payload())
     payload = _delta_payload(graph)
@@ -1276,17 +1448,25 @@ def test_active_project_delta_may_reverify_only_review_or_acceptance() -> None:
     ]
     delta = TaskGraphDelta.from_payload(payload)
     view = DeltaPublicationView.from_delta(delta)
-    remote = _delta_receipt_add(
-        delta,
-        _remote(
-            graph,
-            document=True,
-            issues=True,
-            relations=True,
-            activated=True,
-            project_status="In Progress",
-        ),
+    remote = _remote(
+        graph,
+        document=True,
+        issues=True,
+        relations=True,
+        activated=True,
+        project_status="In Progress",
     )
+    before_delta_receipt = replace(
+        remote,
+        issue_list=[
+            replace(item, status_name="Rework") if item.node_key == "implementation" else item
+            for item in remote.issue_list
+        ],
+    )
+    with pytest.raises(TaskGraphError, match="only when it is review or acceptance"):
+        TaskGraphDeltaReconciler(delta).plan(before_delta_receipt)
+
+    remote = _delta_receipt_add(delta, remote)
     remediation = RemoteIssue(
         id="70000000-0000-4000-8000-000000000001",
         node_key="remediation",
@@ -1298,15 +1478,14 @@ def test_active_project_delta_may_reverify_only_review_or_acceptance() -> None:
         delegate_id="",
         blocker_key_list=[],
     )
-    relation_ready = replace(
+    relation_absent = replace(
         remote,
         issue_list=[
             *[
                 (
                     replace(
                         item,
-                        blocker_key_list=[*item.blocker_key_list, "remediation"],
-                        status_name="In Progress",
+                        status_name="Rework",
                     )
                     if item.node_key == "implementation"
                     else item
@@ -1318,7 +1497,7 @@ def test_active_project_delta_may_reverify_only_review_or_acceptance() -> None:
     )
 
     with pytest.raises(TaskGraphError, match="only when it is review or acceptance"):
-        TaskGraphDeltaReconciler(delta).plan(relation_ready)
+        TaskGraphDeltaReconciler(delta).plan(relation_absent)
 
 
 def test_active_project_delta_rejects_unapproved_label_before_node_activation() -> None:
