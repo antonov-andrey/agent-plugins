@@ -49,12 +49,13 @@ Every preview or handoff response MUST state that one exact issue process-lifeti
 
 Every receipt-bearing preview or handoff MUST explicitly state all of these facts:
 
+- the structured attempt comment persists both the complete compact candidate identity and its derived fingerprint; exact provider readback of that identity must reproduce the fingerprint before the Human Review transition;
 - the stable verification key binds the source fingerprint, semantic verification-contract fingerprint, exact direct argv, canonical absolute working directory, corpus content, model identity, model configuration, applicable environment and release identity, plus each checkout's canonical absolute path, roles, credential-free supported repository URL, full commit, recursive submodules and dependency locks;
 - that semantic verification-contract fingerprint is derived from the actual assertions, expected behavior, output schema and invariants, and excludes issue, delta, attempt, Codex version and other orchestration identity unless it changes result semantics;
 - the separate receipt key binds that stable verification key itself plus the outcome, UTC completion instant, exact artifact URL and artifact content SHA-256;
 - every exact codec-rendered verification receipt comment was published before candidate publication;
 - each durable canonical HTTPS artifact URL contains no credentials, port, query string or fragment; and
-- the Human Review candidate identity follows the delivery kind without a mixed surface: code delivery uses the exact PR URL/head map, while evidence delivery uses each validated current receipt key and never the stable verification key.
+- the Human Review candidate identity follows the delivery kind without a mixed surface: code delivery uses the exact PR URL/head map, while evidence delivery is a map of each evidence kind to its validated current-schema receipt key and never to a stable verification key.
 
 A generic claim that a receipt binds inputs and evidence, or a handoff that only says receipts were created, is insufficient. Checkout path canonicality is itself mandatory evidence: every receipt-bearing handoff must say `canonical absolute path`; reducing that identity to only `absolute path` is incomplete.
 

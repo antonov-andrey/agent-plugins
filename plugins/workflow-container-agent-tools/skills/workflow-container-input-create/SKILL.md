@@ -25,7 +25,7 @@ Create exactly one complete input object that conforms to the selected workflow 
 
 Validate and migrate the unchanged complete source input before applying any requested edits. Resolve the unique declared forward path with `workflow_input_migration_path_list_get(...)`; never invent, skip, reorder, or combine migration edges. Execute every source-owned script yourself using the full current object on `stdin`, require one JSON object on `stdout`, and retain `stderr` only as diagnostics. After the migrated object validates against the target schema, apply confirmed user changes to that complete target object and validate it again before writing.
 
-If no declared path exists, offer creation of a new target input. Matching old values are suggestions only and require field-level confirmation; this is not an undeclared migration.
+If no declared path exists, offer creation of a new target input from the target schema defaults and explicit user decisions only. Do not inspect or carry over old values by field correspondence: that would be an undeclared heuristic migration even when every field is confirmed separately.
 
 ## Terminal Rules
 

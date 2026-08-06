@@ -11,6 +11,7 @@ description: Use when asked to commit or push; inventory worktrees, split logica
 - Treat the full visible change set as in scope unless the user explicitly excludes paths.
 - Split the in-scope worktree into logical commits, separating governance-only instruction changes from Product behavior changes.
 - Push committed changes by default unless the user explicitly requests commit-only behavior or forbids `push`.
+- When the user explicitly requests a read-only explanation of a described dirty-worktree scenario, explain this complete contract against that scenario. Do not replace the requested procedure with the incidental cleanliness of the evaluation checkout, and do not claim that any commit or push actually occurred.
 - Do not stop for per-change confirmation only because some changes predate the current task.
 - Commit each in-scope dirty submodule before creating a superproject commit that records its gitlink. When push is enabled, publish each submodule commit before the referencing superproject commit.
 - Never leave a superproject commit pointing at uncommitted or unpublished submodule state.
