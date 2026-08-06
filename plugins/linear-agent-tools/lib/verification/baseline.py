@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 import math
 
+from git_origin.identity import GitOriginError, origin_identity_get
 from verification._validation import (
     COMMIT_PATTERN,
     ISSUE_IDENTIFIER_PATTERN,
@@ -46,8 +47,15 @@ class TaskWorkspaceBaseline:
             self.baseline_commit_by_repository_url_map
         ):
             raise VerificationReceiptError("Workspace baseline repository commits must be a non-empty mapping")
+        repository_identity_set: set[str] = set()
         for repository_url, commit in self.baseline_commit_by_repository_url_map.items():
-            single_line_validate(repository_url, label="Workspace baseline repository URL")
+            try:
+                repository_identity = origin_identity_get(repository_url)
+            except GitOriginError as error:
+                raise VerificationReceiptError("Workspace baseline repository URL is unsafe or unsupported") from error
+            if repository_identity in repository_identity_set:
+                raise VerificationReceiptError("Workspace baseline repeats one repository identity")
+            repository_identity_set.add(repository_identity)
             if COMMIT_PATTERN.fullmatch(commit) is None:
                 raise VerificationReceiptError("Workspace baseline commit must be one full lowercase identity")
         object.__setattr__(

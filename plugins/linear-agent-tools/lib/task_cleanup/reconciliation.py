@@ -7,7 +7,7 @@ from pathlib import Path
 
 from git_host.model import RepositoryIdentity
 from git_host.pull_request import GitHubPullRequestBoundary
-from task_cleanup.model import CleanupRequest, PullRequestTarget, TaskCleanupError
+from task_cleanup.model import CleanupRequest, PullRequestTarget, TaskCleanupError, cleanup_origin_identity_get
 from task_cleanup.resource import ResourceCleaner
 from task_cleanup.workspace import TaskWorkspaceRetirement
 from task_workspace.lock import IssueWorkspaceLock
@@ -43,8 +43,8 @@ class CleanupState:
     """Carry mutable counters and exact repository snapshots through one cleanup run."""
 
     request: CleanupRequest
-    repository_by_origin_url_map: dict[str, WorkspaceRepository] = field(default_factory=dict)
-    workspace_state_by_origin_url_map: dict[str, RepositoryWorkspaceState | None] = field(default_factory=dict)
+    repository_by_origin_identity_map: dict[str, WorkspaceRepository] = field(default_factory=dict)
+    workspace_state_by_origin_identity_map: dict[str, RepositoryWorkspaceState | None] = field(default_factory=dict)
     closed_pull_request_count: int = 0
     cleaned_resource_count: int = 0
     removed_worktree_count: int = 0
@@ -56,7 +56,7 @@ class CleanupState:
 
         matching_repository_list = [
             repository
-            for repository in self.repository_by_origin_url_map.values()
+            for repository in self.repository_by_origin_identity_map.values()
             if RepositoryIdentity.from_origin_identity(repository.origin_identity) == github_repository
         ]
         if len(matching_repository_list) != 1:
@@ -70,13 +70,13 @@ class CleanupState:
         """Require every cleanup resource to name one participating repository."""
 
         for resource in self.request.resource_list:
-            if resource.repository_url not in self.repository_by_origin_url_map:
+            if cleanup_origin_identity_get(resource.repository_url) not in self.repository_by_origin_identity_map:
                 raise TaskCleanupError(f"Resource {resource.key} has no exact participating repository")
 
     def task_absence_require(self, repository: WorkspaceRepository, issue_identifier: str) -> None:
         """Translate repository-level absence proof into the cleanup domain."""
 
-        if not any(item is repository for item in self.repository_by_origin_url_map.values()):
+        if not any(item is repository for item in self.repository_by_origin_identity_map.values()):
             raise TaskCleanupError("Task absence proof names a non-participating repository")
         try:
             repository.task_absence_require(issue_identifier)
@@ -126,7 +126,7 @@ class TaskCleanupReconciler:
 
         if state.request.authority.scope != "project-final":
             return
-        for repository in state.repository_by_origin_url_map.values():
+        for repository in state.repository_by_origin_identity_map.values():
             for issue_identifier in state.request.project_issue_identifier_list:
                 if repository.state_read(issue_identifier) is not None:
                     raise TaskCleanupError(f"Project issue {issue_identifier} retains private task-workspace state")
@@ -159,18 +159,20 @@ class TaskCleanupReconciler:
     def _repository_state_load(self, state: CleanupState) -> None:
         """Load and validate exact participating repositories under the issue lock."""
 
-        state.repository_by_origin_url_map = {
-            item.origin_url: WorkspaceRepository.from_config(self._config, item)
-            for item in state.request.repository_list
+        repository_list = [
+            WorkspaceRepository.from_config(self._config, item) for item in state.request.repository_list
+        ]
+        state.repository_by_origin_identity_map = {
+            repository.origin_identity: repository for repository in repository_list
         }
-        for repository in state.repository_by_origin_url_map.values():
+        for repository in state.repository_by_origin_identity_map.values():
             repository.fetch()
-        state.workspace_state_by_origin_url_map = {
-            origin_url: repository.state_read(state.request.issue_identifier)
-            for origin_url, repository in state.repository_by_origin_url_map.items()
+        state.workspace_state_by_origin_identity_map = {
+            origin_identity: repository.state_read(state.request.issue_identifier)
+            for origin_identity, repository in state.repository_by_origin_identity_map.items()
         }
-        for origin_url, workspace_state in state.workspace_state_by_origin_url_map.items():
-            repository = state.repository_by_origin_url_map[origin_url]
+        for origin_identity, workspace_state in state.workspace_state_by_origin_identity_map.items():
+            repository = state.repository_by_origin_identity_map[origin_identity]
             if workspace_state is not None:
                 repository.state_identity_require(state.request.issue_identifier, workspace_state)
             else:
@@ -180,8 +182,9 @@ class TaskCleanupReconciler:
         """Execute each declared resource cleanup and durably record completion."""
 
         for resource in run_state.request.resource_list:
-            repository = run_state.repository_by_origin_url_map[resource.repository_url]
-            state = run_state.workspace_state_by_origin_url_map[resource.repository_url]
+            origin_identity = cleanup_origin_identity_get(resource.repository_url)
+            repository = run_state.repository_by_origin_identity_map[origin_identity]
+            state = run_state.workspace_state_by_origin_identity_map[origin_identity]
             cleaned_resource_fingerprint_by_resource_key_map: dict[str, str] = {}
             if run_state.request.authority.scope != "attempt" and state is not None:
                 cleaned_resource_fingerprint_by_resource_key_map = dict(
@@ -219,7 +222,7 @@ class TaskCleanupReconciler:
                     ),
                 )
                 repository.state_write(state)
-                run_state.workspace_state_by_origin_url_map[resource.repository_url] = state
+                run_state.workspace_state_by_origin_identity_map[origin_identity] = state
             run_state.cleaned_resource_count += 1
 
     def _terminal_contract_prepare(self, state: CleanupState) -> None:
@@ -228,18 +231,18 @@ class TaskCleanupReconciler:
         if state.request.authority.scope == "attempt":
             return
         self._pull_request_contract_require(state)
-        for origin_url, workspace_state in state.workspace_state_by_origin_url_map.items():
+        for origin_identity, workspace_state in state.workspace_state_by_origin_identity_map.items():
             if workspace_state is None:
                 continue
-            repository = state.repository_by_origin_url_map[origin_url]
+            repository = state.repository_by_origin_identity_map[origin_identity]
             retirement = self._workspace_retirement_get(state, repository, workspace_state)
-            state.workspace_state_by_origin_url_map[origin_url] = retirement.branch_snapshot_prepare()
+            state.workspace_state_by_origin_identity_map[origin_identity] = retirement.branch_snapshot_prepare()
 
     def _workspace_reconcile(self, run_state: CleanupState) -> None:
         """Retire every terminal task repository through its durable owner."""
 
-        for origin_url, repository in run_state.repository_by_origin_url_map.items():
-            state = run_state.workspace_state_by_origin_url_map[origin_url]
+        for origin_identity, repository in run_state.repository_by_origin_identity_map.items():
+            state = run_state.workspace_state_by_origin_identity_map[origin_identity]
             if state is None:
                 run_state.task_absence_require(repository, run_state.request.issue_identifier)
                 continue
@@ -269,7 +272,7 @@ class TaskCleanupReconciler:
 
         repository_by_github_identity_map = {
             identity: repository
-            for repository in state.repository_by_origin_url_map.values()
+            for repository in state.repository_by_origin_identity_map.values()
             if (identity := RepositoryIdentity.from_origin_identity(repository.origin_identity)) is not None
         }
         reference_by_repository_identity_map = {item.repository: item for item in state.request.pull_request_list}

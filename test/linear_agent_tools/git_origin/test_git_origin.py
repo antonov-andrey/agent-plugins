@@ -25,6 +25,25 @@ def test_origin_identity_preserves_security_relevant_url_components() -> None:
     )
     assert origin_identity_get("ssh://github.com/owner/example.git") == "ssh://github.com/owner/example"
     assert origin_identity_get("ssh://deploy@github.com/owner/example.git") == "ssh://deploy@github.com/owner/example"
+    assert origin_identity_get("ssh://git@[2001:db8::1]:2222/owner/example.git") == (
+        "ssh://git@[2001:db8::1]:2222/owner/example"
+    )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "git@github.com:owner/example.git",
+        "ssh://git@[2001:db8::1]:2222/owner/example.git",
+        "https://github.com/owner/%7Eexample.git",
+    ],
+)
+def test_network_origin_identity_is_idempotent(value: str) -> None:
+    """Every accepted canonical identity can pass through the same owner again unchanged."""
+
+    identity = origin_identity_get(value)
+
+    assert origin_identity_get(identity) == identity
 
 
 @pytest.mark.parametrize(
@@ -53,6 +72,11 @@ def test_origin_identity_rejects_credentials_and_suffixes_without_echo(value: st
         "git@github.com:owner/../example.git",
         "ssh://git@github.com/owner/./example.git",
         "https://github.com/owner/%2e%2e/example.git",
+        "https://github.com/owner/example%2Fshadow.git",
+        "https://github.com/owner/example%3Fshadow.git",
+        "https://github.com/owner/example%23shadow.git",
+        "https://github.com/owner/example%5Cshadow.git",
+        "https://github.com/owner/example%ZZshadow.git",
     ],
 )
 def test_origin_identity_rejects_malformed_authorities_and_dot_segments(value: str) -> None:
@@ -60,3 +84,31 @@ def test_origin_identity_rejects_malformed_authorities_and_dot_segments(value: s
 
     with pytest.raises(GitOriginError, match="Repository origin URL"):
         origin_identity_get(value)
+
+
+def test_file_origin_identity_requires_absolute_location_independent_input(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Relative file URLs never acquire a different identity from the caller's working directory."""
+
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    for working_directory in (first, second):
+        monkeypatch.chdir(working_directory)
+        with pytest.raises(GitOriginError, match="canonical absolute path"):
+            origin_identity_get("file:relative/repository.git")
+        with pytest.raises(GitOriginError, match="canonical absolute path"):
+            origin_identity_get("file:")
+
+
+def test_file_origin_identity_is_encoded_and_idempotent(tmp_path: Path) -> None:
+    """A filesystem remote with URL delimiters has one reparsable canonical identity."""
+
+    repository_path = tmp_path / "repository #1.git"
+    identity = origin_identity_get(str(repository_path))
+
+    assert identity == repository_path.as_uri()
+    assert origin_identity_get(identity) == identity

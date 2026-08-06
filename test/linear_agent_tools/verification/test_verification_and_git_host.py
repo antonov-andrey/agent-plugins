@@ -19,6 +19,7 @@ if str(LIBRARY_ROOT) not in sys.path:
 
 from git_host.model import GitHubContractError, RepositoryIdentity
 from git_host.pull_request import GitHubPullRequestBoundary
+from git_origin.identity import origin_identity_get
 from verification._validation import VerificationReceiptError, instant_parse
 from verification.attempt import AttemptSummary
 from verification.baseline import LocalPhaseBaseline, TaskWorkspaceBaseline
@@ -192,6 +193,16 @@ def test_verification_checkout_rejects_unsafe_repository_url_without_echo(reposi
 
     assert "token" not in str(error.value)
     assert "secret" not in str(error.value)
+
+
+def test_workspace_origin_identity_is_valid_verification_checkout_input() -> None:
+    """A shared normalized workspace output remains valid at the receipt boundary."""
+
+    repository_identity = origin_identity_get("ssh://git@[2001:db8::1]:2222/antonov-andrey/example.git")
+
+    checkout = replace(_verification_input().checkout_list[0], repository_url=repository_identity)
+
+    assert checkout.repository_url == repository_identity
 
 
 def test_shared_evidence_cli_rejects_credential_bearing_repository_without_echo(tmp_path: Path) -> None:
@@ -1226,6 +1237,60 @@ def test_task_workspace_baseline_is_deterministic_linear_evidence() -> None:
             branch_name="linear/and-18",
             baseline_commit_by_repository_url_map=baseline.baseline_commit_by_repository_url_map,
         )
+
+    with pytest.raises(VerificationReceiptError, match="repeats one repository identity"):
+        TaskWorkspaceBaseline(
+            issue_identifier=baseline.issue_identifier,
+            source_fingerprint=baseline.source_fingerprint,
+            branch_name=baseline.branch_name,
+            baseline_commit_by_repository_url_map={
+                "git@github.com:antonov-andrey/example.git": COMMIT_ONE,
+                "ssh://git@github.com/antonov-andrey/example.git": COMMIT_TWO,
+            },
+        )
+
+
+@pytest.mark.parametrize(
+    "repository_url",
+    [
+        "https://token:secret@github.com/example/repository.git",
+        "https://github.com/example/repository.git?token=secret",
+        "https://github.com/example/repository.git#secret",
+    ],
+)
+def test_workspace_baseline_cli_rejects_unsafe_repository_without_evidence_output(
+    tmp_path: Path,
+    repository_url: str,
+) -> None:
+    """Unsafe baseline origins never reach durable Linear comment output or diagnostics."""
+
+    script = LIBRARY_ROOT / "verification" / "tool" / "evidence.py"
+    input_path = tmp_path / "workspace-baseline.json"
+    input_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "issue_identifier": "AND-30",
+                "source_fingerprint": "a" * 64,
+                "branch_name": "linear/and-30",
+                "baseline_commit_by_repository_url_map": {repository_url: COMMIT_ONE},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    rendered = subprocess.run(
+        [str(script), "workspace-baseline", "--input", str(input_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert rendered.returncode == 2
+    assert rendered.stdout == ""
+    assert "unsafe or unsupported" in rendered.stderr
+    assert "token" not in rendered.stderr
+    assert "secret" not in rendered.stderr
 
 
 def test_shared_evidence_cli_renders_candidate_without_persistent_state(

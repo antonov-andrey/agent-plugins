@@ -418,6 +418,30 @@ def test_workspace_request_rejects_duplicate_normalized_repository_identity() ->
         )
 
 
+def test_cleanup_request_rejects_duplicate_normalized_repository_identity() -> None:
+    """Cleanup cannot address one physical repository twice through URL aliases."""
+
+    authority = CleanupAuthority(
+        scope="terminal-issue",
+        issue_status="Canceled",
+        project_status="Canceled",
+        final_acceptance_done=False,
+        all_other_project_nodes_terminal=False,
+        unresolved_remediation_blocker_count=0,
+    )
+    with pytest.raises(TaskCleanupError, match="repeats one repository"):
+        CleanupRequest(
+            issue_identifier="AND-121",
+            authority=authority,
+            repository_list=[
+                RepositoryRequest("git@github.com:antonov-andrey/example.git", "main", ""),
+                RepositoryRequest("ssh://git@github.com/antonov-andrey/example.git", "main", ""),
+            ],
+            pull_request_list=[],
+            resource_list=[],
+        )
+
+
 def test_interrupted_bootstrap_recovers_from_durable_planned_resource(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -888,6 +912,50 @@ def test_terminal_cleanup_removes_exact_workspace_and_is_idempotent(
     assert _git(root, "branch", "--list", "linear/and-106") == ""
 
 
+def test_cleanup_resolves_resource_repository_by_normalized_identity(tmp_path: Path) -> None:
+    """A graph-approved URL alias selects the same checkout throughout terminal cleanup."""
+
+    repository_fixture = _repository_create(tmp_path, resources=False)
+    remote = repository_fixture.remote
+    config = WorkspaceConfig(tmp_path.resolve())
+    request = _request(remote, issue="AND-124")
+    TaskWorkspaceTransaction(config).prepare(request)
+    cleanup_argument_list: list[list[str]] = []
+
+    def runner(argument_list: list[str], **_kwargs: object) -> object:
+        cleanup_argument_list.append(argument_list)
+        return subprocess.CompletedProcess(argument_list, 0, b"", b"")
+
+    resource = ResourceDeclaration(
+        key="issue-environment",
+        lifetime=ResourceLifetime.ISSUE,
+        owner_identity="AND-124:environment",
+        repository_url=remote.as_uri(),
+        cleanup_argument_list=["python", "manage.py", "destroy"],
+        consumer_node_key_list=[],
+    )
+    result = _task_cleanup_reconciler(config, resources=ResourceCleaner(runner)).cleanup(
+        CleanupRequest(
+            issue_identifier="AND-124",
+            authority=CleanupAuthority(
+                scope="terminal-issue",
+                issue_status="Canceled",
+                project_status="Canceled",
+                final_acceptance_done=False,
+                all_other_project_nodes_terminal=False,
+                unresolved_remediation_blocker_count=0,
+            ),
+            repository_list=request.repository_list,
+            pull_request_list=[],
+            resource_list=[resource],
+            approved_resource_fingerprint_list=[resource.fingerprint()],
+        )
+    )
+
+    assert result.cleaned_resource_count == 1
+    assert cleanup_argument_list == [["python", "manage.py", "destroy"]]
+
+
 def test_done_cleanup_rejects_unintegrated_branch_commits(tmp_path: Path) -> None:
     """Successful authority cannot discard commits that are absent from the remote base."""
 
@@ -1258,7 +1326,7 @@ def test_cleanup_requires_complete_exact_pull_request_set(tmp_path: Path) -> Non
         )._pull_request_contract_require(
             CleanupState(
                 request=request,
-                repository_by_origin_url_map={
+                repository_by_origin_identity_map={
                     request.repository_list[0].origin_url: Repository(),  # type: ignore[dict-item]
                 },
             )
@@ -1344,7 +1412,7 @@ def test_cleanup_reconciles_complete_exact_pull_request_set(
     )
     state = CleanupState(
         request=request,
-        repository_by_origin_url_map={
+        repository_by_origin_identity_map={
             Repository.request.origin_url: Repository(),  # type: ignore[dict-item]
         },
     )

@@ -4,16 +4,40 @@ from __future__ import annotations
 
 from pathlib import Path
 import re
-from urllib.parse import unquote, urlsplit
+from string import ascii_letters, digits
+from urllib.parse import unquote_to_bytes, urlsplit
 
 _SCP_ORIGIN_PATTERN = re.compile(
     r"(?P<username>[A-Za-z0-9._-]+)@" r"(?P<host>(?:[A-Za-z0-9][A-Za-z0-9.-]*|\[[0-9A-Fa-f:.]+\])):" r"(?P<path>[^?#]+)"
 )
 _SSH_USERNAME_PATTERN = re.compile(r"[A-Za-z0-9._-]+")
+_HEX_DIGIT_SET = frozenset("0123456789abcdefABCDEF")
+_URI_UNRESERVED_CHARACTER_SET = frozenset(ascii_letters + digits + "-._~")
 
 
 class GitOriginError(RuntimeError):
     """Report one unsafe or unsupported Git origin."""
+
+
+def _uri_unreserved_decode(value: str) -> str:
+    """Decode only URI escapes that cannot change path structure or URL parsing."""
+
+    character_list: list[str] = []
+    index = 0
+    while index < len(value):
+        character = value[index]
+        if character != "%":
+            character_list.append(character)
+            index += 1
+            continue
+        if index + 2 >= len(value) or any(item not in _HEX_DIGIT_SET for item in value[index + 1 : index + 3]):
+            raise GitOriginError("Repository origin URL contains a malformed escape")
+        decoded = chr(int(value[index + 1 : index + 3], 16))
+        if decoded not in _URI_UNRESERVED_CHARACTER_SET:
+            raise GitOriginError("Repository origin URL encodes a reserved path character")
+        character_list.append(decoded)
+        index += 3
+    return "".join(character_list)
 
 
 def _network_path_normalize(value: str) -> str:
@@ -22,7 +46,7 @@ def _network_path_normalize(value: str) -> str:
     raw_part_list = value.strip("/").split("/")
     normalized_part_list: list[str] = []
     for raw_part in raw_part_list:
-        part = unquote(raw_part)
+        part = _uri_unreserved_decode(raw_part)
         if (
             not part
             or part in {".", ".."}
@@ -37,6 +61,32 @@ def _network_path_normalize(value: str) -> str:
     if not normalized_part_list[-1]:
         raise GitOriginError("Repository origin URL has no repository name")
     return "/".join(normalized_part_list)
+
+
+def _network_authority_render(host: str, port: int | None) -> str:
+    """Render a parsed host and optional port as a reparsable URL authority."""
+
+    rendered_host = f"[{host}]" if ":" in host else host
+    return rendered_host if port is None else f"{rendered_host}:{port}"
+
+
+def _file_url_identity_get(path_text: str) -> str:
+    """Return one location-independent canonical identity for an absolute file URL path."""
+
+    try:
+        decoded_path_text = unquote_to_bytes(path_text).decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise GitOriginError("Repository file URL path is not valid UTF-8") from error
+    path = Path(decoded_path_text)
+    if (
+        not decoded_path_text
+        or not path.is_absolute()
+        or decoded_path_text.startswith("//")
+        or str(path) != decoded_path_text
+        or any(part in {".", ".."} for part in path.parts)
+    ):
+        raise GitOriginError("Repository file URL requires one canonical absolute path")
+    return path.as_uri()
 
 
 def origin_identity_get(value: str) -> str:
@@ -69,7 +119,7 @@ def origin_identity_get(value: str) -> str:
             raise GitOriginError("Repository origin URL contains unsupported credentials")
         normalized_path = _network_path_normalize(parsed.path)
         host = parsed.hostname.lower()
-        authority = host if port is None else f"{host}:{port}"
+        authority = _network_authority_render(host, port)
         if parsed.scheme == "ssh" and parsed.username is not None:
             if _SSH_USERNAME_PATTERN.fullmatch(parsed.username) is None:
                 raise GitOriginError("Repository origin URL contains an invalid SSH user")
@@ -84,13 +134,10 @@ def origin_identity_get(value: str) -> str:
             or parsed.netloc not in {"", "localhost"}
         ):
             raise GitOriginError("Repository file URL contains unsupported authority or suffixes")
-        path = Path(parsed.path)
-        if any(part in {".", ".."} for part in path.parts):
-            raise GitOriginError("Repository file URL contains an unsafe path")
-        return f"file://{path.resolve(strict=False)}"
+        return _file_url_identity_get(parsed.path)
     path = Path(value)
     if path.is_absolute():
-        if any(part in {".", ".."} for part in path.parts):
-            raise GitOriginError("Repository path contains an unsafe segment")
-        return f"file://{path.resolve(strict=False)}"
+        if value.startswith("//") or str(path) != value or any(part in {".", ".."} for part in path.parts):
+            raise GitOriginError("Repository path must use one canonical absolute form")
+        return path.as_uri()
     raise GitOriginError("Repository origin URL uses an unsupported or relative form")
