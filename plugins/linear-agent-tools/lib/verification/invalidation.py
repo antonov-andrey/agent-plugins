@@ -38,7 +38,7 @@ class ReceiptReuseEvaluator:
         self._current = current
 
     def decision_get(self, receipt: VerificationReceipt) -> ReceiptDecision:
-        """Compare every declared dependency rather than command text alone.
+        """Compare every declared dependency of one integrity-validated receipt.
 
         Args:
             receipt: Prior immutable receipt.
@@ -47,6 +47,8 @@ class ReceiptReuseEvaluator:
             Reuse decision with concise invalidation reasons.
         """
 
+        if not isinstance(receipt, VerificationReceipt):
+            raise VerificationReceiptError("Prior verification receipt has another shape")
         reason_list: list[str] = []
         prior = receipt.input
         if receipt.outcome != "passed":
@@ -55,16 +57,20 @@ class ReceiptReuseEvaluator:
             reason_list.append("command-changed")
         if prior.working_directory != self._current.working_directory:
             reason_list.append("working-directory-changed")
-        if prior.repository_url != self._current.repository_url:
-            reason_list.append("verification-repository-changed")
         if prior.source_fingerprint != self._current.source_fingerprint:
             reason_list.append("source-fingerprint-changed")
-        if prior.repository_commit_by_url_map != self._current.repository_commit_by_url_map:
-            reason_list.append("repository-commit-set-changed")
-        if prior.recursive_submodule_commit_by_path_map != self._current.recursive_submodule_commit_by_path_map:
-            reason_list.append("recursive-submodule-set-changed")
-        if prior.dependency_lock_sha256_by_path_map != self._current.dependency_lock_sha256_by_path_map:
-            reason_list.append("dependency-lock-set-changed")
+        if prior.verification_contract_fingerprint != self._current.verification_contract_fingerprint:
+            reason_list.append("verification-contract-changed")
+        if prior.checkout_list != self._current.checkout_list:
+            reason_list.append("checkout-set-changed")
+        if prior.input_artifact_list != self._current.input_artifact_list:
+            reason_list.append("input-artifact-set-changed")
+        if prior.corpus_content_sha256 != self._current.corpus_content_sha256:
+            reason_list.append("corpus-content-changed")
+        if prior.model_identity != self._current.model_identity:
+            reason_list.append("model-identity-changed")
+        if prior.model_configuration_by_name_map != self._current.model_configuration_by_name_map:
+            reason_list.append("model-configuration-changed")
         if prior.environment_identity != self._current.environment_identity:
             reason_list.append("environment-identity-changed")
         if prior.release_identity != self._current.release_identity:

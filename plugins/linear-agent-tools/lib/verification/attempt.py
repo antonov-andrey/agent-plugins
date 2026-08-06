@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 import math
 
+from git_host.model import GitHubContractError, RepositoryIdentity
 from verification._validation import (
     COMMIT_PATTERN,
     ISSUE_IDENTIFIER_PATTERN,
@@ -18,6 +19,8 @@ from verification._validation import (
     text_by_text_map_parse,
     utc_validate,
 )
+from verification.candidate import CandidateIdentity
+from verification.model import evidence_url_validate
 
 _TASK_ROLE_SET = {
     "task:implementation",
@@ -74,6 +77,57 @@ _EVIDENCE_OUTCOME_SET = {
 
 
 @dataclass(frozen=True, slots=True)
+class CodexUsage:
+    """Preserve exact structured counters exposed by completed Codex turns."""
+
+    cached_input_tokens: int
+    cache_write_input_tokens: int
+    input_tokens: int
+    output_tokens: int
+    reasoning_output_tokens: int
+
+    def __post_init__(self) -> None:
+        """Require non-negative exact counters and their documented subset relations."""
+
+        for field_name in (
+            "cached_input_tokens",
+            "cache_write_input_tokens",
+            "input_tokens",
+            "output_tokens",
+            "reasoning_output_tokens",
+        ):
+            value = getattr(self, field_name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise VerificationReceiptError(f"Attempt Codex usage {field_name} must be a non-negative integer")
+
+    def payload(self) -> dict[str, int]:
+        """Return the exact surface counter names and units."""
+
+        return {
+            "cached_input_tokens": self.cached_input_tokens,
+            "cache_write_input_tokens": self.cache_write_input_tokens,
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
+            "reasoning_output_tokens": self.reasoning_output_tokens,
+        }
+
+    @classmethod
+    def from_payload(cls, payload: object) -> "CodexUsage":
+        """Parse one closed structured Codex usage object."""
+
+        expected_key_set = {
+            "cached_input_tokens",
+            "cache_write_input_tokens",
+            "input_tokens",
+            "output_tokens",
+            "reasoning_output_tokens",
+        }
+        if not isinstance(payload, dict) or set(payload) != expected_key_set:
+            raise VerificationReceiptError("Attempt Codex usage has another shape")
+        return cls(**payload)
+
+
+@dataclass(frozen=True, slots=True)
 class AttemptSummary:
     """Contain one concise Linear-native agent-attempt summary."""
 
@@ -88,7 +142,8 @@ class AttemptSummary:
     receipt_hit_count: int
     receipt_miss_count: int
     external_wait_seconds: float
-    token_count: int | None
+    codex_usage: CodexUsage | None
+    candidate_identity: CandidateIdentity | None
     candidate_fingerprint: str
     evidence_url_list: list[str]
 
@@ -117,7 +172,10 @@ class AttemptSummary:
         if not isinstance(self.changed_commit_by_repository_map, dict):
             raise VerificationReceiptError("Attempt commit set must be a mapping")
         for repository, commit in self.changed_commit_by_repository_map.items():
-            single_line_validate(repository, label="Attempt repository")
+            try:
+                RepositoryIdentity(repository)
+            except GitHubContractError as error:
+                raise VerificationReceiptError("Attempt repository must use exact owner/name form") from error
             if COMMIT_PATTERN.fullmatch(commit) is None:
                 raise VerificationReceiptError("Attempt commit is not a full lowercase identity")
         if self.delivery_kind != "code" and self.changed_commit_by_repository_map:
@@ -143,15 +201,22 @@ class AttemptSummary:
             or self.external_wait_seconds < 0
         ):
             raise VerificationReceiptError("Attempt external wait must be non-negative seconds")
-        if self.token_count is not None and (
-            isinstance(self.token_count, bool) or not isinstance(self.token_count, int) or self.token_count < 0
-        ):
-            raise VerificationReceiptError("Attempt token count must be absent or a non-negative integer")
+        if self.codex_usage is not None and not isinstance(self.codex_usage, CodexUsage):
+            raise VerificationReceiptError("Attempt Codex usage must be absent or one exact structured value")
         if not isinstance(self.candidate_fingerprint, str) or (
             self.candidate_fingerprint and SHA256_PATTERN.fullmatch(self.candidate_fingerprint) is None
         ):
             raise VerificationReceiptError("Attempt candidate fingerprint must be empty or SHA-256")
-        if (self.outcome in _CANDIDATE_OUTCOME_SET) != bool(self.candidate_fingerprint):
+        have_candidate = self.outcome in _CANDIDATE_OUTCOME_SET
+        if self.candidate_identity is not None and not isinstance(self.candidate_identity, CandidateIdentity):
+            raise VerificationReceiptError("Attempt candidate identity has another shape")
+        if have_candidate != (self.candidate_identity is not None):
+            raise VerificationReceiptError("Attempt candidate identity is incompatible with its outcome")
+        if have_candidate and self.candidate_identity.delivery_kind != self.delivery_kind:
+            raise VerificationReceiptError("Attempt delivery kind differs from its candidate identity")
+        if have_candidate and self.candidate_identity.fingerprint() != self.candidate_fingerprint:
+            raise VerificationReceiptError("Attempt candidate fingerprint differs from its persisted identity")
+        if not have_candidate and self.candidate_fingerprint:
             raise VerificationReceiptError("Attempt candidate fingerprint is incompatible with its outcome")
         if (
             not isinstance(self.evidence_url_list, list)
@@ -160,7 +225,7 @@ class AttemptSummary:
         ):
             raise VerificationReceiptError("Attempt evidence links must be unique and sorted")
         for value in self.evidence_url_list:
-            single_line_validate(value, label="Attempt evidence URL")
+            evidence_url_validate(value)
         if self.outcome in _EVIDENCE_OUTCOME_SET and not self.evidence_url_list:
             raise VerificationReceiptError("Completed attempt outcome requires bounded evidence links")
         object.__setattr__(
@@ -178,8 +243,9 @@ class AttemptSummary:
         """
 
         payload: dict[str, object] = {
-            "schema_version": 1,
+            "schema_version": 3,
             "attempt_id": self.attempt_id,
+            "candidate_identity": (None if self.candidate_identity is None else self.candidate_identity.payload()),
             "candidate_fingerprint": self.candidate_fingerprint,
             "changed_commit_by_repository_map": dict(self.changed_commit_by_repository_map),
             "completed_at": instant_render(self.completed_at),
@@ -193,8 +259,8 @@ class AttemptSummary:
             "role_label": self.role_label,
             "started_at": instant_render(self.started_at),
         }
-        if self.token_count is not None:
-            payload["token_count"] = self.token_count
+        if self.codex_usage is not None:
+            payload["codex_usage"] = self.codex_usage.payload()
         return payload
 
     @classmethod
@@ -211,6 +277,7 @@ class AttemptSummary:
         required = {
             "schema_version",
             "attempt_id",
+            "candidate_identity",
             "candidate_fingerprint",
             "changed_commit_by_repository_map",
             "completed_at",
@@ -224,11 +291,11 @@ class AttemptSummary:
             "role_label",
             "started_at",
         }
-        allowed = required | {"token_count"}
+        allowed = required | {"codex_usage"}
         if (
             not isinstance(payload, dict)
             or (set(payload) != required and set(payload) != allowed)
-            or payload["schema_version"] != 1
+            or payload["schema_version"] != 3
         ):
             raise VerificationReceiptError("Attempt summary has another shape")
         evidence_url_list = payload["evidence_url_list"]
@@ -248,7 +315,12 @@ class AttemptSummary:
             receipt_hit_count=payload["receipt_hit_count"],
             receipt_miss_count=payload["receipt_miss_count"],
             external_wait_seconds=payload["external_wait_seconds"],
-            token_count=payload.get("token_count"),
+            codex_usage=(None if "codex_usage" not in payload else CodexUsage.from_payload(payload["codex_usage"])),
+            candidate_identity=(
+                None
+                if payload["candidate_identity"] is None
+                else CandidateIdentity.from_payload(payload["candidate_identity"])
+            ),
             candidate_fingerprint=payload["candidate_fingerprint"],
             evidence_url_list=list(evidence_url_list),
         )

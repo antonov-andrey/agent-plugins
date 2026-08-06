@@ -42,7 +42,9 @@ class RepositoryIdentity:
     def __post_init__(self) -> None:
         """Validate one canonical GitHub repository identity."""
 
-        if _REPOSITORY_PATTERN.fullmatch(self.value) is None:
+        if _REPOSITORY_PATTERN.fullmatch(self.value) is None or any(
+            part in {".", ".."} for part in self.value.split("/")
+        ):
             raise GitHubContractError("GitHub repository must use exact owner/name form")
 
     @classmethod

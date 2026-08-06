@@ -531,6 +531,24 @@ def test_cross_repository_code_requires_visible_ordered_partial_merge_recovery()
     assert "Preserve completed merges" in issue.description
 
 
+def test_graph_rejects_duplicate_normalized_repository_identity() -> None:
+    """Equivalent Git URL spellings cannot declare two targets for one repository."""
+
+    payload = _graph_payload()
+    implementation = payload["node_list"][0]
+    implementation["repository_list"].append(
+        {
+            "origin_url": "ssh://git@github.com/antonov-andrey/example.git",
+            "base_branch": "main",
+            "merge_method": "merge",
+        }
+    )
+    implementation["partial_merge_recovery"] = "Preserve completed merges and open one bounded recovery task."
+
+    with pytest.raises(TaskGraphError, match="repeats one repository target"):
+        TaskGraph.from_payload(payload)
+
+
 def test_graph_rejects_cycle_and_wrong_role_delivery_pair() -> None:
     """Incomplete semantics cannot hide in a staged active Project."""
 

@@ -59,11 +59,12 @@ class VerificationCommentCodec:
             Markdown comment body.
         """
 
-        return self.prefix + json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + _COMMENT_SUFFIX
+        encoded = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True).replace("/", r"\/")
+        return self.prefix + encoded + _COMMENT_SUFFIX
 
 
 ATTEMPT_COMMENT_CODEC = VerificationCommentCodec(
-    prefix="<!-- linear-agent-tools-attempt:v1 -->\n```json\n",
+    prefix="<!-- linear-agent-tools-attempt:v3 -->\n```json\n",
     label="Attempt",
 )
 LOCAL_PHASE_BASELINE_COMMENT_CODEC = VerificationCommentCodec(
@@ -75,6 +76,6 @@ TASK_WORKSPACE_BASELINE_COMMENT_CODEC = VerificationCommentCodec(
     label="Workspace baseline",
 )
 VERIFICATION_RECEIPT_COMMENT_CODEC = VerificationCommentCodec(
-    prefix="<!-- linear-agent-tools-verification:v1 -->\n```json\n",
+    prefix="<!-- linear-agent-tools-verification:v5 -->\n```json\n",
     label="Verification receipt",
 )

@@ -9,6 +9,7 @@ COMMIT_PATTERN = re.compile(r"[0-9a-f]{40,64}")
 SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 UUID_PATTERN = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 ISSUE_IDENTIFIER_PATTERN = re.compile(r"[A-Z][A-Z0-9]*-[1-9][0-9]*")
+INSTANT_PATTERN = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{6})?Z")
 
 
 class VerificationReceiptError(RuntimeError):
@@ -67,7 +68,7 @@ def instant_parse(value: object, *, label: str) -> datetime:
         Parsed UTC datetime.
     """
 
-    if not isinstance(value, str) or not value.endswith("Z"):
+    if not isinstance(value, str) or INSTANT_PATTERN.fullmatch(value) is None:
         raise VerificationReceiptError(f"{label} must be RFC 3339 UTC text")
     try:
         return datetime.fromisoformat(value.removesuffix("Z") + "+00:00").astimezone(timezone.utc)

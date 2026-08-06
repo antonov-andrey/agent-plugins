@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 import re
 
 from git_host.model import RepositoryIdentity
+from git_origin.identity import GitOriginError, origin_identity_get
 from task_graph.model import ResourceDeclaration, ResourceLifetime
 from task_workspace.model import (
     RepositoryRequest,
@@ -35,6 +36,15 @@ def _single_line(value: object, *, label: str) -> str:
     if not isinstance(value, str) or not value or any(character in value for character in ("\x00", "\n", "\r")):
         raise TaskCleanupError(f"{label} must be non-empty single-line text")
     return value
+
+
+def cleanup_origin_identity_get(value: str) -> str:
+    """Return one canonical cleanup repository identity without reflecting unsafe input."""
+
+    try:
+        return origin_identity_get(value)
+    except GitOriginError as error:
+        raise TaskCleanupError("Cleanup repository URL is unsafe or unsupported") from error
 
 
 @dataclass(frozen=True, slots=True)
@@ -200,9 +210,11 @@ class CleanupRequest:
                 raise TaskCleanupError(f"Cleanup {label} list has another shape")
         if not isinstance(self.project_issue_identifier_list, list):
             raise TaskCleanupError("Project issue identifier list must be a list")
-        repository_url_set = {item.origin_url for item in self.repository_list}
-        if len(repository_url_set) != len(self.repository_list):
+        repository_identity_list = [cleanup_origin_identity_get(item.origin_url) for item in self.repository_list]
+        if len(set(repository_identity_list)) != len(self.repository_list):
             raise TaskCleanupError("Cleanup request repeats one repository")
+        for resource in self.resource_list:
+            cleanup_origin_identity_get(resource.repository_url)
         if len(self.pull_request_list) != len(set(self.pull_request_list)):
             raise TaskCleanupError("Cleanup request repeats one pull request")
         pr_repository_list = [item.repository.value for item in self.pull_request_list]

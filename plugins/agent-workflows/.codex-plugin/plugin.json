@@ -1,6 +1,6 @@
 {
   "name": "agent-workflows",
-  "version": "0.1.0+codex.20260805024514",
+  "version": "0.1.0+codex.20260806054713",
   "description": "Reusable audits, explanations, source-contract authoring, instruction migration, Git publication, and subagent orchestration.",
   "author": {
     "name": "Andrey Antonov",
