@@ -335,9 +335,13 @@ def test_v1_git_ssh_identity_migrates_for_prepare_validate_and_cleanup(
     assert repository.state_read("AND-125") == prepared
 
     legacy_state_restore()
+    state_bytes_before_validate = repository.state_path_get("AND-125").read_bytes()
     validated = TaskWorkspaceTransaction(config).validate(request)[0]
+    stored_after_validate = repository.state_read("AND-125")
     assert validated.origin_identity == current_identity
-    assert repository.state_read("AND-125") == validated
+    assert stored_after_validate is not None
+    assert stored_after_validate.origin_identity == legacy_identity
+    assert repository.state_path_get("AND-125").read_bytes() == state_bytes_before_validate
 
     legacy_state_restore()
     monkeypatch.setattr(WorkspaceRepository, "fetch", lambda _self: None)
@@ -348,6 +352,66 @@ def test_v1_git_ssh_identity_migrates_for_prepare_validate_and_cleanup(
 
     assert result.removed_worktree_count == 1
     assert repository.state_read("AND-125") is None
+    assert not Path(initial_state.task_root).exists()
+
+
+def test_v1_file_identity_migrates_for_prepare_validate_and_cleanup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Encoded and symlink-resolved v1 file identities remain recoverable without validate writes."""
+
+    class GitHub:
+        @staticmethod
+        def matching_number_list(**_kwargs: object) -> list[int]:
+            return []
+
+    workspace = tmp_path / "workspace with space"
+    workspace.mkdir()
+    repository_fixture = _repository_create(workspace, resources=False)
+    root = repository_fixture.root
+    config = WorkspaceConfig(workspace.resolve())
+    initial_request = _request(repository_fixture.remote, issue="AND-126")
+    initial_state = TaskWorkspaceTransaction(config).prepare(initial_request)[0]
+    alias = workspace / "origin alias.git"
+    alias.symlink_to(repository_fixture.remote)
+    _git(root, "remote", "set-url", "origin", str(alias))
+    request = WorkspaceRequest(
+        issue_identifier="AND-126",
+        repository_list=[RepositoryRequest(str(alias), "main", initial_state.baseline_commit)],
+    )
+    repository = WorkspaceRepository.from_config(config, request.repository_list[0])
+    current_identity = alias.as_uri()
+    legacy_identity = f"file://{repository_fixture.remote.resolve(strict=False)}"
+    assert current_identity != legacy_identity
+
+    def legacy_state_restore() -> None:
+        current_state = repository.state_read("AND-126")
+        assert current_state is not None
+        repository.state_write(replace(current_state, origin_identity=legacy_identity))
+
+    legacy_state_restore()
+    state_bytes_before_validate = repository.state_path_get("AND-126").read_bytes()
+    validated = TaskWorkspaceTransaction(config).validate(request)[0]
+    stored_after_validate = repository.state_read("AND-126")
+    assert validated.origin_identity == current_identity
+    assert stored_after_validate is not None
+    assert stored_after_validate.origin_identity == legacy_identity
+    assert repository.state_path_get("AND-126").read_bytes() == state_bytes_before_validate
+
+    prepared = TaskWorkspaceTransaction(config).prepare(request)[0]
+    assert prepared.origin_identity == current_identity
+    assert repository.state_read("AND-126") == prepared
+
+    legacy_state_restore()
+    monkeypatch.setattr(WorkspaceRepository, "fetch", lambda _self: None)
+    result = _task_cleanup_reconciler(
+        config,
+        github=GitHub(),  # type: ignore[arg-type]
+    ).cleanup(_canceled_cleanup_request(request, issue="AND-126"))
+
+    assert result.removed_worktree_count == 1
+    assert repository.state_read("AND-126") is None
     assert not Path(initial_state.task_root).exists()
 
 

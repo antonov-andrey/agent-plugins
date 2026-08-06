@@ -12,7 +12,7 @@ LIBRARY_ROOT = REPOSITORY_ROOT / "plugins" / "linear-agent-tools" / "lib"
 if str(LIBRARY_ROOT) not in sys.path:
     sys.path.insert(0, str(LIBRARY_ROOT))
 
-from git_origin.identity import GitOriginError, origin_identity_get
+from git_origin.identity import GitOriginError, legacy_v1_origin_identity_get, origin_identity_get
 
 
 def test_origin_identity_preserves_security_relevant_url_components() -> None:
@@ -44,6 +44,42 @@ def test_network_origin_identity_is_idempotent(value: str) -> None:
     identity = origin_identity_get(value)
 
     assert origin_identity_get(identity) == identity
+
+
+@pytest.mark.parametrize(
+    ("value", "current_identity", "legacy_identity"),
+    [
+        (
+            "git@github.com:owner/example.git",
+            "ssh://git@github.com/owner/example",
+            "ssh://github.com/owner/example",
+        ),
+        (
+            "ssh://git@github.com/owner/example.git",
+            "ssh://git@github.com/owner/example",
+            "ssh://github.com/owner/example",
+        ),
+        (
+            "https://github.com/owner/%7Eexample.git",
+            "https://github.com/owner/~example",
+            "https://github.com/owner/%7Eexample",
+        ),
+        (
+            "ssh://git@[2001:0db8::1]:2222/owner/example.git",
+            "ssh://git@[2001:db8::1]:2222/owner/example",
+            "ssh://2001:0db8::1:2222/owner/example",
+        ),
+    ],
+)
+def test_legacy_v1_identity_is_derived_only_from_the_current_remote(
+    value: str,
+    current_identity: str,
+    legacy_identity: str,
+) -> None:
+    """Every supported changed network spelling has one exact recovery identity."""
+
+    assert origin_identity_get(value) == current_identity
+    assert legacy_v1_origin_identity_get(value) == legacy_identity
 
 
 @pytest.mark.parametrize(
@@ -84,6 +120,8 @@ def test_origin_identity_rejects_credentials_and_suffixes_without_echo(value: st
         "https://github..com/owner/example.git",
         "https://127.1/owner/example.git",
         "https://2130706433/owner/example.git",
+        "git@github.com:owner/example.git.git",
+        "https://github.com/owner/example.git.git",
     ],
 )
 def test_origin_identity_rejects_malformed_authorities_and_dot_segments(value: str) -> None:

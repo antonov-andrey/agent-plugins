@@ -58,6 +58,8 @@ def _network_path_normalize(value: str) -> str:
         ):
             raise GitOriginError("Repository origin URL contains an unsafe path")
         normalized_part_list.append(part)
+    if normalized_part_list[-1].endswith(".git.git"):
+        raise GitOriginError("Repository origin URL contains an ambiguous transport suffix")
     if normalized_part_list[-1].endswith(".git"):
         normalized_part_list[-1] = normalized_part_list[-1].removesuffix(".git")
     if not normalized_part_list[-1]:
@@ -99,6 +101,63 @@ def _file_url_identity_get(path_text: str) -> str:
     ):
         raise GitOriginError("Repository file URL requires one canonical absolute path")
     return path.as_uri()
+
+
+def legacy_v1_origin_identity_get(value: str) -> str | None:
+    """Return the identity produced by the previous workspace owner.
+
+    This function exists only for a narrow private-state migration. It derives
+    the old identity from the exact current configured remote and never accepts
+    a state-provided value as input.
+
+    Args:
+        value: Exact current configured Git remote.
+
+    Returns:
+        Previous identity when that owner accepted the remote, or absence.
+    """
+
+    if not isinstance(value, str) or not value or any(character in value for character in ("\x00", "\n", "\r")):
+        return None
+    if value.startswith("git@") and ":" in value:
+        authority, path = value.split(":", 1)
+        host = authority.removeprefix("git@").lower()
+        normalized_path = path.removesuffix(".git").strip("/")
+        if not host or not normalized_path or any(character in path for character in ("?", "#")):
+            return None
+        return f"ssh://{host}/{normalized_path}"
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError:
+        return None
+    if parsed.scheme in {"http", "https", "ssh", "git"} and parsed.hostname:
+        if parsed.query or parsed.fragment or parsed.password is not None:
+            return None
+        if parsed.scheme in {"http", "https", "git"} and parsed.username is not None:
+            return None
+        normalized_path = parsed.path.removesuffix(".git").strip("/")
+        if not normalized_path:
+            return None
+        host = parsed.hostname.lower()
+        authority = host if port is None else f"{host}:{port}"
+        if parsed.scheme == "ssh" and parsed.username not in {None, "git"}:
+            authority = f"{parsed.username}@{authority}"
+        return f"{parsed.scheme.lower()}://{authority}/{normalized_path}"
+    if parsed.scheme == "file":
+        if (
+            parsed.query
+            or parsed.fragment
+            or parsed.username
+            or parsed.password
+            or parsed.netloc not in {"", "localhost"}
+        ):
+            return None
+        return f"file://{Path(parsed.path).resolve(strict=False)}"
+    path = Path(value)
+    if path.is_absolute():
+        return f"file://{path.resolve(strict=False)}"
+    return None
 
 
 def origin_identity_get(value: str) -> str:

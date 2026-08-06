@@ -11,7 +11,7 @@ import secrets
 import stat
 import subprocess
 
-from git_origin.identity import GitOriginError, origin_identity_get
+from git_origin.identity import GitOriginError, legacy_v1_origin_identity_get, origin_identity_get
 from json_contract import JsonContractError, json_load_strict
 from task_workspace.model import (
     RepositoryRequest,
@@ -94,15 +94,6 @@ def _workspace_origin_identity_get(value: str) -> str:
         raise TaskWorkspaceError(str(error)) from error
 
 
-def _legacy_v1_git_ssh_origin_identity_get(current_identity: str) -> str | None:
-    """Return the exact v1 identity that omitted the conventional SSH ``git`` user."""
-
-    prefix = "ssh://git@"
-    if not current_identity.startswith(prefix):
-        return None
-    return "ssh://" + current_identity.removeprefix(prefix)
-
-
 class WorkspaceRepository:
     """Own one discovered canonical checkout and its task worktree state."""
 
@@ -126,9 +117,9 @@ class WorkspaceRepository:
             raise TaskWorkspaceError("Canonical checkout discovery returned another root")
         if metadata_directory.resolve(strict=True) != self._common_directory_get():
             raise TaskWorkspaceError("Canonical checkout must own its physical Git common directory")
-        self.origin_identity = _workspace_origin_identity_get(
-            git_command_text_get(self.main_root, ("remote", "get-url", "origin"))
-        )
+        configured_origin = git_command_text_get(self.main_root, ("remote", "get-url", "origin"))
+        self.origin_identity = _workspace_origin_identity_get(configured_origin)
+        self._legacy_v1_origin_identity = legacy_v1_origin_identity_get(configured_origin)
         if self.origin_identity != _workspace_origin_identity_get(request.origin_url):
             raise TaskWorkspaceError("Canonical checkout origin differs from the approved issue contract")
         git_command_run(self.main_root, ("check-ref-format", "--branch", request.base_branch))
@@ -260,7 +251,7 @@ class WorkspaceRepository:
         issue_identifier: str,
         state: RepositoryWorkspaceState,
     ) -> RepositoryWorkspaceState:
-        """Migrate one proven v1 SSH identity, then require the exact current owner.
+        """Persist one proven v1 identity transition, then require the current owner.
 
         The caller holds the issue workspace lock. No other legacy spelling is
         accepted, and every non-origin ownership field is proved before the
@@ -271,17 +262,38 @@ class WorkspaceRepository:
             state: Typed v1 private state read from this repository.
 
         Returns:
-            Strict current state, migrated only when the old ``git`` omission is exact.
+            Strict current state, migrated only from the exact derived v1 identity.
         """
 
-        legacy_identity = _legacy_v1_git_ssh_origin_identity_get(self.origin_identity)
-        if state.origin_identity != self.origin_identity and state.origin_identity == legacy_identity:
-            migrated_state = replace(state, origin_identity=self.origin_identity)
-            self.state_identity_require(issue_identifier, migrated_state)
+        migrated_state = self.state_current_view_require(issue_identifier, state)
+        if migrated_state is not state:
             self.state_write(migrated_state)
-            return migrated_state
-        self.state_identity_require(issue_identifier, state)
-        return state
+        return migrated_state
+
+    def state_current_view_require(
+        self,
+        issue_identifier: str,
+        state: RepositoryWorkspaceState,
+    ) -> RepositoryWorkspaceState:
+        """Return a strict current identity view without writing private state.
+
+        Args:
+            issue_identifier: Canonical Linear issue identifier.
+            state: Typed v1 private state read from this repository.
+
+        Returns:
+            Current state or one in-memory view of a proven legacy identity.
+        """
+
+        migrated_state = state
+        if (
+            state.origin_identity != self.origin_identity
+            and self._legacy_v1_origin_identity is not None
+            and state.origin_identity == self._legacy_v1_origin_identity
+        ):
+            migrated_state = replace(state, origin_identity=self.origin_identity)
+        self.state_identity_require(issue_identifier, migrated_state)
+        return migrated_state
 
     def state_delete(self, issue_identifier: str) -> None:
         """Delete exact private state idempotently.
