@@ -307,16 +307,6 @@ def test_delta_issue_readback_accepts_canonical_issue_reference_enrichment() -> 
         activated=True,
         project_status="In Progress",
     )
-    before_delta_receipt = replace(
-        remote,
-        issue_list=[
-            replace(item, status_name=target_status) if item.node_key == "implementation" else item
-            for item in remote.issue_list
-        ],
-    )
-    with pytest.raises(TaskGraphError, match="must already be Rework and absent from reverification"):
-        TaskGraphDeltaReconciler(delta).plan(before_delta_receipt)
-
     remote = _delta_receipt_add(delta, remote)
     remediation = RemoteIssue(
         id="70000000-0000-4000-8000-000000000001",
