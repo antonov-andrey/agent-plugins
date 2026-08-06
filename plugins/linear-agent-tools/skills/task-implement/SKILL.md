@@ -54,7 +54,7 @@ Every receipt-bearing preview or handoff MUST explicitly state all of these fact
 - the separate receipt key binds that stable verification key itself plus the outcome, UTC completion instant, exact artifact URL and artifact content SHA-256;
 - every exact codec-rendered verification receipt comment was published before candidate publication;
 - each durable canonical HTTPS artifact URL contains no credentials, port, query string or fragment; and
-- for evidence delivery, the Human Review candidate identity is validated and derived from each current receipt key, never from the stable verification key.
+- the Human Review candidate identity follows the delivery kind without a mixed surface: code delivery uses the exact PR URL/head map, while evidence delivery uses each validated current receipt key and never the stable verification key.
 
 A generic claim that a receipt binds inputs and evidence, or a handoff that only says receipts were created, is insufficient. Checkout path canonicality is itself mandatory evidence: every receipt-bearing handoff must say `canonical absolute path`; reducing that identity to only `absolute path` is incomplete.
 
