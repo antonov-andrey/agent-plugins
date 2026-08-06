@@ -21,7 +21,7 @@ from git_host.model import GitHubContractError, RepositoryIdentity
 from git_host.pull_request import GitHubPullRequestBoundary
 from git_origin.identity import origin_identity_get
 from verification._validation import VerificationReceiptError, instant_parse
-from verification.attempt import AttemptSummary
+from verification.attempt import AttemptSummary, CodexUsage
 from verification.baseline import LocalPhaseBaseline, TaskWorkspaceBaseline
 from verification.candidate import CandidateIdentity, CandidateInput
 from verification.invalidation import ReceiptReuseEvaluator
@@ -859,7 +859,13 @@ def test_candidate_fingerprint_and_attempt_comment_bind_exact_external_state() -
         receipt_hit_count=2,
         receipt_miss_count=1,
         external_wait_seconds=12.5,
-        token_count=None,
+        codex_usage=CodexUsage(
+            cached_input_tokens=30,
+            cache_write_input_tokens=5,
+            input_tokens=50,
+            output_tokens=20,
+            reasoning_output_tokens=10,
+        ),
         candidate_identity=candidate.identity_get(),
         candidate_fingerprint=candidate.fingerprint(),
         evidence_url_list=["https://example.test/evidence/17"],
@@ -869,7 +875,17 @@ def test_candidate_fingerprint_and_attempt_comment_bind_exact_external_state() -
     assert "https://example.test/evidence/17" not in rendered
     assert r"https:\/\/example.test\/evidence\/17" in rendered
     assert AttemptSummary.from_payload(ATTEMPT_COMMENT_CODEC.payload_parse(rendered)) == summary
-    assert "token_count" not in summary.payload()
+    assert summary.payload()["codex_usage"] == {
+        "cached_input_tokens": 30,
+        "cache_write_input_tokens": 5,
+        "input_tokens": 50,
+        "output_tokens": 20,
+        "reasoning_output_tokens": 10,
+    }
+    with pytest.raises(VerificationReceiptError, match="another shape"):
+        ATTEMPT_COMMENT_CODEC.payload_parse(
+            rendered.replace("linear-agent-tools-attempt:v3", "linear-agent-tools-attempt:v2", 1)
+        )
     assert (
         candidate.fingerprint()
         != CandidateInput(
@@ -897,6 +913,32 @@ def test_candidate_fingerprint_and_attempt_comment_bind_exact_external_state() -
                 pull_request_head_by_url_map={pull_request_url: COMMIT_ONE},
                 evidence_receipt_by_kind_map={},
             )
+
+
+@pytest.mark.parametrize(
+    ("replacement", "message"),
+    [
+        ({"input_tokens": -1}, "non-negative"),
+        ({"output_tokens": True}, "non-negative"),
+    ],
+)
+def test_attempt_codex_usage_rejects_invalid_surface_counters(
+    replacement: dict[str, object],
+    message: str,
+) -> None:
+    """Attempt telemetry keeps every direct Codex counter exact and internally valid."""
+
+    payload: dict[str, object] = {
+        "cached_input_tokens": 3,
+        "cache_write_input_tokens": 1,
+        "input_tokens": 5,
+        "output_tokens": 2,
+        "reasoning_output_tokens": 1,
+    }
+    payload.update(replacement)
+
+    with pytest.raises(VerificationReceiptError, match=message):
+        CodexUsage.from_payload(payload)
 
 
 def test_evidence_candidate_uses_validated_receipt_keys_for_every_result_identity() -> None:
@@ -987,7 +1029,7 @@ def test_attempt_comment_persists_and_validates_complete_evidence_candidate_iden
         receipt_hit_count=0,
         receipt_miss_count=2,
         external_wait_seconds=0.0,
-        token_count=None,
+        codex_usage=None,
         candidate_identity=candidate.identity_get(),
         candidate_fingerprint=candidate.fingerprint(),
         evidence_url_list=["https://linear.app/example/issue/AND-17"],
@@ -1073,7 +1115,7 @@ def test_attempt_summary_rejects_role_outcome_candidate_and_evidence_mismatch(
         "receipt_hit_count": 1,
         "receipt_miss_count": 0,
         "external_wait_seconds": 0.0,
-        "token_count": None,
+        "codex_usage": None,
         "candidate_identity": candidate_identity,
         "candidate_fingerprint": candidate_identity.fingerprint(),
         "evidence_url_list": ["https://example.test/evidence/17"],
@@ -1100,7 +1142,7 @@ def test_attempt_summary_rejects_commits_for_evidence_delivery() -> None:
             receipt_hit_count=0,
             receipt_miss_count=1,
             external_wait_seconds=0.0,
-            token_count=None,
+            codex_usage=None,
             candidate_identity=None,
             candidate_fingerprint="",
             evidence_url_list=[],
@@ -1129,7 +1171,7 @@ def test_attempt_summary_rejects_noncanonical_or_credential_bearing_evidence_lin
             receipt_hit_count=1,
             receipt_miss_count=0,
             external_wait_seconds=0.0,
-            token_count=None,
+            codex_usage=None,
             candidate_identity=candidate_identity,
             candidate_fingerprint=candidate_identity.fingerprint(),
             evidence_url_list=["https://token:secret@example.test/evidence/17"],
@@ -1163,7 +1205,7 @@ def test_attempt_summary_rejects_noncanonical_repository_key_without_echo(
             receipt_hit_count=0,
             receipt_miss_count=1,
             external_wait_seconds=0.0,
-            token_count=None,
+            codex_usage=None,
             candidate_identity=None,
             candidate_fingerprint="",
             evidence_url_list=[],
@@ -1183,7 +1225,7 @@ def test_attempt_cli_rejects_secret_repository_key_without_comment_output(
     input_path.write_text(
         json.dumps(
             {
-                "schema_version": 2,
+                "schema_version": 3,
                 "attempt_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
                 "issue_identifier": "AND-17",
                 "role_label": "task:implementation",
@@ -1260,7 +1302,7 @@ def test_attempt_summary_rejects_candidate_from_another_delivery_surface(
     """A code identity cannot approve evidence and receipt evidence cannot approve code."""
 
     payload = {
-        "schema_version": 2,
+        "schema_version": 3,
         "attempt_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
         "issue_identifier": "AND-17",
         "role_label": role_label,
@@ -1299,7 +1341,7 @@ def test_shared_evidence_cli_rejects_candidate_from_another_delivery_surface(
     input_path.write_text(
         json.dumps(
             {
-                "schema_version": 2,
+                "schema_version": 3,
                 "attempt_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
                 "issue_identifier": "AND-17",
                 "role_label": "task:review",

@@ -64,7 +64,7 @@ class VerificationCommentCodec:
 
 
 ATTEMPT_COMMENT_CODEC = VerificationCommentCodec(
-    prefix="<!-- linear-agent-tools-attempt:v2 -->\n```json\n",
+    prefix="<!-- linear-agent-tools-attempt:v3 -->\n```json\n",
     label="Attempt",
 )
 LOCAL_PHASE_BASELINE_COMMENT_CODEC = VerificationCommentCodec(
