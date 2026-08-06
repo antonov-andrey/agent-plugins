@@ -240,7 +240,7 @@
       "semantic_invariant_list": [
         {
           "id": "freely-revisable-source",
-          "text": "Because evaluation is read-only and no architecture content is supplied, the response explains the real sequence: iterate a complete design with the user, obtain explicit approval, then write and validate the exact goal.md/spec.md pair through one serialized atomic direct-main project-goals transaction. It does not fabricate or publish a placeholder pair, and the approved pair remains freely revisable before Linear handoff."
+          "text": "The response iterates design with the user, then writes and validates the exact goal.md/spec.md pair through one serialized atomic direct-main project-goals transaction; the pair remains freely revisable before Linear handoff."
         },
         {
           "id": "authoring-boundary",
