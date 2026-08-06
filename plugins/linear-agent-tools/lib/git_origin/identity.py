@@ -15,6 +15,7 @@ _SCP_ORIGIN_PATTERN = re.compile(
 _SSH_USERNAME_PATTERN = re.compile(r"[A-Za-z0-9._-]+")
 _HEX_DIGIT_SET = frozenset("0123456789abcdefABCDEF")
 _URI_UNRESERVED_CHARACTER_SET = frozenset(ascii_letters + digits + "-._~")
+_SCP_RELATIVE_SCHEME = "ssh+scp"
 
 
 class GitOriginError(RuntimeError):
@@ -45,7 +46,9 @@ def _uri_unreserved_decode(value: str) -> str:
 def _network_path_normalize(value: str) -> str:
     """Return one unambiguous repository path without its transport suffix."""
 
-    raw_part_list = value.strip("/").split("/")
+    if not value or value.startswith("//") or value.endswith("/"):
+        raise GitOriginError("Repository origin URL contains an unsafe path")
+    raw_part_list = value.removeprefix("/").split("/")
     normalized_part_list: list[str] = []
     for raw_part in raw_part_list:
         part = _uri_unreserved_decode(raw_part)
@@ -160,6 +163,25 @@ def legacy_v1_origin_identity_get(value: str) -> str | None:
     return None
 
 
+def legacy_origin_identity_set_get(value: str) -> frozenset[str]:
+    """Return only predecessor identities derived from one current remote.
+
+    The v1 owner omitted the conventional Git SSH user. The immediately
+    preceding owner also collapsed SCP-relative paths into absolute SSH URL
+    paths. Both values are derived from the configured remote rather than from
+    untrusted persisted state.
+    """
+
+    identity_set = {identity for identity in (legacy_v1_origin_identity_get(value),) if identity is not None}
+    scp_match = _SCP_ORIGIN_PATTERN.fullmatch(value)
+    if scp_match is not None and not scp_match.group("path").startswith("/"):
+        username = scp_match.group("username")
+        host = _network_host_normalize(scp_match.group("host"))
+        normalized_path = _network_path_normalize(scp_match.group("path"))
+        identity_set.add(f"ssh://{username}@{_network_authority_render(host, None)}/{normalized_path}")
+    return frozenset(identity_set)
+
+
 def origin_identity_get(value: str) -> str:
     """Normalize one credential-free Git origin for equality.
 
@@ -176,26 +198,31 @@ def origin_identity_get(value: str) -> str:
     if scp_match is not None:
         username = scp_match.group("username")
         host = _network_host_normalize(scp_match.group("host"))
-        normalized_path = _network_path_normalize(scp_match.group("path"))
-        return f"ssh://{username}@{_network_authority_render(host, None)}/{normalized_path}"
+        path = scp_match.group("path")
+        normalized_path = _network_path_normalize(path)
+        scheme = "ssh" if path.startswith("/") or host == "github.com" else _SCP_RELATIVE_SCHEME
+        return f"{scheme}://{username}@{_network_authority_render(host, None)}/{normalized_path}"
     try:
         parsed = urlsplit(value)
         port = parsed.port
     except ValueError as error:
         raise GitOriginError("Repository origin URL contains an invalid authority") from error
-    if parsed.scheme in {"http", "https", "ssh", "git"} and parsed.hostname:
+    if parsed.scheme in {"http", "https", "ssh", "git", _SCP_RELATIVE_SCHEME} and parsed.hostname:
         if parsed.query or parsed.fragment or parsed.password is not None:
             raise GitOriginError("Repository origin URL contains unsupported credentials or suffixes")
         if parsed.scheme in {"http", "https", "git"} and parsed.username is not None:
             raise GitOriginError("Repository origin URL contains unsupported credentials")
+        if parsed.scheme == _SCP_RELATIVE_SCHEME and (parsed.username is None or port is not None):
+            raise GitOriginError("Repository SCP identity contains an invalid authority")
         normalized_path = _network_path_normalize(parsed.path)
         host = _network_host_normalize(parsed.hostname)
         authority = _network_authority_render(host, port)
-        if parsed.scheme == "ssh" and parsed.username is not None:
+        if parsed.scheme in {"ssh", _SCP_RELATIVE_SCHEME} and parsed.username is not None:
             if _SSH_USERNAME_PATTERN.fullmatch(parsed.username) is None:
                 raise GitOriginError("Repository origin URL contains an invalid SSH user")
             authority = f"{parsed.username}@{authority}"
-        return f"{parsed.scheme.lower()}://{authority}/{normalized_path}"
+        scheme = "ssh" if parsed.scheme == _SCP_RELATIVE_SCHEME and host == "github.com" else parsed.scheme.lower()
+        return f"{scheme}://{authority}/{normalized_path}"
     if parsed.scheme == "file":
         if (
             parsed.query

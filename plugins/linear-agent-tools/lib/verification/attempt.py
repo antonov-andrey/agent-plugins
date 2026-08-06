@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 import math
 
+from git_host.model import GitHubContractError, RepositoryIdentity
 from verification._validation import (
     COMMIT_PATTERN,
     ISSUE_IDENTIFIER_PATTERN,
@@ -120,7 +121,10 @@ class AttemptSummary:
         if not isinstance(self.changed_commit_by_repository_map, dict):
             raise VerificationReceiptError("Attempt commit set must be a mapping")
         for repository, commit in self.changed_commit_by_repository_map.items():
-            single_line_validate(repository, label="Attempt repository")
+            try:
+                RepositoryIdentity(repository)
+            except GitHubContractError as error:
+                raise VerificationReceiptError("Attempt repository must use exact owner/name form") from error
             if COMMIT_PATTERN.fullmatch(commit) is None:
                 raise VerificationReceiptError("Attempt commit is not a full lowercase identity")
         if self.delivery_kind != "code" and self.changed_commit_by_repository_map:
@@ -192,7 +196,7 @@ class AttemptSummary:
         payload: dict[str, object] = {
             "schema_version": 2,
             "attempt_id": self.attempt_id,
-            "candidate_identity": None if self.candidate_identity is None else self.candidate_identity.payload(),
+            "candidate_identity": (None if self.candidate_identity is None else self.candidate_identity.payload()),
             "candidate_fingerprint": self.candidate_fingerprint,
             "changed_commit_by_repository_map": dict(self.changed_commit_by_repository_map),
             "completed_at": instant_render(self.completed_at),

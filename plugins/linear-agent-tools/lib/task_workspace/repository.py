@@ -11,7 +11,11 @@ import secrets
 import stat
 import subprocess
 
-from git_origin.identity import GitOriginError, legacy_v1_origin_identity_get, origin_identity_get
+from git_origin.identity import (
+    GitOriginError,
+    legacy_origin_identity_set_get,
+    origin_identity_get,
+)
 from json_contract import JsonContractError, json_load_strict
 from task_workspace.model import (
     RepositoryRequest,
@@ -119,7 +123,7 @@ class WorkspaceRepository:
             raise TaskWorkspaceError("Canonical checkout must own its physical Git common directory")
         configured_origin = git_command_text_get(self.main_root, ("remote", "get-url", "origin"))
         self.origin_identity = _workspace_origin_identity_get(configured_origin)
-        self._legacy_v1_origin_identity = legacy_v1_origin_identity_get(configured_origin)
+        self._legacy_origin_identity_set = legacy_origin_identity_set_get(configured_origin) - {self.origin_identity}
         if self.origin_identity != _workspace_origin_identity_get(request.origin_url):
             raise TaskWorkspaceError("Canonical checkout origin differs from the approved issue contract")
         git_command_run(self.main_root, ("check-ref-format", "--branch", request.base_branch))
@@ -251,7 +255,7 @@ class WorkspaceRepository:
         issue_identifier: str,
         state: RepositoryWorkspaceState,
     ) -> RepositoryWorkspaceState:
-        """Persist one proven v1 identity transition, then require the current owner.
+        """Persist one proven predecessor identity transition, then require the current owner.
 
         The caller holds the issue workspace lock. No other legacy spelling is
         accepted, and every non-origin ownership field is proved before the
@@ -259,10 +263,10 @@ class WorkspaceRepository:
 
         Args:
             issue_identifier: Canonical Linear issue identifier.
-            state: Typed v1 private state read from this repository.
+            state: Typed predecessor private state read from this repository.
 
         Returns:
-            Strict current state, migrated only from the exact derived v1 identity.
+            Strict current state, migrated only from an exact derived predecessor identity.
         """
 
         migrated_state = self.state_current_view_require(issue_identifier, state)
@@ -279,18 +283,14 @@ class WorkspaceRepository:
 
         Args:
             issue_identifier: Canonical Linear issue identifier.
-            state: Typed v1 private state read from this repository.
+            state: Typed predecessor private state read from this repository.
 
         Returns:
             Current state or one in-memory view of a proven legacy identity.
         """
 
         migrated_state = state
-        if (
-            state.origin_identity != self.origin_identity
-            and self._legacy_v1_origin_identity is not None
-            and state.origin_identity == self._legacy_v1_origin_identity
-        ):
+        if state.origin_identity != self.origin_identity and state.origin_identity in self._legacy_origin_identity_set:
             migrated_state = replace(state, origin_identity=self.origin_identity)
         self.state_identity_require(issue_identifier, migrated_state)
         return migrated_state

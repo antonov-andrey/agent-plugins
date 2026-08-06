@@ -25,7 +25,11 @@ from verification.attempt import AttemptSummary
 from verification.baseline import LocalPhaseBaseline, TaskWorkspaceBaseline
 from verification.candidate import CandidateIdentity, CandidateInput
 from verification.invalidation import ReceiptReuseEvaluator
-from verification.model import VerificationCheckout, VerificationInput, VerificationReceipt
+from verification.model import (
+    VerificationCheckout,
+    VerificationInput,
+    VerificationReceipt,
+)
 from verification.receipt import (
     ATTEMPT_COMMENT_CODEC,
     LOCAL_PHASE_BASELINE_COMMENT_CODEC,
@@ -166,7 +170,9 @@ def test_verification_input_rejects_non_string_corpus_identity(value: object) ->
 
 
 @pytest.mark.parametrize("value", ["", "not-a-sha256", None, False, 0])
-def test_verification_input_requires_semantic_contract_fingerprint(value: object) -> None:
+def test_verification_input_requires_semantic_contract_fingerprint(
+    value: object,
+) -> None:
     """Receipt reuse cannot outlive the prompt, expectations, invariants, or schema it verifies."""
 
     payload = _verification_input().payload()
@@ -185,7 +191,9 @@ def test_verification_input_requires_semantic_contract_fingerprint(value: object
         "relative-repository",
     ],
 )
-def test_verification_checkout_rejects_unsafe_repository_url_without_echo(repository_url: str) -> None:
+def test_verification_checkout_rejects_unsafe_repository_url_without_echo(
+    repository_url: str,
+) -> None:
     """Receipt construction rejects secret-bearing or unsupported Git origins without reflecting them."""
 
     with pytest.raises(VerificationReceiptError, match="unsafe or unsupported") as error:
@@ -205,7 +213,9 @@ def test_workspace_origin_identity_is_valid_verification_checkout_input() -> Non
     assert checkout.repository_url == repository_identity
 
 
-def test_shared_evidence_cli_rejects_credential_bearing_repository_without_echo(tmp_path: Path) -> None:
+def test_shared_evidence_cli_rejects_credential_bearing_repository_without_echo(
+    tmp_path: Path,
+) -> None:
     """The public receipt boundary rejects a repository secret before rendering any comment."""
 
     script = LIBRARY_ROOT / "verification" / "tool" / "evidence.py"
@@ -283,7 +293,10 @@ def test_checkout_list_represents_two_revisions_of_one_repository_without_collis
 
     parsed = VerificationInput.from_payload(payload)
 
-    assert [checkout.commit for checkout in parsed.checkout_list] == [COMMIT_TWO, COMMIT_ONE]
+    assert [checkout.commit for checkout in parsed.checkout_list] == [
+        COMMIT_TWO,
+        COMMIT_ONE,
+    ]
     assert {checkout.repository_url for checkout in parsed.checkout_list} == {
         "git@github.com:antonov-andrey/example.git"
     }
@@ -297,9 +310,17 @@ def test_checkout_list_represents_two_revisions_of_one_repository_without_collis
     ("payload_path", "value", "message"),
     [
         (("working_directory",), "workspace/example", "absolute POSIX"),
-        (("working_directory",), "//workspace/example/.worktree/and-17", "absolute POSIX"),
+        (
+            ("working_directory",),
+            "//workspace/example/.worktree/and-17",
+            "absolute POSIX",
+        ),
         (("checkout_list", 0, "path"), "/workspace/../example", "absolute POSIX"),
-        (("checkout_list", 0, "path"), "//workspace/example/.worktree/and-17", "absolute POSIX"),
+        (
+            ("checkout_list", 0, "path"),
+            "//workspace/example/.worktree/and-17",
+            "absolute POSIX",
+        ),
         (
             ("checkout_list", 0, "recursive_submodule_commit_by_path_map"),
             {"../provider": COMMIT_ONE},
@@ -563,7 +584,9 @@ def test_receipt_accepts_exact_canonical_percent_encoded_path() -> None:
         "https://127.0.0.1/workspace/asset/artifact",
     ],
 )
-def test_receipt_accepts_canonical_dns_and_ipv4_provider_hosts(evidence_url: str) -> None:
+def test_receipt_accepts_canonical_dns_and_ipv4_provider_hosts(
+    evidence_url: str,
+) -> None:
     """Numeric-label DNS and canonical dotted IPv4 remain explicit provider identities."""
 
     receipt = VerificationReceipt.from_input(
@@ -594,7 +617,9 @@ def test_receipt_accepts_canonical_dns_and_ipv4_provider_hosts(evidence_url: str
         "https://0xffffffffffffffff/workspace/asset/artifact",
     ],
 )
-def test_receipt_comment_parse_rejects_noncanonical_evidence_url(evidence_url: str) -> None:
+def test_receipt_comment_parse_rejects_noncanonical_evidence_url(
+    evidence_url: str,
+) -> None:
     """A provider comment cannot restore a malformed artifact identity as one receipt."""
 
     receipt = VerificationReceipt.from_input(
@@ -639,7 +664,9 @@ def test_shared_evidence_cli_is_directly_executable() -> None:
     assert result.stderr == ""
 
 
-def test_shared_evidence_cli_creates_and_reuses_the_exact_linear_comment_shape(tmp_path: Path) -> None:
+def test_shared_evidence_cli_creates_and_reuses_the_exact_linear_comment_shape(
+    tmp_path: Path,
+) -> None:
     """Every workflow role uses the shared owner for codec creation and provider readback."""
 
     script = LIBRARY_ROOT / "verification" / "tool" / "evidence.py"
@@ -838,12 +865,10 @@ def test_candidate_fingerprint_and_attempt_comment_bind_exact_external_state() -
         evidence_url_list=["https://example.test/evidence/17"],
     )
 
-    assert (
-        AttemptSummary.from_payload(
-            ATTEMPT_COMMENT_CODEC.payload_parse(ATTEMPT_COMMENT_CODEC.render(summary.payload()))
-        )
-        == summary
-    )
+    rendered = ATTEMPT_COMMENT_CODEC.render(summary.payload())
+    assert "https://example.test/evidence/17" not in rendered
+    assert r"https:\/\/example.test\/evidence\/17" in rendered
+    assert AttemptSummary.from_payload(ATTEMPT_COMMENT_CODEC.payload_parse(rendered)) == summary
     assert "token_count" not in summary.payload()
     assert (
         candidate.fingerprint()
@@ -1112,7 +1137,95 @@ def test_attempt_summary_rejects_noncanonical_or_credential_bearing_evidence_lin
 
 
 @pytest.mark.parametrize(
-    ("role_label", "delivery_kind", "changed_commit_by_repository_map", "candidate_identity"),
+    "repository",
+    [
+        "https://token:secret@github.com/antonov-andrey/example.git",
+        "antonov-andrey/example/another",
+        "./example",
+        "antonov-andrey/..",
+    ],
+)
+def test_attempt_summary_rejects_noncanonical_repository_key_without_echo(
+    repository: str,
+) -> None:
+    """Provider attempt telemetry accepts only the typed GitHub repository key."""
+
+    with pytest.raises(VerificationReceiptError) as error:
+        AttemptSummary(
+            attempt_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            issue_identifier="AND-17",
+            role_label="task:implementation",
+            delivery_kind="code",
+            started_at=datetime(2026, 8, 4, 12, 0, tzinfo=timezone.utc),
+            completed_at=datetime(2026, 8, 4, 12, 30, tzinfo=timezone.utc),
+            outcome="failed",
+            changed_commit_by_repository_map={repository: COMMIT_ONE},
+            receipt_hit_count=0,
+            receipt_miss_count=1,
+            external_wait_seconds=0.0,
+            token_count=None,
+            candidate_identity=None,
+            candidate_fingerprint="",
+            evidence_url_list=[],
+        )
+
+    assert "token" not in str(error.value)
+    assert "secret" not in str(error.value)
+
+
+def test_attempt_cli_rejects_secret_repository_key_without_comment_output(
+    tmp_path: Path,
+) -> None:
+    """A rejected repository credential never reaches provider output or diagnostics."""
+
+    script = LIBRARY_ROOT / "verification" / "tool" / "evidence.py"
+    input_path = tmp_path / "attempt.json"
+    input_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "attempt_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                "issue_identifier": "AND-17",
+                "role_label": "task:implementation",
+                "delivery_kind": "code",
+                "started_at": "2026-08-04T12:00:00Z",
+                "completed_at": "2026-08-04T12:30:00Z",
+                "outcome": "failed",
+                "changed_commit_by_repository_map": {
+                    "https://token:secret@github.com/antonov-andrey/example.git": COMMIT_ONE
+                },
+                "receipt_hit_count": 0,
+                "receipt_miss_count": 1,
+                "external_wait_seconds": 0.0,
+                "candidate_identity": None,
+                "candidate_fingerprint": "",
+                "evidence_url_list": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    rendered = subprocess.run(
+        [str(script), "attempt", "--input", str(input_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert rendered.returncode == 2
+    assert rendered.stdout == ""
+    assert "exact owner/name form" in rendered.stderr
+    assert "token" not in rendered.stderr
+    assert "secret" not in rendered.stderr
+
+
+@pytest.mark.parametrize(
+    (
+        "role_label",
+        "delivery_kind",
+        "changed_commit_by_repository_map",
+        "candidate_identity",
+    ),
     [
         (
             "task:review",
@@ -1171,7 +1284,9 @@ def test_attempt_summary_rejects_candidate_from_another_delivery_surface(
         AttemptSummary.from_payload(ATTEMPT_COMMENT_CODEC.payload_parse(comment))
 
 
-def test_shared_evidence_cli_rejects_candidate_from_another_delivery_surface(tmp_path: Path) -> None:
+def test_shared_evidence_cli_rejects_candidate_from_another_delivery_surface(
+    tmp_path: Path,
+) -> None:
     """The public attempt boundary rejects a code identity on an evidence attempt."""
 
     script = LIBRARY_ROOT / "verification" / "tool" / "evidence.py"
@@ -1234,14 +1349,10 @@ def test_local_phase_baseline_requires_every_phase_and_round_trips() -> None:
         evidence_url="https://linear.app/example/project/acceptance",
     )
 
-    assert (
-        LocalPhaseBaseline.from_payload(
-            LOCAL_PHASE_BASELINE_COMMENT_CODEC.payload_parse(
-                LOCAL_PHASE_BASELINE_COMMENT_CODEC.render(baseline.payload())
-            )
-        )
-        == baseline
-    )
+    rendered = LOCAL_PHASE_BASELINE_COMMENT_CODEC.render(baseline.payload())
+    assert baseline.evidence_url not in rendered
+    assert r"https:\/\/linear.app\/example\/project\/acceptance" in rendered
+    assert LocalPhaseBaseline.from_payload(LOCAL_PHASE_BASELINE_COMMENT_CODEC.payload_parse(rendered)) == baseline
     with pytest.raises(VerificationReceiptError, match="queue, startup, execution, review and merge"):
         LocalPhaseBaseline(
             project_id=baseline.project_id,
@@ -1263,7 +1374,9 @@ def test_local_phase_baseline_requires_every_phase_and_round_trips() -> None:
         "https://127.1/evidence",
     ],
 )
-def test_local_phase_baseline_rejects_noncanonical_evidence_url(evidence_url: str) -> None:
+def test_local_phase_baseline_rejects_noncanonical_evidence_url(
+    evidence_url: str,
+) -> None:
     """Local phase telemetry uses the same durable secret-free evidence identity."""
 
     with pytest.raises(VerificationReceiptError, match="canonical HTTPS provider URL"):
@@ -1283,7 +1396,9 @@ def test_local_phase_baseline_rejects_noncanonical_evidence_url(evidence_url: st
         )
 
 
-def test_local_phase_baseline_cli_rejects_secret_url_without_comment_output(tmp_path: Path) -> None:
+def test_local_phase_baseline_cli_rejects_secret_url_without_comment_output(
+    tmp_path: Path,
+) -> None:
     """Rejected baseline secrets never reach provider comment output or diagnostics."""
 
     script = LIBRARY_ROOT / "verification" / "tool" / "evidence.py"
@@ -1333,14 +1448,10 @@ def test_task_workspace_baseline_is_deterministic_linear_evidence() -> None:
         baseline_commit_by_repository_url_map={"git@github.com:antonov-andrey/example.git": COMMIT_ONE},
     )
 
-    assert (
-        TaskWorkspaceBaseline.from_payload(
-            TASK_WORKSPACE_BASELINE_COMMENT_CODEC.payload_parse(
-                TASK_WORKSPACE_BASELINE_COMMENT_CODEC.render(baseline.payload())
-            )
-        )
-        == baseline
-    )
+    rendered = TASK_WORKSPACE_BASELINE_COMMENT_CODEC.render(baseline.payload())
+    assert "git@github.com:antonov-andrey/example.git" not in rendered
+    assert r"git@github.com:antonov-andrey\/example.git" in rendered
+    assert TaskWorkspaceBaseline.from_payload(TASK_WORKSPACE_BASELINE_COMMENT_CODEC.payload_parse(rendered)) == baseline
     with pytest.raises(VerificationReceiptError, match="branch differs"):
         TaskWorkspaceBaseline(
             issue_identifier=baseline.issue_identifier,
@@ -1434,7 +1545,12 @@ def test_shared_evidence_cli_renders_candidate_without_persistent_state(
     )
 
     payload = json.loads(rendered.stdout)
-    assert set(payload) == {"candidate_fingerprint", "candidate_identity", "input", "schema_version"}
+    assert set(payload) == {
+        "candidate_fingerprint",
+        "candidate_identity",
+        "input",
+        "schema_version",
+    }
     assert payload["schema_version"] == 3
     assert payload["candidate_fingerprint"] == candidate.fingerprint()
     assert payload["candidate_identity"] == candidate.identity_get().payload()

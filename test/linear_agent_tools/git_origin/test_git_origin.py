@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
+import os
+import subprocess
 import sys
 
 import pytest
@@ -12,7 +15,12 @@ LIBRARY_ROOT = REPOSITORY_ROOT / "plugins" / "linear-agent-tools" / "lib"
 if str(LIBRARY_ROOT) not in sys.path:
     sys.path.insert(0, str(LIBRARY_ROOT))
 
-from git_origin.identity import GitOriginError, legacy_v1_origin_identity_get, origin_identity_get
+from git_origin.identity import (
+    GitOriginError,
+    legacy_origin_identity_set_get,
+    legacy_v1_origin_identity_get,
+    origin_identity_get,
+)
 
 
 def test_origin_identity_preserves_security_relevant_url_components() -> None:
@@ -28,12 +36,15 @@ def test_origin_identity_preserves_security_relevant_url_components() -> None:
     assert origin_identity_get("ssh://git@[2001:db8::1]:2222/owner/example.git") == (
         "ssh://git@[2001:db8::1]:2222/owner/example"
     )
+    assert origin_identity_get("git@example.com:owner/example.git") == ("ssh+scp://git@example.com/owner/example")
+    assert origin_identity_get("git@example.com:/owner/example.git") == ("ssh://git@example.com/owner/example")
 
 
 @pytest.mark.parametrize(
     "value",
     [
         "git@github.com:owner/example.git",
+        "git@example.com:owner/example.git",
         "ssh://git@[2001:db8::1]:2222/owner/example.git",
         "https://github.com/owner/%7Eexample.git",
     ],
@@ -82,6 +93,61 @@ def test_legacy_v1_identity_is_derived_only_from_the_current_remote(
     assert legacy_v1_origin_identity_get(value) == legacy_identity
 
 
+def test_git_argv_and_origin_identity_preserve_scp_relative_path_mode(
+    tmp_path: Path,
+) -> None:
+    """Canonical identity follows the different paths Git sends to SSH."""
+
+    capture_path = tmp_path / "ssh-argv.json"
+    ssh_path = tmp_path / "ssh-capture.py"
+    ssh_path.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, os, sys\n"
+        "with open(os.environ['SSH_ARGV_CAPTURE'], 'w', encoding='utf-8') as handle:\n"
+        "    json.dump(sys.argv[1:], handle)\n"
+        "raise SystemExit(1)\n",
+        encoding="utf-8",
+    )
+    ssh_path.chmod(0o700)
+    environment = {
+        **os.environ,
+        "GIT_SSH": str(ssh_path),
+        "GIT_SSH_VARIANT": "ssh",
+        "GIT_TERMINAL_PROMPT": "0",
+        "SSH_ARGV_CAPTURE": str(capture_path),
+    }
+
+    remote_command_by_origin_map: dict[str, str] = {}
+    for origin in (
+        "git@example.com:owner/example.git",
+        "ssh://git@example.com/owner/example.git",
+    ):
+        subprocess.run(
+            ["git", "ls-remote", origin],
+            check=False,
+            capture_output=True,
+            env=environment,
+        )
+        remote_command_by_origin_map[origin] = json.loads(capture_path.read_text(encoding="utf-8"))[-1]
+
+    assert remote_command_by_origin_map["git@example.com:owner/example.git"] == ("git-upload-pack 'owner/example.git'")
+    assert remote_command_by_origin_map["ssh://git@example.com/owner/example.git"] == (
+        "git-upload-pack '/owner/example.git'"
+    )
+    assert origin_identity_get("git@example.com:owner/example.git") != origin_identity_get(
+        "ssh://git@example.com/owner/example.git"
+    )
+
+
+def test_scp_relative_identity_exposes_only_exact_derived_predecessors() -> None:
+    """Recovery accepts prior owner values without trusting a state-provided alias."""
+
+    assert legacy_origin_identity_set_get("git@example.com:owner/example.git") == {
+        "ssh://example.com/owner/example",
+        "ssh://git@example.com/owner/example",
+    }
+
+
 @pytest.mark.parametrize(
     "value",
     [
@@ -91,7 +157,9 @@ def test_legacy_v1_identity_is_derived_only_from_the_current_remote(
         "https://github.com/owner/example.git#main",
     ],
 )
-def test_origin_identity_rejects_credentials_and_suffixes_without_echo(value: str) -> None:
+def test_origin_identity_rejects_credentials_and_suffixes_without_echo(
+    value: str,
+) -> None:
     """Unsafe Git origins fail without copying their secret-bearing value into diagnostics."""
 
     with pytest.raises(GitOriginError) as error:
@@ -122,9 +190,13 @@ def test_origin_identity_rejects_credentials_and_suffixes_without_echo(value: st
         "https://2130706433/owner/example.git",
         "git@github.com:owner/example.git.git",
         "https://github.com/owner/example.git.git",
+        "ssh://git@example.com//owner/example.git",
+        "git@example.com:owner/example.git/",
     ],
 )
-def test_origin_identity_rejects_malformed_authorities_and_dot_segments(value: str) -> None:
+def test_origin_identity_rejects_malformed_authorities_and_dot_segments(
+    value: str,
+) -> None:
     """Malformed SCP authorities and path aliases cannot acquire a repository identity."""
 
     with pytest.raises(GitOriginError, match="Repository origin URL"):
