@@ -174,7 +174,10 @@ class TaskCleanupReconciler:
         for origin_identity, workspace_state in state.workspace_state_by_origin_identity_map.items():
             repository = state.repository_by_origin_identity_map[origin_identity]
             if workspace_state is not None:
-                repository.state_identity_require(state.request.issue_identifier, workspace_state)
+                state.workspace_state_by_origin_identity_map[origin_identity] = repository.state_migrate_and_require(
+                    state.request.issue_identifier,
+                    workspace_state,
+                )
             else:
                 state.task_absence_require(repository, state.request.issue_identifier)
 

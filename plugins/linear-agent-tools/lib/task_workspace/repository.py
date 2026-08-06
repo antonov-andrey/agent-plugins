@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import replace
 import json
 import os
 from pathlib import Path
@@ -91,6 +92,15 @@ def _workspace_origin_identity_get(value: str) -> str:
         return origin_identity_get(value)
     except GitOriginError as error:
         raise TaskWorkspaceError(str(error)) from error
+
+
+def _legacy_v1_git_ssh_origin_identity_get(current_identity: str) -> str | None:
+    """Return the exact v1 identity that omitted the conventional SSH ``git`` user."""
+
+    prefix = "ssh://git@"
+    if not current_identity.startswith(prefix):
+        return None
+    return "ssh://" + current_identity.removeprefix(prefix)
 
 
 class WorkspaceRepository:
@@ -244,6 +254,34 @@ class WorkspaceRepository:
         except BaseException:
             temporary.unlink(missing_ok=True)
             raise
+
+    def state_migrate_and_require(
+        self,
+        issue_identifier: str,
+        state: RepositoryWorkspaceState,
+    ) -> RepositoryWorkspaceState:
+        """Migrate one proven v1 SSH identity, then require the exact current owner.
+
+        The caller holds the issue workspace lock. No other legacy spelling is
+        accepted, and every non-origin ownership field is proved before the
+        migrated state is written atomically.
+
+        Args:
+            issue_identifier: Canonical Linear issue identifier.
+            state: Typed v1 private state read from this repository.
+
+        Returns:
+            Strict current state, migrated only when the old ``git`` omission is exact.
+        """
+
+        legacy_identity = _legacy_v1_git_ssh_origin_identity_get(self.origin_identity)
+        if state.origin_identity != self.origin_identity and state.origin_identity == legacy_identity:
+            migrated_state = replace(state, origin_identity=self.origin_identity)
+            self.state_identity_require(issue_identifier, migrated_state)
+            self.state_write(migrated_state)
+            return migrated_state
+        self.state_identity_require(issue_identifier, state)
+        return state
 
     def state_delete(self, issue_identifier: str) -> None:
         """Delete exact private state idempotently.

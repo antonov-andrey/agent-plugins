@@ -1253,6 +1253,76 @@ def test_local_phase_baseline_requires_every_phase_and_round_trips() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    "evidence_url",
+    [
+        "https://token:secret@uploads.linear.app/evidence",
+        "https://uploads.linear.app:443/evidence",
+        "https://uploads.linear.app/evidence?token=secret",
+        "https://uploads.linear.app/evidence#fragment",
+        "https://127.1/evidence",
+    ],
+)
+def test_local_phase_baseline_rejects_noncanonical_evidence_url(evidence_url: str) -> None:
+    """Local phase telemetry uses the same durable secret-free evidence identity."""
+
+    with pytest.raises(VerificationReceiptError, match="canonical HTTPS provider URL"):
+        LocalPhaseBaseline(
+            project_id="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+            source_fingerprint="c" * 64,
+            candidate_fingerprint="d" * 64,
+            measured_at=datetime(2026, 8, 4, 13, 0, tzinfo=timezone.utc),
+            duration_seconds_by_phase_map={
+                "execution": 120.0,
+                "merge": 10.0,
+                "queue": 4.0,
+                "review": 30.0,
+                "startup": 2.0,
+            },
+            evidence_url=evidence_url,
+        )
+
+
+def test_local_phase_baseline_cli_rejects_secret_url_without_comment_output(tmp_path: Path) -> None:
+    """Rejected baseline secrets never reach provider comment output or diagnostics."""
+
+    script = LIBRARY_ROOT / "verification" / "tool" / "evidence.py"
+    input_path = tmp_path / "baseline.json"
+    input_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "project_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+                "source_fingerprint": "c" * 64,
+                "candidate_fingerprint": "d" * 64,
+                "measured_at": "2026-08-04T13:00:00Z",
+                "duration_seconds_by_phase_map": {
+                    "execution": 120.0,
+                    "merge": 10.0,
+                    "queue": 4.0,
+                    "review": 30.0,
+                    "startup": 2.0,
+                },
+                "evidence_url": "https://token:secret@uploads.linear.app/evidence?presigned=secret",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    rendered = subprocess.run(
+        [sys.executable, str(script), "baseline", "--input", str(input_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert rendered.returncode == 2
+    assert rendered.stdout == ""
+    assert "canonical HTTPS provider URL" in rendered.stderr
+    assert "token" not in rendered.stderr
+    assert "secret" not in rendered.stderr
+
+
 def test_task_workspace_baseline_is_deterministic_linear_evidence() -> None:
     """First dispatch publishes the exact branch and repository baselines once."""
 

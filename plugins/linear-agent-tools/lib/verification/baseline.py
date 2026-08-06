@@ -15,9 +15,9 @@ from verification._validation import (
     VerificationReceiptError,
     instant_parse,
     instant_render,
-    single_line_validate,
     utc_validate,
 )
+from verification.model import evidence_url_validate
 
 _BASELINE_PHASE_SET = {"queue", "startup", "execution", "review", "merge"}
 
@@ -136,7 +136,7 @@ class LocalPhaseBaseline:
             for duration in self.duration_seconds_by_phase_map.values()
         ):
             raise VerificationReceiptError("Baseline phase durations must be non-negative seconds")
-        single_line_validate(self.evidence_url, label="Baseline evidence URL")
+        evidence_url_validate(self.evidence_url)
         object.__setattr__(
             self,
             "duration_seconds_by_phase_map",

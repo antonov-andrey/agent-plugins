@@ -298,6 +298,59 @@ def test_prepare_preserves_dirty_main_and_rework_adopts_existing_workspace(
     assert (task_root / "unfinished.txt").read_text(encoding="utf-8") == "preserve me\n"
 
 
+def test_v1_git_ssh_identity_migrates_for_prepare_validate_and_cleanup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The exact old ``git``-omitting identity remains recoverable through terminal cleanup."""
+
+    class GitHub:
+        @staticmethod
+        def matching_number_list(**_kwargs: object) -> list[int]:
+            return []
+
+    repository_fixture = _repository_create(tmp_path, resources=False)
+    root = repository_fixture.root
+    config = WorkspaceConfig(tmp_path.resolve())
+    initial_request = _request(repository_fixture.remote, issue="AND-125")
+    initial_state = TaskWorkspaceTransaction(config).prepare(initial_request)[0]
+    current_origin = "git@github.com:antonov-andrey/example.git"
+    current_identity = "ssh://git@github.com/antonov-andrey/example"
+    legacy_identity = "ssh://github.com/antonov-andrey/example"
+    _git(root, "remote", "set-url", "origin", current_origin)
+    request = WorkspaceRequest(
+        issue_identifier="AND-125",
+        repository_list=[RepositoryRequest(current_origin, "main", initial_state.baseline_commit)],
+    )
+    repository = WorkspaceRepository.from_config(config, request.repository_list[0])
+
+    def legacy_state_restore() -> None:
+        current_state = repository.state_read("AND-125")
+        assert current_state is not None
+        repository.state_write(replace(current_state, origin_identity=legacy_identity))
+
+    legacy_state_restore()
+    prepared = TaskWorkspaceTransaction(config).prepare(request)[0]
+    assert prepared.origin_identity == current_identity
+    assert repository.state_read("AND-125") == prepared
+
+    legacy_state_restore()
+    validated = TaskWorkspaceTransaction(config).validate(request)[0]
+    assert validated.origin_identity == current_identity
+    assert repository.state_read("AND-125") == validated
+
+    legacy_state_restore()
+    monkeypatch.setattr(WorkspaceRepository, "fetch", lambda _self: None)
+    result = _task_cleanup_reconciler(
+        config,
+        github=GitHub(),  # type: ignore[arg-type]
+    ).cleanup(_canceled_cleanup_request(request, issue="AND-125"))
+
+    assert result.removed_worktree_count == 1
+    assert repository.state_read("AND-125") is None
+    assert not Path(initial_state.task_root).exists()
+
+
 def test_prepare_initializes_recursive_submodules_and_retry_never_resets_them(
     tmp_path: Path,
 ) -> None:
