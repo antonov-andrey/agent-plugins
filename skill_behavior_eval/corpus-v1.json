@@ -343,12 +343,12 @@
       "working_directory": "..",
       "working_directory_mode": "same-branch",
       "prompt": "Use $linear-agent-tools:task-review for a ready post-merge review issue. Explain both a finding path and the required later zero-finding pass; do not edit product code.",
-      "expected_skill_list": ["linear-agent-tools:task-review"],
+      "expected_skill_list": ["linear-agent-tools:task-review", "project-standards:project-foundation"],
       "forbidden_skill_list": ["linear-agent-tools:task-implement"],
       "semantic_invariant_list": [
         {
           "id": "independent-review",
-          "text": "The fresh review derives complete coverage from current owners rather than prior reports and creates a new remediation implementation blocker for merged findings instead of modifying Product code."
+          "text": "The review derives complete coverage afresh from every current applicable source and stable owner rather than prior reports or implementation artifacts, and it creates a new remediation implementation blocker for merged findings instead of modifying Product code."
         },
         {
           "id": "fresh-zero-pass",
