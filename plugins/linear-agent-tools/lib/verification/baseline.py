@@ -9,15 +9,15 @@ import math
 from git_origin.identity import GitOriginError, origin_identity_get
 from verification._validation import (
     COMMIT_PATTERN,
+    EvidenceContractError,
     ISSUE_IDENTIFIER_PATTERN,
     SHA256_PATTERN,
     UUID_PATTERN,
-    VerificationReceiptError,
+    evidence_url_validate,
     instant_parse,
     instant_render,
     utc_validate,
 )
-from verification.model import evidence_url_validate
 
 _BASELINE_PHASE_SET = {"queue", "startup", "execution", "review", "merge"}
 
@@ -38,26 +38,26 @@ class TaskWorkspaceBaseline:
             not isinstance(self.issue_identifier, str)
             or ISSUE_IDENTIFIER_PATTERN.fullmatch(self.issue_identifier) is None
         ):
-            raise VerificationReceiptError("Workspace baseline issue identifier has another shape")
+            raise EvidenceContractError("Workspace baseline issue identifier has another shape")
         if not isinstance(self.source_fingerprint, str) or SHA256_PATTERN.fullmatch(self.source_fingerprint) is None:
-            raise VerificationReceiptError("Workspace baseline source fingerprint must be SHA-256")
+            raise EvidenceContractError("Workspace baseline source fingerprint must be SHA-256")
         if self.branch_name != f"linear/{self.issue_identifier.lower()}":
-            raise VerificationReceiptError("Workspace baseline branch differs from its Linear issue")
+            raise EvidenceContractError("Workspace baseline branch differs from its Linear issue")
         if not isinstance(self.baseline_commit_by_repository_url_map, dict) or not (
             self.baseline_commit_by_repository_url_map
         ):
-            raise VerificationReceiptError("Workspace baseline repository commits must be a non-empty mapping")
+            raise EvidenceContractError("Workspace baseline repository commits must be a non-empty mapping")
         repository_identity_set: set[str] = set()
         for repository_url, commit in self.baseline_commit_by_repository_url_map.items():
             try:
                 repository_identity = origin_identity_get(repository_url)
             except GitOriginError as error:
-                raise VerificationReceiptError("Workspace baseline repository URL is unsafe or unsupported") from error
+                raise EvidenceContractError("Workspace baseline repository URL is unsafe or unsupported") from error
             if repository_identity in repository_identity_set:
-                raise VerificationReceiptError("Workspace baseline repeats one repository identity")
+                raise EvidenceContractError("Workspace baseline repeats one repository identity")
             repository_identity_set.add(repository_identity)
             if COMMIT_PATTERN.fullmatch(commit) is None:
-                raise VerificationReceiptError("Workspace baseline commit must be one full lowercase identity")
+                raise EvidenceContractError("Workspace baseline commit must be one full lowercase identity")
         object.__setattr__(
             self,
             "baseline_commit_by_repository_url_map",
@@ -87,10 +87,10 @@ class TaskWorkspaceBaseline:
             "source_fingerprint",
         }
         if not isinstance(payload, dict) or set(payload) != expected or payload["schema_version"] != 1:
-            raise VerificationReceiptError("Workspace baseline has another shape")
+            raise EvidenceContractError("Workspace baseline has another shape")
         baseline_commit_by_repository_url_map = payload["baseline_commit_by_repository_url_map"]
         if not isinstance(baseline_commit_by_repository_url_map, dict):
-            raise VerificationReceiptError("Workspace baseline repository commits must be a mapping")
+            raise EvidenceContractError("Workspace baseline repository commits must be a mapping")
         return cls(
             issue_identifier=payload["issue_identifier"],
             source_fingerprint=payload["source_fingerprint"],
@@ -105,7 +105,6 @@ class LocalPhaseBaseline:
 
     project_id: str
     source_fingerprint: str
-    candidate_fingerprint: str
     measured_at: datetime
     duration_seconds_by_phase_map: dict[str, float]
     evidence_url: str
@@ -114,18 +113,14 @@ class LocalPhaseBaseline:
         """Require every agreed local phase exactly once."""
 
         if not isinstance(self.project_id, str) or UUID_PATTERN.fullmatch(self.project_id) is None:
-            raise VerificationReceiptError("Baseline Project identity must be one lowercase UUID")
-        for label, value in (
-            ("source fingerprint", self.source_fingerprint),
-            ("candidate fingerprint", self.candidate_fingerprint),
-        ):
-            if not isinstance(value, str) or SHA256_PATTERN.fullmatch(value) is None:
-                raise VerificationReceiptError(f"Baseline {label} must be SHA-256")
+            raise EvidenceContractError("Baseline Project identity must be one lowercase UUID")
+        if not isinstance(self.source_fingerprint, str) or SHA256_PATTERN.fullmatch(self.source_fingerprint) is None:
+            raise EvidenceContractError("Baseline source fingerprint must be SHA-256")
         utc_validate(self.measured_at, label="Baseline measurement")
         if not isinstance(self.duration_seconds_by_phase_map, dict):
-            raise VerificationReceiptError("Baseline phases must be a mapping")
+            raise EvidenceContractError("Baseline phases must be a mapping")
         if set(self.duration_seconds_by_phase_map) != _BASELINE_PHASE_SET:
-            raise VerificationReceiptError(
+            raise EvidenceContractError(
                 "Baseline must contain queue, startup, execution, review and merge exactly once"
             )
         if any(
@@ -135,7 +130,7 @@ class LocalPhaseBaseline:
             or duration < 0
             for duration in self.duration_seconds_by_phase_map.values()
         ):
-            raise VerificationReceiptError("Baseline phase durations must be non-negative seconds")
+            raise EvidenceContractError("Baseline phase durations must be non-negative seconds")
         evidence_url_validate(self.evidence_url)
         object.__setattr__(
             self,
@@ -152,7 +147,6 @@ class LocalPhaseBaseline:
 
         return {
             "schema_version": 1,
-            "candidate_fingerprint": self.candidate_fingerprint,
             "duration_seconds_by_phase_map": dict(self.duration_seconds_by_phase_map),
             "evidence_url": self.evidence_url,
             "measured_at": instant_render(self.measured_at),
@@ -173,7 +167,6 @@ class LocalPhaseBaseline:
 
         expected = {
             "schema_version",
-            "candidate_fingerprint",
             "duration_seconds_by_phase_map",
             "evidence_url",
             "measured_at",
@@ -181,14 +174,13 @@ class LocalPhaseBaseline:
             "source_fingerprint",
         }
         if not isinstance(payload, dict) or set(payload) != expected or payload["schema_version"] != 1:
-            raise VerificationReceiptError("Local phase baseline has another shape")
+            raise EvidenceContractError("Local phase baseline has another shape")
         duration_seconds_by_phase_map = payload["duration_seconds_by_phase_map"]
         if not isinstance(duration_seconds_by_phase_map, dict):
-            raise VerificationReceiptError("Baseline phases must be a mapping")
+            raise EvidenceContractError("Baseline phases must be a mapping")
         return cls(
             project_id=payload["project_id"],
             source_fingerprint=payload["source_fingerprint"],
-            candidate_fingerprint=payload["candidate_fingerprint"],
             measured_at=instant_parse(payload["measured_at"], label="Baseline measurement"),
             duration_seconds_by_phase_map=dict(duration_seconds_by_phase_map),
             evidence_url=payload["evidence_url"],

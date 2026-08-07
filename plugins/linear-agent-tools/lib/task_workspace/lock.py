@@ -8,7 +8,6 @@ import hashlib
 import os
 from pathlib import Path
 import stat
-import tempfile
 from typing import Self
 
 from task_workspace.model import (
@@ -16,6 +15,8 @@ from task_workspace.model import (
     WorkspaceConfig,
     issue_identifier_validate,
 )
+
+_HOST_LOCK_CONTAINER = Path("/tmp")
 
 
 class IssueFileLock(AbstractContextManager["IssueFileLock"]):
@@ -41,7 +42,7 @@ class IssueFileLock(AbstractContextManager["IssueFileLock"]):
 
         workspace_key = hashlib.sha256(str(config.root).encode("utf-8")).hexdigest()[:24]
         self._path = (
-            Path(tempfile.gettempdir())
+            _HOST_LOCK_CONTAINER
             / f"linear-agent-tools-{os.getuid()}"
             / workspace_key
             / f"{issue_identifier_validate(issue_identifier).lower()}.{purpose}.lock"

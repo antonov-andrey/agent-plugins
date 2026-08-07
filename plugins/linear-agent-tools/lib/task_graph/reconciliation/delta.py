@@ -25,6 +25,8 @@ _KNOWN_ISSUE_STATUS_SET = frozenset(
         "Backlog",
         "Todo",
         "In Progress",
+        "Review",
+        # Migration compatibility for active Projects configured before AND-35.
         "Human Review",
         "Rework",
         "Merging",

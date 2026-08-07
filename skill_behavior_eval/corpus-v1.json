@@ -272,7 +272,7 @@
       "semantic_invariant_list": [
         {
           "id": "exact-global-delta",
-          "text": "The response fully reads exact destination state, previews only missing statuses and labels, requires explicit approval, proves the no-echo in-memory admin credential and applies only proven GraphQL status gaps before any global mutation, uses official MCP for supported label operations, then performs exact read-back."
+          "text": "The response fully reads exact Linear destination state and exact selected GitHub repository/base classic plus effective-ruleset protection for the executing identity, previews only missing statuses, labels, automations and an absent-protection delta, requires explicit approval, proves the no-echo in-memory Linear admin credential, applies only proven GraphQL status gaps before other Linear mutations, uses official MCP for supported label operations, never weakens existing protection, then performs exact owner read-back."
         },
         {
           "id": "no-graph",
@@ -316,25 +316,51 @@
       "id": "direct-linear-task-implement",
       "working_directory": "..",
       "working_directory_mode": "same-branch",
-      "prompt": "Use $linear-agent-tools:task-implement for ready issue AND-17. It is a code task in Todo with no blockers and a complete contract. Explain the fresh-thread path through exact worktrees, verification, commits, PR, CI, candidate evidence, and Human Review without changing files.",
+      "prompt": "Use $linear-agent-tools:task-implement for ready issue AND-17. It is a code task in Todo with no blockers and a complete contract. Explain the fresh-thread path through exact worktrees, direct verification, commits, PR, CI, semantic handoff, and Review without changing files.",
       "expected_skill_list": ["linear-agent-tools:task-implement"],
       "forbidden_skill_list": ["linear-agent-tools:task-merge", "linear-agent-tools:task-review"],
       "semantic_invariant_list": [
         {
           "id": "exact-attempt",
-          "text": "The response proves dispatchability, records the first remote-base baseline, creates or adopts deterministic linear/and-17 worktrees without touching main, implements only the issue, verifies owner slices and the frozen candidate, and immediately pushes logical green commits."
+          "text": "The response proves dispatchability, records the first remote-base baseline, creates or adopts deterministic linear/and-17 worktrees without touching main, implements only the issue, verifies owner slices and the frozen result, and immediately pushes logical green commits."
         },
         {
-          "id": "human-boundary",
-          "text": "It creates or adopts exact linked PRs, waits for applicable required CI, publishes receipts, and persists both the complete compact candidate identity and its derived fingerprint in a concise structured attempt summary. It rereads that identity before moving to Human Review, stopping, and preserving the workspace."
+          "id": "independent-review-boundary",
+          "text": "It creates or adopts exact linked PRs, uses native background-terminal waiting for required CI, completes nested attempt cleanup, publishes and rereads a minimal human-first handoff whose nonempty outcome values are exact composite PR candidates and direct check results with applicable links, moves to Review, stops and preserves the workspace for a separate fresh Codex reviewer without per-PR human approval."
         },
         {
-          "id": "receipt-integrity",
-          "text": "The response applies the shared receipt owner to every result-affecting input, including each consumed external evidence file's immutable provider URL, content digest and semantic identity. It demonstrates actual receipt creation at result completion, exact authenticated comment readback and reuse evaluation before candidate publication. It keeps reuse identity, result identity and the code candidate's exact PR URL/head identity distinct without relying on prescribed handoff wording."
+          "id": "direct-verification-and-usage",
+          "text": "It reuses direct successful verification only after semantically proving source, exact command, environment and contract unchanged; creates no persistent receipt, fingerprint or generic invalidation gate; records a nonempty subset of directly exposed exact known Codex usage counters and omits usage only when none are exposed, without unknown, empty, invalid or estimated values."
+        },
+        {
+          "id": "failed-subset-convergence",
+          "text": "When behavior evaluation applies, it runs only current failed IDs, fixes one owner-level root cause iteration, reruns only the immediately preceding failed subset, keeps passed cases accepted in the cycle, and lets the semantic contract determine whether provider behavior or case/judge changes; an empty failed list runs no model case."
         },
         {
           "id": "exclusive-attempt",
-          "text": "Before dispatch or status mutation it acquires the exact issue process-lifetime host-local attempt guard, holds that same guard through final readback and nested cleanup, and relies on process exit to release ownership."
+          "text": "Before dispatch or status mutation it acquires the exact issue process-lifetime host-local attempt guard from the explicit canonical multi-repository workspace root, holds that same guard through final readback and nested cleanup across any CWD, and relies on process exit to release ownership."
+        }
+      ]
+    },
+    {
+      "id": "direct-linear-candidate-review",
+      "working_directory": "..",
+      "working_directory_mode": "same-branch",
+      "prompt": "Use $linear-agent-tools:task-review for implementation issue AND-17 in Review with code delivery and one linked PR. Explain both the zero-finding and finding paths without changing Product code or requiring human PR approval.",
+      "expected_skill_list": ["linear-agent-tools:task-review", "project-standards:project-foundation"],
+      "forbidden_skill_list": ["linear-agent-tools:task-implement", "linear-agent-tools:task-merge"],
+      "semantic_invariant_list": [
+        {
+          "id": "fresh-candidate-review",
+          "text": "A fresh gpt-5.6-sol max reviewer derives complete coverage independently from current owners and reads the implementation handoff only as context, then compares every exact composite PR candidate URL, base branch, base commit and head commit with freshly read GitHub state without treating the handoff as approval."
+        },
+        {
+          "id": "automated-review-gate",
+          "text": "Zero findings publish and reread a minimal review summary, exact composite PR candidates and direct check results before Review to Merging; a changed base branch, base commit or head and any finding route to Review to Rework. Every success, finding, stale, failed, canceled or controlled interrupted handoff and transition follows idempotent nested attempt cleanup. Review makes no Product fix and requires no per-PR human approval."
+        },
+        {
+          "id": "exclusive-review-attempt",
+          "text": "The review acquires the issue guard from the explicit canonical multi-repository workspace root before dispatch and holds it through nested cleanup and final provider readback, using native background-terminal waiting for external checks."
         }
       ]
     },
@@ -352,11 +378,11 @@
         },
         {
           "id": "fresh-zero-pass",
-          "text": "After remediation the review restarts from scratch in a fresh thread and reaches Human Review only with a new zero-finding complete compact evidence identity and its derived fingerprint persisted and reread through the structured attempt comment."
+          "text": "After remediation the review restarts from scratch in a fresh thread and reaches Done only after a new zero-finding pass whose nested attempt cleanup precedes its concise semantic handoff, direct evidence readback and transition; finding, failed, canceled and controlled interrupted outcomes use the same cleanup-first ordering."
         },
         {
-          "id": "evidence-receipt-integrity",
-          "text": "For every zero-finding result the review applies the shared receipt contract to all result-affecting inputs, cryptographically binds every consumed external evidence file, and demonstrates actual current-schema receipt creation at result completion, exact authenticated comment readback and reuse evaluation. Only validated passed receipt identities form the evidence candidate; no exact phrase or copied field checklist can substitute for that evidence."
+          "id": "direct-review-evidence",
+          "text": "The review reuses a direct result only when source, exact command, environment and semantic contract remain unchanged, publishes direct evidence and exact exposed usage in a semantic handoff, and creates no receipt, candidate fingerprint or generic invalidation gate."
         },
         {
           "id": "exclusive-attempt",
@@ -368,7 +394,7 @@
       "id": "direct-linear-task-accept",
       "working_directory": "..",
       "working_directory_mode": "same-branch",
-      "prompt": "Use $linear-agent-tools:task-accept to verify the complete current outcome after all review blockers close. Explain the finding loop, exact receipts, local phase baseline, and human boundary without changing state.",
+      "prompt": "Use $linear-agent-tools:task-accept to verify the complete current outcome after all review blockers close. Explain the finding loop, direct verification, local phase baseline, and final human boundary without changing state.",
       "expected_skill_list": ["linear-agent-tools:task-accept"],
       "forbidden_skill_list": ["linear-agent-tools:task-implement", "linear-agent-tools:task-merge"],
       "semantic_invariant_list": [
@@ -378,11 +404,11 @@
         },
         {
           "id": "baseline-and-approval",
-          "text": "It persists and rereads the complete compact evidence identity together with its derived fingerprint in attempt telemetry, and when required records queue, startup, execution, review, and merge durations from provider history before stopping at Human Review."
+          "text": "It derives queue, startup, execution, review and merge durations from exact provider history, publishes and byte-rereads that required local-flow baseline before nested attempt cleanup and the final handoff, links the baseline from its direct check result, and only then stops at Review for the sole deployed-result human decision."
         },
         {
-          "id": "evidence-receipt-integrity",
-          "text": "For every whole-outcome result acceptance applies the shared receipt contract to all result-affecting inputs, cryptographically binds every consumed external evidence file, and demonstrates actual current-schema receipt creation at result completion, exact authenticated comment readback and reuse evaluation. Only validated passed receipt identities form the evidence candidate; no exact phrase or copied field checklist can substitute for that evidence."
+          "id": "direct-acceptance-evidence",
+          "text": "Acceptance reuses a direct result only when source, exact command, environment and semantic contract remain unchanged; every success, finding, stale, failed, canceled or controlled interrupted handoff and transition follows idempotent nested attempt cleanup; it creates no persistent receipt, candidate fingerprint, generic invalidation gate or estimated telemetry."
         },
         {
           "id": "exclusive-attempt",
@@ -394,17 +420,21 @@
       "id": "direct-linear-task-merge",
       "working_directory": "..",
       "working_directory_mode": "same-branch",
-      "prompt": "Use $linear-agent-tools:task-merge for AND-17 after a human moved its exact code candidate to Merging. Explain exact-head checks, mutation handling, ordered merge recovery, and terminal handoff without executing it.",
+      "prompt": "Use $linear-agent-tools:task-merge for AND-17 after an independent zero-finding Codex review moved it to Merging. Explain exact-base-and-head checks, mutation handling, ordered merge recovery, and terminal handoff without executing it.",
       "expected_skill_list": ["linear-agent-tools:task-merge"],
       "forbidden_skill_list": ["linear-agent-tools:task-implement"],
       "semantic_invariant_list": [
         {
-          "id": "exact-approved-candidate",
-          "text": "The response reconstructs the complete compact PR URL/head identity from the provider-read attempt comment, reproduces its approved fingerprint, verifies exact PR heads, bases, Linear links, branch protection and required checks, and returns any candidate mutation to Rework instead of fixing it in the merge attempt."
+          "id": "exact-reviewed-identities",
+          "text": "The response reads the ordered composite PR candidates with complete URL, base branch, base commit and head commit from the provider-read review handoff, inspects the current base OID and same-repository head, rejects deferred auto-merge, verifies branches, Linear links, typed exact-repository/base classic or effective-ruleset protection, executing-identity bypass and typed required checks without per-PR human approval, and returns a reviewed base-branch, base-commit or head change to Rework instead of fixing it in merge."
+        },
+        {
+          "id": "atomic-reviewed-mutation",
+          "text": "Every effective merge-queue rule is rejected as a deferred later-base mutation. Declared merge requires an exact zero required-check definition set and updates base plus deletes head in one server-atomic protected-ref transaction with explicit reviewed old-OID leases for both refs; either race mutates neither ref, then mandatory nested cleanup, a reread rework-required handoff and Rework occur. Squash or rebase instead requires exact head matching plus strict up-to-date no-bypass protection with at least one required check; generic exit 1, empty or malformed provider output is failure."
         },
         {
           "id": "ordered-recovery",
-          "text": "It follows the explicit merge order, records rather than hides partial merge state, proves final commits and links, publishes structured attempt evidence, marks only this issue Done, and starts issue-local cleanup."
+          "text": "It follows the explicit merge order, records rather than hides partial merge state, and completes idempotent nested attempt cleanup before every success, stale, failed, canceled or controlled interrupted handoff and transition; it proves final commits and links, publishes and rereads a minimal merged handoff whose corresponding composite candidate contains the exact merged commit, marks only this issue Done, and starts issue-local cleanup."
         },
         {
           "id": "exclusive-attempt",

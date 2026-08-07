@@ -1,1 +1,1 @@
-"""Dependency-aware verification receipt package."""
+"""Direct workflow evidence and semantic handoff package."""

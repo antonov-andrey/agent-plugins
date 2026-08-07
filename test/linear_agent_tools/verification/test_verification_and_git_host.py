@@ -1,13 +1,18 @@
-"""Behavior tests for evidence reuse and exact GitHub candidate binding."""
+"""Behavior tests for semantic handoff evidence and exact GitHub review binding."""
 
 from __future__ import annotations
 
-from dataclasses import replace
-from datetime import datetime, timedelta, timezone
+from base64 import b64encode
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, replace
+from datetime import datetime, timezone
+from http.client import HTTPConnection
+import importlib.util
 import json
 from pathlib import Path
 import subprocess
 import sys
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -17,1573 +22,531 @@ LIBRARY_ROOT = PLUGIN_ROOT / "lib"
 if str(LIBRARY_ROOT) not in sys.path:
     sys.path.insert(0, str(LIBRARY_ROOT))
 
+import git_host.command as git_host_command
+from git_host.atomic_merge import GitHubAtomicMergeBoundary
+from git_host.authentication import GitHubPrincipal, git_credential_config_argument_list_get
+from git_host.branch_protection import GitHubBranchProtectionBoundary
+from git_host.command import command_closed_run, command_run
 from git_host.model import GitHubContractError, RepositoryIdentity
 from git_host.pull_request import GitHubPullRequestBoundary
-from git_origin.identity import origin_identity_get
-from verification._validation import VerificationReceiptError, instant_parse
-from verification.attempt import AttemptSummary, CodexUsage
+from git_host.transport_runtime import GitTransportRuntime
+from verification._validation import EvidenceContractError, evidence_url_validate, instant_parse
 from verification.baseline import LocalPhaseBaseline, TaskWorkspaceBaseline
-from verification.candidate import CandidateIdentity, CandidateInput
-from verification.invalidation import ReceiptReuseEvaluator
-from verification.model import (
-    VerificationCheckout,
-    VerificationInput,
-    VerificationInputArtifact,
-    VerificationReceipt,
-)
-from verification.receipt import (
-    ATTEMPT_COMMENT_CODEC,
+from verification.comment import (
+    HANDOFF_COMMENT_CODEC,
     LOCAL_PHASE_BASELINE_COMMENT_CODEC,
     TASK_WORKSPACE_BASELINE_COMMENT_CODEC,
-    VERIFICATION_RECEIPT_COMMENT_CODEC,
+)
+from verification.handoff import (
+    CodexUsage,
+    TaskHandoff,
+    TaskHandoffCheckResult,
+    TaskHandoffPullRequestCandidate,
 )
 
 COMMIT_ONE = "a" * 40
 COMMIT_TWO = "b" * 40
-CONTRACT_ONE = "5" * 64
-CONTRACT_TWO = "6" * 64
-CORPUS_ONE = "1" * 64
-CORPUS_TWO = "2" * 64
-EVIDENCE_ONE = "3" * 64
-EVIDENCE_TWO = "4" * 64
-LINEAR_ATTACHMENT_URL = "https://uploads.linear.app/workspace/asset/artifact"
-LINEAR_INPUT_ATTACHMENT_URL = "https://uploads.linear.app/workspace/asset/input"
-LOCK_ONE = "c" * 64
-LOCK_TWO = "d" * 64
+COMMIT_BASE = "c" * 40
+ISSUE_EVIDENCE_URL = "https://linear.app/acme/issue/AND-17/direct-evidence"
+BASELINE_EVIDENCE_URL = "https://linear.app/acme/issue/AND-17/local-phase-baseline"
+PULL_REQUEST_URL = "https://github.com/antonov-andrey/example/pull/17"
 
 
-def _verification_input(
-    *,
-    commit: str = COMMIT_ONE,
-    lock: str = LOCK_ONE,
-    environment: str = "development:release-one",
-    contract: str = CONTRACT_ONE,
-    corpus: str = CORPUS_ONE,
-    model: str = "gpt-5.6-sol",
-    reasoning_effort: str = "medium",
-) -> VerificationInput:
-    """Return one complete deterministic verification input.
+@pytest.fixture(autouse=True)
+def _ordinary_task_repository_create(tmp_path: Path) -> None:
+    """Give every repository-bound test one ordinary local audit source."""
 
-    Args:
-        commit: Repository commit.
-        lock: Dependency lock fingerprint.
-        environment: Exact external environment identity.
-        contract: Exact semantic verification contract identity.
-        corpus: Exact corpus content identity.
-        model: Exact model identity.
-        reasoning_effort: Exact model reasoning configuration.
-
-    Returns:
-        Typed input.
-    """
-
-    return VerificationInput(
-        command_argument_list=["pytest", "-q"],
-        working_directory="/workspace/example/.worktree/and-17",
-        source_fingerprint="f" * 64,
-        verification_contract_fingerprint=contract,
-        checkout_list=[
-            VerificationCheckout(
-                path="/workspace/example/.worktree/and-17",
-                role_list=["verification", "corpus"],
-                repository_url="git@github.com:antonov-andrey/example.git",
-                commit=commit,
-                recursive_submodule_commit_by_path_map={"module/provider": COMMIT_ONE},
-                dependency_lock_sha256_by_path_map={"requirements-dev.txt": lock},
-            )
-        ],
-        input_artifact_list=[
-            VerificationInputArtifact(
-                path="/workspace/evidence/accepted-result.json",
-                role_list=["accepted-behavior-result", "verification-input"],
-                url=LINEAR_INPUT_ATTACHMENT_URL,
-                content_sha256="9" * 64,
-            )
-        ],
-        corpus_content_sha256=corpus,
-        model_identity=model,
-        model_configuration_by_name_map={"reasoning-effort": reasoning_effort},
-        environment_identity=environment,
-        release_identity="sha256:" + "e" * 64,
+    git_dir = tmp_path / ".git"
+    (git_dir / "hooks").mkdir(parents=True)
+    (git_dir / "objects" / "info").mkdir(parents=True)
+    (git_dir / "info").mkdir(parents=True)
+    (git_dir / "refs").mkdir(parents=True)
+    (git_dir / "HEAD").write_text("ref: refs/heads/linear/and-17\n", encoding="utf-8")
+    (git_dir / "config").write_text(
+        "[core]\n\trepositoryformatversion = 0\n"
+        '[remote "origin"]\n\turl = git@github.com:antonov-andrey/example.git\n'
+        "\tfetch = +refs/heads/*:refs/remotes/origin/*\n",
+        encoding="utf-8",
     )
 
 
-def test_receipt_roundtrip_and_exact_reuse_key() -> None:
-    """A passed receipt reuses only when every declared input is identical."""
+def _check_result(**replacement_by_name: object) -> TaskHandoffCheckResult:
+    """Return one direct deterministic check result."""
 
-    current = _verification_input()
-    receipt = VerificationReceipt.from_input(
-        current,
-        outcome="passed",
-        evidence_url="https://github.com/antonov-andrey/example/actions/runs/1",
-        evidence_content_sha256=EVIDENCE_ONE,
-        completed_at=datetime(2026, 8, 4, 12, 30, tzinfo=timezone.utc),
-    )
-    parsed = VerificationReceipt.from_payload(
-        VERIFICATION_RECEIPT_COMMENT_CODEC.payload_parse(VERIFICATION_RECEIPT_COMMENT_CODEC.render(receipt.payload()))
-    )
-
-    assert parsed == receipt
-    assert ReceiptReuseEvaluator(current).decision_get(parsed).reusable
-    changed_evidence = VerificationReceipt.from_input(
-        current,
-        outcome="passed",
-        evidence_url=LINEAR_ATTACHMENT_URL,
-        evidence_content_sha256=EVIDENCE_TWO,
-        completed_at=receipt.completed_at,
-    )
-    assert changed_evidence.verification_key == receipt.verification_key
-    assert changed_evidence.receipt_key != receipt.receipt_key
-    changed_commit = ReceiptReuseEvaluator(_verification_input(commit=COMMIT_TWO)).decision_get(parsed)
-    assert changed_commit.reason_list == ["checkout-set-changed"]
-    changed_lock = ReceiptReuseEvaluator(_verification_input(lock=LOCK_TWO)).decision_get(parsed)
-    assert changed_lock.reason_list == ["checkout-set-changed"]
-    changed_corpus = ReceiptReuseEvaluator(_verification_input(corpus=CORPUS_TWO)).decision_get(parsed)
-    assert changed_corpus.reason_list == ["corpus-content-changed"]
-    changed_model = ReceiptReuseEvaluator(_verification_input(model="gpt-5.6-terra")).decision_get(parsed)
-    assert changed_model.reason_list == ["model-identity-changed"]
-    changed_model_configuration = ReceiptReuseEvaluator(_verification_input(reasoning_effort="high")).decision_get(
-        parsed
-    )
-    assert changed_model_configuration.reason_list == ["model-configuration-changed"]
-    changed_environment = ReceiptReuseEvaluator(
-        _verification_input(environment="development:release-two")
-    ).decision_get(parsed)
-    assert changed_environment.reason_list == ["environment-identity-changed"]
-    changed_repository_payload = _verification_input().payload()
-    changed_repository_payload["checkout_list"][0]["repository_url"] = "git@github.com:antonov-andrey/other.git"
-    changed_repository = ReceiptReuseEvaluator(VerificationInput.from_payload(changed_repository_payload)).decision_get(
-        parsed
-    )
-    assert changed_repository.reason_list == ["checkout-set-changed"]
-
-    changed_source_payload = _verification_input().payload()
-    changed_source_payload["source_fingerprint"] = "0" * 64
-    changed_source = ReceiptReuseEvaluator(VerificationInput.from_payload(changed_source_payload)).decision_get(parsed)
-    assert changed_source.reason_list == ["source-fingerprint-changed"]
-    changed_contract = ReceiptReuseEvaluator(_verification_input(contract=CONTRACT_TWO)).decision_get(parsed)
-    assert changed_contract.reason_list == ["verification-contract-changed"]
-    changed_artifact_payload = _verification_input().payload()
-    changed_artifact_payload["input_artifact_list"][0]["content_sha256"] = "8" * 64
-    changed_artifact = ReceiptReuseEvaluator(
-        VerificationInput.from_payload(changed_artifact_payload)
-    ).decision_get(parsed)
-    assert changed_artifact.reason_list == ["input-artifact-set-changed"]
+    field_by_name: dict[str, object] = {
+        "name": "python -m pytest test/linear_agent_tools -q",
+        "result": "436 passed",
+        "evidence_url": ISSUE_EVIDENCE_URL,
+    }
+    field_by_name.update(replacement_by_name)
+    return TaskHandoffCheckResult(**field_by_name)  # type: ignore[arg-type]
 
 
-@pytest.mark.parametrize("value", [None, False, 0, [], {}])
-def test_verification_input_rejects_non_string_corpus_identity(value: object) -> None:
-    """The empty corpus identity is one explicit string, not another falsy JSON type."""
+def _handoff(**replacement_by_name: object) -> TaskHandoff:
+    """Return one final minimal implementation handoff."""
 
-    current = _verification_input()
-    payload = current.payload()
-    payload["corpus_content_sha256"] = value
+    field_by_name: dict[str, object] = {
+        "summary": "Implemented the bounded provider owner and stopped at independent Review.",
+        "pull_request_candidate_list": [_pull_request_candidate()],
+        "check_result_list": [_check_result()],
+        "codex_usage": CodexUsage(input_tokens=5, reasoning_output_tokens=11),
+    }
+    field_by_name.update(replacement_by_name)
+    return TaskHandoff(**field_by_name)  # type: ignore[arg-type]
 
-    with pytest.raises(VerificationReceiptError, match="empty or SHA-256 text"):
-        VerificationInput.from_payload(payload)
-    with pytest.raises(VerificationReceiptError, match="empty or SHA-256 text"):
-        replace(current, corpus_content_sha256=value)
+
+def _pull_request_candidate(**replacement_by_name: object) -> TaskHandoffPullRequestCandidate:
+    """Return one exact deterministic PR candidate."""
+
+    field_by_name: dict[str, object] = {
+        "url": PULL_REQUEST_URL,
+        "base_branch": "main",
+        "base_commit": COMMIT_BASE,
+        "head_commit": COMMIT_ONE,
+        "merged_commit": None,
+    }
+    field_by_name.update(replacement_by_name)
+    return TaskHandoffPullRequestCandidate(**field_by_name)  # type: ignore[arg-type]
 
 
-@pytest.mark.parametrize("value", ["", "not-a-sha256", None, False, 0])
-def test_verification_input_requires_semantic_contract_fingerprint(
-    value: object,
-) -> None:
-    """Receipt reuse cannot outlive the prompt, expectations, invariants, or schema it verifies."""
+def test_semantic_handoff_round_trips_direct_state_and_exact_usage() -> None:
+    """The provider comment starts with summary and carries only consumed state."""
 
-    payload = _verification_input().payload()
-    payload["verification_contract_fingerprint"] = value
+    handoff = _handoff()
+    rendered = HANDOFF_COMMENT_CODEC.render(handoff.payload())
+    parsed_payload = HANDOFF_COMMENT_CODEC.payload_parse(rendered)
 
-    with pytest.raises(VerificationReceiptError, match="contract fingerprint must be SHA-256"):
-        VerificationInput.from_payload(payload)
+    assert TaskHandoff.from_payload(parsed_payload) == handoff
+    assert rendered.startswith('<!-- linear-agent-tools-handoff -->\n```json\n{\n  "summary":')
+    assert parsed_payload["pull_request_candidate_list"] == [
+        {
+            "url": PULL_REQUEST_URL,
+            "base_branch": "main",
+            "base_commit": COMMIT_BASE,
+            "head_commit": COMMIT_ONE,
+        }
+    ]
+    assert parsed_payload["check_result_list"] == [
+        {
+            "name": "python -m pytest test/linear_agent_tools -q",
+            "result": "436 passed",
+            "evidence_url": ISSUE_EVIDENCE_URL,
+        }
+    ]
+    assert parsed_payload["codex_usage"] == {"input_tokens": 5, "reasoning_output_tokens": 11}
+    assert set(parsed_payload) == {
+        "summary",
+        "pull_request_candidate_list",
+        "check_result_list",
+        "codex_usage",
+    }
+    for removed_name in (
+        "handoff_id",
+        "issue_identifier",
+        "operation",
+        "role_label",
+        "delivery_kind",
+        "started_at",
+        "completed_at",
+        "outcome",
+        "attempt_cleanup_complete",
+        "commit_by_repository_map",
+        "pull_request_base_branch_by_url_map",
+        "pull_request_base_commit_by_url_map",
+        "pull_request_head_by_url_map",
+        "verification_summary_list",
+        "evidence_url_list",
+        "local_phase_baseline_evidence_url",
+        "schema_version",
+        "fingerprint",
+        "receipt",
+    ):
+        assert removed_name not in rendered
 
 
 @pytest.mark.parametrize(
-    "repository_url",
-    [
-        "https://token@github.com/antonov-andrey/example.git",
-        "https://token:secret@github.com/antonov-andrey/example.git",
-        "https://github.com/antonov-andrey/example.git?token=secret",
-        "relative-repository",
-    ],
+    "field_name",
+    (
+        "cached_input_tokens",
+        "cache_write_input_tokens",
+        "input_tokens",
+        "output_tokens",
+        "reasoning_output_tokens",
+    ),
 )
-def test_verification_checkout_rejects_unsafe_repository_url_without_echo(
-    repository_url: str,
-) -> None:
-    """Receipt construction rejects secret-bearing or unsupported Git origins without reflecting them."""
+def test_handoff_usage_validates_every_present_known_counter(field_name: str) -> None:
+    """Every supported counter is validated even when it is the only exposed value."""
 
-    with pytest.raises(VerificationReceiptError, match="unsafe or unsupported") as error:
-        replace(_verification_input().checkout_list[0], repository_url=repository_url)
-
-    assert "token" not in str(error.value)
-    assert "secret" not in str(error.value)
+    with pytest.raises(EvidenceContractError, match=field_name):
+        CodexUsage(**{field_name: -1})  # type: ignore[arg-type]
 
 
-def test_workspace_origin_identity_is_valid_verification_checkout_input() -> None:
-    """A shared normalized workspace output remains valid at the receipt boundary."""
+@pytest.mark.parametrize("value", (True, 1.5, -1))
+def test_handoff_usage_rejects_nonexact_values(value: object) -> None:
+    """Usage cannot be boolean, fractional or negative."""
 
-    repository_identity = origin_identity_get("ssh://git@[2001:db8::1]:2222/antonov-andrey/example.git")
-
-    checkout = replace(_verification_input().checkout_list[0], repository_url=repository_identity)
-
-    assert checkout.repository_url == repository_identity
+    with pytest.raises(EvidenceContractError, match="input_tokens"):
+        CodexUsage(input_tokens=value)  # type: ignore[arg-type]
 
 
-def test_shared_evidence_cli_rejects_credential_bearing_repository_without_echo(
-    tmp_path: Path,
-) -> None:
-    """The public receipt boundary rejects a repository secret before rendering any comment."""
+@pytest.mark.parametrize(
+    "usage_payload",
+    (
+        {},
+        {"total_tokens": 1},
+        {"estimated_input_tokens": 1},
+        {"input_tokens": 1, "total_tokens": 1},
+    ),
+)
+def test_handoff_usage_rejects_empty_unknown_and_estimated_shapes(usage_payload: dict[str, object]) -> None:
+    """The telemetry object is one nonempty closed subset of known exact counters."""
 
-    script = LIBRARY_ROOT / "verification" / "tool" / "evidence.py"
-    input_path = tmp_path / "input.json"
-    payload = _verification_input().payload()
-    payload["checkout_list"][0]["repository_url"] = "https://token:secret@github.com/example/repository.git"
-    input_path.write_text(json.dumps(payload), encoding="utf-8")
+    payload = _handoff().payload()
+    payload["codex_usage"] = usage_payload
 
-    created = subprocess.run(
-        [
-            str(script),
-            "receipt-create",
-            "--input",
-            str(input_path),
-            "--outcome",
-            "passed",
-            "--completed-at",
-            "2026-08-04T12:30:00Z",
-            "--evidence-url",
-            LINEAR_ATTACHMENT_URL,
-            "--evidence-content-sha256",
-            EVIDENCE_ONE,
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
+    with pytest.raises(EvidenceContractError, match="another shape"):
+        TaskHandoff.from_payload(payload)
+
+
+def test_handoff_usage_rejects_estimated_value_for_known_counter() -> None:
+    """An estimate cannot masquerade under one otherwise known counter name."""
+
+    payload = _handoff().payload()
+    payload["codex_usage"] = {"input_tokens": "estimated: 100"}
+
+    with pytest.raises(EvidenceContractError, match="input_tokens"):
+        TaskHandoff.from_payload(payload)
+
+
+def test_handoff_omits_usage_only_when_no_counter_is_exposed() -> None:
+    """No telemetry object is emitted when Codex exposes no exact counter."""
+
+    payload = _handoff(codex_usage=None).payload()
+
+    assert "codex_usage" not in payload
+    with pytest.raises(EvidenceContractError, match="at least one exposed counter"):
+        CodexUsage()
+
+
+def test_review_handoff_binds_current_composite_pr_candidate() -> None:
+    """An independent reviewer compares one composite candidate with fresh state."""
+
+    review = _handoff(
+        summary="Independent full-scope review found zero findings.",
     )
 
-    assert created.returncode == 2
-    assert created.stdout == ""
-    assert "unsafe or unsupported" in created.stderr
-    assert "token" not in created.stderr
-    assert "secret" not in created.stderr
-
-
-def test_external_evidence_receipt_can_bind_source_without_a_repository_commit() -> None:
-    """A source-independent provider probe remains reusable only for its exact source."""
-
-    value = VerificationInput(
-        command_argument_list=["linear-provider-probe"],
-        working_directory="/workspace",
-        source_fingerprint="f" * 64,
-        verification_contract_fingerprint=CONTRACT_ONE,
-        checkout_list=[],
-        input_artifact_list=[],
-        corpus_content_sha256="",
-        model_identity="",
-        model_configuration_by_name_map={},
-        environment_identity="linear:workspace-one",
-        release_identity="",
+    assert TaskHandoff.from_payload(review.payload()) == review
+    review.current_pull_request_identity_require(
+        current_pull_request_candidate_list=[_pull_request_candidate()],
     )
-
-    assert (
-        ReceiptReuseEvaluator(value)
-        .decision_get(
-            VerificationReceipt.from_input(
-                value,
-                outcome="passed",
-                evidence_url="https://linear.app/example",
-                evidence_content_sha256=EVIDENCE_ONE,
-            )
+    with pytest.raises(EvidenceContractError, match="identity changed"):
+        review.current_pull_request_identity_require(
+            current_pull_request_candidate_list=[_pull_request_candidate(base_commit=COMMIT_TWO)],
         )
-        .reusable
+
+
+def test_noncode_handoff_omits_inapplicable_pr_state_and_links_direct_result() -> None:
+    """Acceptance carries its baseline link without fake code-delivery state."""
+
+    acceptance = _handoff(
+        summary="Whole deployed outcome passed and awaits the final human decision.",
+        pull_request_candidate_list=None,
+        check_result_list=[
+            _check_result(
+                name="Local phase baseline",
+                result="Published and read back",
+                evidence_url=BASELINE_EVIDENCE_URL,
+            )
+        ],
+        codex_usage=None,
     )
 
-
-def test_checkout_list_represents_two_revisions_of_one_repository_without_collision() -> None:
-    """Separate paths preserve distinct commits for one repeated repository URL."""
-
-    payload = _verification_input().payload()
-    second_checkout = dict(payload["checkout_list"][0])
-    second_checkout["path"] = "/workspace/example"
-    second_checkout["role_list"] = ["synchronized-main"]
-    second_checkout["commit"] = COMMIT_TWO
-    payload["checkout_list"].append(second_checkout)
-
-    parsed = VerificationInput.from_payload(payload)
-
-    assert [checkout.commit for checkout in parsed.checkout_list] == [
-        COMMIT_TWO,
-        COMMIT_ONE,
+    payload = acceptance.payload()
+    assert TaskHandoff.from_payload(payload) == acceptance
+    assert "pull_request_candidate_list" not in payload
+    assert payload["check_result_list"] == [
+        {
+            "name": "Local phase baseline",
+            "result": "Published and read back",
+            "evidence_url": BASELINE_EVIDENCE_URL,
+        }
     ]
-    assert {checkout.repository_url for checkout in parsed.checkout_list} == {
-        "git@github.com:antonov-andrey/example.git"
-    }
-
-    payload["checkout_list"][1]["path"] = payload["checkout_list"][0]["path"]
-    with pytest.raises(VerificationReceiptError, match="paths must be unique"):
-        VerificationInput.from_payload(payload)
 
 
-def test_input_artifact_list_is_canonical_and_cryptographically_bound() -> None:
-    """Every externally stored consumed file contributes path, role, URL, and digest to reuse."""
+@pytest.mark.parametrize(
+    "field_name",
+    (
+        "handoff_id",
+        "issue_identifier",
+        "operation",
+        "role_label",
+        "delivery_kind",
+        "started_at",
+        "completed_at",
+        "outcome",
+        "attempt_cleanup_complete",
+        "commit_by_repository_map",
+        "pull_request_base_branch_by_url_map",
+        "pull_request_base_commit_by_url_map",
+        "pull_request_head_by_url_map",
+        "verification_summary_list",
+        "evidence_url_list",
+        "local_phase_baseline_evidence_url",
+        "schema_version",
+    ),
+)
+def test_handoff_rejects_every_removed_broad_field(field_name: str) -> None:
+    """No legacy metadata or compatibility field crosses the final boundary."""
 
-    payload = _verification_input().payload()
-    second_artifact = dict(payload["input_artifact_list"][0])
-    second_artifact["path"] = "/workspace/evidence/targeted-result.json"
-    second_artifact["role_list"] = ["targeted-failed-subset-result"]
-    second_artifact["url"] = "https://uploads.linear.app/workspace/asset/targeted-input"
-    second_artifact["content_sha256"] = "8" * 64
-    payload["input_artifact_list"].append(second_artifact)
+    payload = _handoff().payload()
+    payload[field_name] = True
 
-    parsed = VerificationInput.from_payload(payload)
-
-    assert [artifact.path for artifact in parsed.input_artifact_list] == [
-        "/workspace/evidence/accepted-result.json",
-        "/workspace/evidence/targeted-result.json",
-    ]
-    assert parsed.key() == VerificationInput.from_payload(parsed.payload()).key()
-
-    payload["input_artifact_list"][1]["path"] = payload["input_artifact_list"][0]["path"]
-    with pytest.raises(VerificationReceiptError, match="artifact paths must be unique"):
-        VerificationInput.from_payload(payload)
+    with pytest.raises(EvidenceContractError, match="another shape"):
+        TaskHandoff.from_payload(payload)
 
 
 @pytest.mark.parametrize(
     ("field_name", "value", "message"),
-    [
-        ("path", "evidence/result.json", "absolute POSIX"),
-        ("path", "/workspace/evidence/../result.json", "absolute POSIX"),
-        ("url", "https://uploads.linear.app/input?signature=temporary", "canonical HTTPS"),
-        ("url", "http://uploads.linear.app/workspace/input", "canonical HTTPS"),
-        ("content_sha256", "not-a-digest", "SHA-256"),
-        ("role_list", [], "non-empty duplicate-free"),
-        ("role_list", ["accepted", "accepted"], "non-empty duplicate-free"),
-    ],
+    (
+        ("summary", [], "summary"),
+        ("pull_request_candidate_list", {}, "candidates must be a list"),
+        ("pull_request_candidate_list", None, "candidates must be a list"),
+        ("pull_request_candidate_list", [{}], "candidate has another shape"),
+        ("check_result_list", {}, "check results must be a list"),
+        ("check_result_list", None, "check results must be a list"),
+        ("check_result_list", [{}], "check result has another shape"),
+    ),
 )
-def test_input_artifact_rejects_open_or_mutable_identity(
+def test_handoff_rejects_malformed_external_field_types(
     field_name: str,
     value: object,
     message: str,
 ) -> None:
-    """External verification inputs have one closed immutable identity shape."""
+    """Untrusted handoff shapes fail as typed contract errors, never raw exceptions."""
 
-    payload = _verification_input().payload()
-    payload["input_artifact_list"][0][field_name] = value
-
-    with pytest.raises(VerificationReceiptError, match=message):
-        VerificationInput.from_payload(payload)
-
-
-def test_input_artifact_requires_exact_schema() -> None:
-    """An external input identity cannot carry unchecked metadata."""
-
-    payload = _verification_input().payload()
-    payload["input_artifact_list"][0]["temporary_url"] = "https://example.test/input"
-
-    with pytest.raises(VerificationReceiptError, match="input artifact has another shape"):
-        VerificationInput.from_payload(payload)
-
-
-@pytest.mark.parametrize(
-    ("payload_path", "value", "message"),
-    [
-        (("working_directory",), "workspace/example", "absolute POSIX"),
-        (
-            ("working_directory",),
-            "//workspace/example/.worktree/and-17",
-            "absolute POSIX",
-        ),
-        (("checkout_list", 0, "path"), "/workspace/../example", "absolute POSIX"),
-        (
-            ("checkout_list", 0, "path"),
-            "//workspace/example/.worktree/and-17",
-            "absolute POSIX",
-        ),
-        (
-            ("checkout_list", 0, "recursive_submodule_commit_by_path_map"),
-            {"../provider": COMMIT_ONE},
-            "repository-relative POSIX",
-        ),
-        (
-            ("checkout_list", 0, "recursive_submodule_commit_by_path_map"),
-            {"module//provider": COMMIT_ONE},
-            "repository-relative POSIX",
-        ),
-        (
-            ("checkout_list", 0, "dependency_lock_sha256_by_path_map"),
-            {"/workspace/requirements-dev.txt": LOCK_ONE},
-            "repository-relative POSIX",
-        ),
-        (
-            ("checkout_list", 0, "dependency_lock_sha256_by_path_map"),
-            {"config/./requirements-dev.txt": LOCK_ONE},
-            "repository-relative POSIX",
-        ),
-        (
-            ("checkout_list", 0, "dependency_lock_sha256_by_path_map"),
-            {".": LOCK_ONE},
-            "repository-relative POSIX",
-        ),
-    ],
-)
-def test_verification_paths_are_canonical_and_unambiguous(
-    payload_path: tuple[object, ...], value: object, message: str
-) -> None:
-    """Receipt paths cannot depend on an undeclared anchor or escape a checkout."""
-
-    payload = _verification_input().payload()
-    target = payload
-    for part in payload_path[:-1]:
-        target = target[part]
-    target[payload_path[-1]] = value
-
-    with pytest.raises(VerificationReceiptError, match=message):
-        VerificationInput.from_payload(payload)
-
-
-@pytest.mark.parametrize(
-    ("payload_field", "pair_list"),
-    [
-        (
-            "model_configuration_by_name_map",
-            [["reasoning-effort", "medium"]],
-        ),
-        (
-            "recursive_submodule_commit_by_path_map",
-            [["module/provider", COMMIT_ONE]],
-        ),
-        (
-            "dependency_lock_sha256_by_path_map",
-            [["requirements-dev.txt", LOCK_ONE]],
-        ),
-    ],
-)
-def test_verification_mapping_boundaries_reject_pair_list_carriers(
-    payload_field: str,
-    pair_list: list[list[str]],
-) -> None:
-    """Verification identities use explicit JSON mappings, never positional pairs."""
-
-    payload = _verification_input().payload()
-    if payload_field == "model_configuration_by_name_map":
-        payload[payload_field] = pair_list
-    else:
-        payload["checkout_list"][0][payload_field] = pair_list
-
-    with pytest.raises(VerificationReceiptError, match="mapping"):
-        VerificationInput.from_payload(payload)
-
-
-@pytest.mark.parametrize(
-    ("field_name", "value"),
-    [
-        ("working_directory", "unsafe\npath"),
-        ("model_identity", "gpt-5.6-sol\nother"),
-        ("environment_identity", "development\nother"),
-        ("release_identity", "release\rother"),
-    ],
-)
-def test_verification_identity_fields_reject_multiline_values(field_name: str, value: str) -> None:
-    """Receipt keys cannot hide multiple logical identity values in one text field."""
-
-    payload = _verification_input().payload()
+    payload = _handoff().payload()
     payload[field_name] = value
 
-    with pytest.raises(VerificationReceiptError, match="single-line"):
-        VerificationInput.from_payload(payload)
+    with pytest.raises(EvidenceContractError, match=message):
+        TaskHandoff.from_payload(payload)
 
 
-def test_verification_models_reject_double_root_path_substitution_directly() -> None:
-    """Direct model construction cannot create a second identity for one Linux path."""
+def test_handoff_rejects_empty_or_repeated_outcome_collections() -> None:
+    """Outcome collections are omitted when absent and nonempty when present."""
 
-    current = _verification_input()
+    with pytest.raises(EvidenceContractError, match="nonempty typed list"):
+        _handoff(pull_request_candidate_list=[])
+    with pytest.raises(EvidenceContractError, match="nonempty duplicate-free typed list"):
+        _handoff(check_result_list=[])
+    with pytest.raises(EvidenceContractError, match="duplicate-free typed list"):
+        _handoff(check_result_list=[_check_result(), _check_result()])
+    with pytest.raises(EvidenceContractError, match="duplicate-free typed list"):
+        _handoff(check_result_list=[_check_result(), _check_result(result="195 passed")])
+    with pytest.raises(EvidenceContractError, match="repeats one pull-request candidate repository"):
+        _handoff(
+            pull_request_candidate_list=[
+                _pull_request_candidate(),
+                _pull_request_candidate(url="https://github.com/antonov-andrey/example/pull/18"),
+            ]
+        )
 
-    with pytest.raises(VerificationReceiptError, match="absolute POSIX"):
-        replace(current, working_directory="//workspace/example/.worktree/and-17")
-    with pytest.raises(VerificationReceiptError, match="absolute POSIX"):
-        replace(current.checkout_list[0], path="//workspace/example/.worktree/and-17")
+
+def test_handoff_omits_every_unavailable_optional_value() -> None:
+    """A failed or interrupted attempt can report only its concise summary."""
+
+    handoff = TaskHandoff(summary="The provider operation failed before direct evidence became available.")
+
+    assert handoff.payload() == {"summary": "The provider operation failed before direct evidence became available."}
+    assert TaskHandoff.from_payload(handoff.payload()) == handoff
 
 
-def test_receipt_normalizes_utc_and_rejects_naive_instant() -> None:
-    """Receipt instants preserve the exact UTC moment and reject timezone absence."""
+def test_handoff_rejects_null_placeholders_for_nested_optional_values() -> None:
+    """Present candidate and result fields carry values instead of null placeholders."""
 
-    offset = timezone(timedelta(hours=4))
-    receipt = VerificationReceipt.from_input(
-        _verification_input(),
-        outcome="passed",
-        evidence_url="https://example.test/evidence",
-        evidence_content_sha256=EVIDENCE_ONE,
-        completed_at=datetime(2026, 8, 4, 16, 30, tzinfo=offset),
+    payload = _handoff().payload()
+    payload["pull_request_candidate_list"][0]["merged_commit"] = None  # type: ignore[index]
+    with pytest.raises(EvidenceContractError, match="omit an unavailable merged commit"):
+        TaskHandoff.from_payload(payload)
+
+    payload = _handoff().payload()
+    payload["check_result_list"][0]["evidence_url"] = None  # type: ignore[index]
+    with pytest.raises(EvidenceContractError, match="omit an unavailable evidence URL"):
+        TaskHandoff.from_payload(payload)
+
+
+def test_handoff_keeps_merged_commit_on_its_exact_pr_candidate() -> None:
+    """A merge result extends its composite candidate without another commit map."""
+
+    merged = _handoff(
+        summary="Merged the independently reviewed candidate.",
+        pull_request_candidate_list=[_pull_request_candidate(merged_commit=COMMIT_TWO)],
     )
-    assert receipt.completed_at == datetime(2026, 8, 4, 12, 30, tzinfo=timezone.utc)
 
-    with pytest.raises(VerificationReceiptError, match="timezone-aware"):
-        VerificationReceipt.from_input(
-            _verification_input(),
-            outcome="passed",
-            evidence_url="https://example.test/evidence",
-            evidence_content_sha256=EVIDENCE_ONE,
-            completed_at=datetime(2026, 8, 4, 12, 30),
-        )
-    with pytest.raises(VerificationReceiptError, match="content identity"):
-        VerificationReceipt.from_input(
-            _verification_input(),
-            outcome="passed",
-            evidence_url="https://example.test/evidence",
-            evidence_content_sha256="not-a-sha256",
-        )
+    assert merged.payload()["pull_request_candidate_list"] == [
+        {
+            "url": PULL_REQUEST_URL,
+            "base_branch": "main",
+            "base_commit": COMMIT_BASE,
+            "head_commit": COMMIT_ONE,
+            "merged_commit": COMMIT_TWO,
+        }
+    ]
+    with pytest.raises(EvidenceContractError, match="merged commit"):
+        _pull_request_candidate(merged_commit="main")
+    with pytest.raises(EvidenceContractError, match="merged commit"):
+        _pull_request_candidate(merged_commit=True)
+
+
+def test_handoff_requires_one_complete_composite_pr_review_identity() -> None:
+    """Base branch, exact base commit and head stay in one candidate object."""
+
+    with pytest.raises(EvidenceContractError, match="base is not a full lowercase commit"):
+        _pull_request_candidate(base_commit="main")
+    with pytest.raises(EvidenceContractError, match="head is not a full lowercase commit"):
+        _pull_request_candidate(head_commit="main")
+
+
+@pytest.mark.parametrize(
+    "url",
+    (
+        "https://github.com/antonov-andrey/example/pull/17?token=secret",
+        "https://user:secret@github.com/antonov-andrey/example/pull/17",
+        "https://github.com/antonov-andrey/example/issues/17",
+    ),
+)
+def test_handoff_rejects_noncanonical_pull_request_url_without_secret_echo(url: str) -> None:
+    """Unsafe PR identity is rejected without reflecting credential-bearing input."""
+
+    with pytest.raises(EvidenceContractError, match="canonical GitHub PR") as captured:
+        _pull_request_candidate(url=url)
+
+    assert "secret" not in str(captured.value)
+
+
+@pytest.mark.parametrize(
+    "url",
+    (
+        "http://linear.app/acme/evidence",
+        "https://linear.app:443/acme/evidence",
+        "https://linear.app/acme/../evidence",
+        "https://linear.app/acme/evidence?token=secret",
+    ),
+)
+def test_direct_evidence_url_is_canonical_and_secret_free(url: str) -> None:
+    """Direct evidence links use stable provider URLs without URL credentials or state."""
+
+    with pytest.raises(EvidenceContractError, match="canonical HTTPS provider URL") as captured:
+        evidence_url_validate(url)
+
+    assert "secret" not in str(captured.value)
 
 
 @pytest.mark.parametrize(
     "value",
-    [
-        "2026-08-04Z",
-        "2026-08-04 12:30:00Z",
-        "2026-08-04T12:30Z",
-        "20260804T123000Z",
-        "2026-W32-2T12:30:00Z",
-        "2026-08-04T12:30:00.123Z",
-        "2026-08-04T12:30:00.123456789Z",
+    (
         "2026-08-04T12:30:00+00:00",
-    ],
+        "2026-08-04T12:30:00.1Z",
+        "2026-08-04T12:30:00.0000000Z",
+    ),
 )
-def test_instant_parser_rejects_noncanonical_or_lossy_utc_text(value: str) -> None:
-    """Evidence timestamps have one exact representation and never lose precision."""
+def test_instant_parser_rejects_lossy_or_noncanonical_utc(value: str) -> None:
+    """Evidence instants have one stable seconds-or-microseconds representation."""
 
-    with pytest.raises(VerificationReceiptError, match="RFC 3339 UTC"):
+    with pytest.raises(EvidenceContractError, match="RFC 3339 UTC"):
         instant_parse(value, label="Evidence instant")
 
 
-def test_instant_parser_accepts_canonical_seconds_and_microseconds() -> None:
-    """Canonical evidence instants support the system's exact microsecond precision."""
-
-    assert instant_parse("2026-08-04T12:30:00Z", label="Evidence instant") == datetime(
-        2026, 8, 4, 12, 30, tzinfo=timezone.utc
-    )
-    assert instant_parse("2026-08-04T12:30:00.123456Z", label="Evidence instant") == datetime(
-        2026, 8, 4, 12, 30, 0, 123456, tzinfo=timezone.utc
-    )
-
-
-@pytest.mark.parametrize(
-    ("evidence_url", "evidence_content_sha256"),
-    [
-        ("https://attacker.invalid/evidence", EVIDENCE_ONE),
-        (LINEAR_ATTACHMENT_URL, EVIDENCE_TWO),
-        ("https://attacker.invalid/evidence", EVIDENCE_TWO),
-    ],
-)
-def test_receipt_rejects_evidence_identity_substitution(
-    evidence_url: str,
-    evidence_content_sha256: str,
-) -> None:
-    """URL-only, SHA-only, and combined substitutions invalidate the issued receipt key."""
-
-    receipt = VerificationReceipt.from_input(
-        _verification_input(),
-        outcome="passed",
-        evidence_url=LINEAR_ATTACHMENT_URL,
-        evidence_content_sha256=EVIDENCE_ONE,
-        completed_at=datetime(2026, 8, 4, 12, 30, tzinfo=timezone.utc),
-    )
-    payload = receipt.payload()
-    payload["evidence_url"] = evidence_url
-    payload["evidence_content_sha256"] = evidence_content_sha256
-
-    with pytest.raises(VerificationReceiptError, match="receipt key differs"):
-        VerificationReceipt.from_payload(payload)
-    with pytest.raises(VerificationReceiptError, match="receipt key differs"):
-        replace(
-            receipt,
-            evidence_url=evidence_url,
-            evidence_content_sha256=evidence_content_sha256,
-        )
-
-
-@pytest.mark.parametrize(
-    "evidence_url",
-    [
-        LINEAR_ATTACHMENT_URL + "?signature=short-lived",
-        LINEAR_ATTACHMENT_URL + "#download",
-        LINEAR_ATTACHMENT_URL + "?",
-        LINEAR_ATTACHMENT_URL + "#",
-        "http://uploads.linear.app/workspace/asset/artifact",
-        "HTTPS://uploads.linear.app/workspace/asset/artifact",
-        "https://uploads.linear.app./workspace/asset/artifact",
-        "https://user@uploads.linear.app/workspace/asset/artifact",
-        "https://uploads.linear.app:443/workspace/asset/artifact",
-        "https://uploads.linear.app/workspace/../asset/artifact",
-        "https://uploads.linear.app/workspace/asset/not an artifact",
-        "https://uploads.linear.app/workspace/asset/%61rtifact",
-        "https://uploads.linear.app/workspace/asset/%2fartifact",
-        "https://uploads.linear.app/workspace/asset/%ZZ",
-        "https://uploads.linear.app/workspace/asset/artifact\\download",
-        "https://uploads.linear.app/workspace/asset/artifact\tother",
-        "https://uploads.linear.app/workspace/asset/артефакт",
-        "https://127.1/workspace/asset/artifact",
-        "https://0177.0.0.1/workspace/asset/artifact",
-        "https://2130706433/workspace/asset/artifact",
-        "https://0x7f000001/workspace/asset/artifact",
-        " https://uploads.linear.app/workspace/asset/artifact",
-    ],
-)
-def test_receipt_rejects_noncanonical_evidence_url(evidence_url: str) -> None:
-    """A receipt never stores an expiring or authority-ambiguous artifact URL."""
-
-    with pytest.raises(VerificationReceiptError, match="canonical HTTPS provider URL"):
-        VerificationReceipt.from_input(
-            _verification_input(),
-            outcome="passed",
-            evidence_url=evidence_url,
-            evidence_content_sha256=EVIDENCE_ONE,
-        )
-
-
-def test_receipt_accepts_exact_canonical_percent_encoded_path() -> None:
-    """A canonical encoded reserved path byte remains one exact artifact identity."""
-
-    evidence_url = LINEAR_ATTACHMENT_URL + "%2Fidentity"
-    receipt = VerificationReceipt.from_input(
-        _verification_input(),
-        outcome="passed",
-        evidence_url=evidence_url,
-        evidence_content_sha256=EVIDENCE_ONE,
-    )
-
-    assert receipt.evidence_url == evidence_url
-
-
-@pytest.mark.parametrize(
-    "evidence_url",
-    [
-        "https://uploads.linear.app/workspace/asset/artifact",
-        "https://123.example.test/workspace/asset/artifact",
-        "https://0x7f.example.test/workspace/asset/artifact",
-        "https://127.0.0.1/workspace/asset/artifact",
-    ],
-)
-def test_receipt_accepts_canonical_dns_and_ipv4_provider_hosts(
-    evidence_url: str,
-) -> None:
-    """Numeric-label DNS and canonical dotted IPv4 remain explicit provider identities."""
-
-    receipt = VerificationReceipt.from_input(
-        _verification_input(),
-        outcome="passed",
-        evidence_url=evidence_url,
-        evidence_content_sha256=EVIDENCE_ONE,
-    )
-
-    assert receipt.evidence_url == evidence_url
-
-
-@pytest.mark.parametrize(
-    "evidence_url",
-    [
-        LINEAR_ATTACHMENT_URL + "?",
-        LINEAR_ATTACHMENT_URL + "#",
-        "https://uploads.linear.app/workspace/asset/not an artifact",
-        "https://127.1/workspace/asset/artifact",
-        "https://0177.0.0.1/workspace/asset/artifact",
-        "https://2130706433/workspace/asset/artifact",
-        "https://0x7f000001/workspace/asset/artifact",
-        "https://4294967296/workspace/asset/artifact",
-        "https://999999999999999999999/workspace/asset/artifact",
-        "https://1.2.3.999/workspace/asset/artifact",
-        "https://1.2.3.4.5/workspace/asset/artifact",
-        "https://0x100000000/workspace/asset/artifact",
-        "https://0xffffffffffffffff/workspace/asset/artifact",
-    ],
-)
-def test_receipt_comment_parse_rejects_noncanonical_evidence_url(
-    evidence_url: str,
-) -> None:
-    """A provider comment cannot restore a malformed artifact identity as one receipt."""
-
-    receipt = VerificationReceipt.from_input(
-        _verification_input(),
-        outcome="passed",
-        evidence_url=LINEAR_ATTACHMENT_URL,
-        evidence_content_sha256=EVIDENCE_ONE,
-    )
-    payload = receipt.payload()
-    payload["evidence_url"] = evidence_url
-    rendered = VERIFICATION_RECEIPT_COMMENT_CODEC.render(payload)
-
-    with pytest.raises(VerificationReceiptError, match="canonical HTTPS provider URL"):
-        VerificationReceipt.from_payload(VERIFICATION_RECEIPT_COMMENT_CODEC.payload_parse(rendered))
-
-
-def test_receipt_comment_protects_canonical_evidence_url_from_provider_rewrite() -> None:
-    """JSON slash escapes preserve the URL value without exposing one Linear autolink target."""
-
-    receipt = VerificationReceipt.from_input(
-        _verification_input(),
-        outcome="passed",
-        evidence_url=LINEAR_ATTACHMENT_URL,
-        evidence_content_sha256=EVIDENCE_ONE,
-    )
-    rendered = VERIFICATION_RECEIPT_COMMENT_CODEC.render(receipt.payload())
-
-    assert LINEAR_ATTACHMENT_URL not in rendered
-    assert r"https:\/\/uploads.linear.app\/workspace\/asset\/artifact" in rendered
-    assert VerificationReceipt.from_payload(VERIFICATION_RECEIPT_COMMENT_CODEC.payload_parse(rendered)) == receipt
-
-
-def test_shared_evidence_cli_is_directly_executable() -> None:
-    """The shared replacement CLI launches through its documented direct path."""
+def test_evidence_cli_exposes_only_handoff_and_direct_baselines(tmp_path: Path) -> None:
+    """The owner CLI has no candidate, reusable-receipt or invalidation operation."""
 
     script = LIBRARY_ROOT / "verification" / "tool" / "evidence.py"
-
-    result = subprocess.run([str(script), "--help"], check=False, capture_output=True, text=True)
-
-    assert result.returncode == 0
-    assert "receipt-create" in result.stdout
-    assert result.stderr == ""
-
-
-def test_shared_evidence_cli_creates_and_reuses_the_exact_linear_comment_shape(
-    tmp_path: Path,
-) -> None:
-    """Every workflow role uses the shared owner for codec creation and provider readback."""
-
-    script = LIBRARY_ROOT / "verification" / "tool" / "evidence.py"
-    input_path = tmp_path / "input.json"
-    comment_path = tmp_path / "comment.md"
-    input_path.write_text(json.dumps(_verification_input().payload()), encoding="utf-8")
-
-    created = subprocess.run(
-        [
-            str(script),
-            "receipt-create",
-            "--input",
-            str(input_path),
-            "--outcome",
-            "passed",
-            "--completed-at",
-            "2026-08-04T12:30:00Z",
-            "--evidence-url",
-            "https://example.test/ci/1",
-            "--evidence-content-sha256",
-            EVIDENCE_ONE,
-        ],
+    help_result = subprocess.run(
+        [sys.executable, str(script), "--help"],
         check=True,
         capture_output=True,
         text=True,
     )
-    comment_path.write_text(created.stdout, encoding="utf-8")
-    reused = subprocess.run(
-        [
-            str(script),
-            "receipt-reuse",
-            "--input",
-            str(input_path),
-            "--receipt-comment",
-            str(comment_path),
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    assert "handoff" in help_result.stdout
+    assert "workspace-baseline" in help_result.stdout
+    assert "candidate" not in help_result.stdout
+    assert "receipt" not in help_result.stdout
 
-    assert reused.returncode == 0
-    assert json.loads(reused.stdout)["reusable"] is True
-    assert created.stdout.startswith("<!-- linear-agent-tools-verification:v5 -->")
-    assert created.stdout.endswith("```")
-    assert "https://example.test/ci/1" not in created.stdout
-    assert r"https:\/\/example.test\/ci\/1" in created.stdout
-
-
-@pytest.mark.parametrize(
-    "evidence_url",
-    [
-        LINEAR_ATTACHMENT_URL + "?",
-        LINEAR_ATTACHMENT_URL + "#",
-        "https://uploads.linear.app/workspace/asset/not an artifact",
-        "https://127.1/workspace/asset/artifact",
-        "https://0177.0.0.1/workspace/asset/artifact",
-        "https://2130706433/workspace/asset/artifact",
-        "https://0x7f000001/workspace/asset/artifact",
-        "https://4294967296/workspace/asset/artifact",
-        "https://1.2.3.999/workspace/asset/artifact",
-        "https://1.2.3.4.5/workspace/asset/artifact",
-        "https://0xffffffffffffffff/workspace/asset/artifact",
-    ],
-)
-def test_shared_evidence_cli_rejects_noncanonical_evidence_url(tmp_path: Path, evidence_url: str) -> None:
-    """The shared evidence owner refuses to issue a receipt for a malformed URL."""
-
-    script = LIBRARY_ROOT / "verification" / "tool" / "evidence.py"
-    input_path = tmp_path / "input.json"
-    input_path.write_text(json.dumps(_verification_input().payload()), encoding="utf-8")
-
-    created = subprocess.run(
-        [
-            sys.executable,
-            str(script),
-            "receipt-create",
-            "--input",
-            str(input_path),
-            "--outcome",
-            "passed",
-            "--completed-at",
-            "2026-08-04T12:30:00Z",
-            "--evidence-url",
-            evidence_url,
-            "--evidence-content-sha256",
-            EVIDENCE_ONE,
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-
-    assert created.returncode == 2
-    assert "canonical HTTPS provider URL" in created.stderr
-    assert "linear-agent-tools-verification:v5" not in created.stdout
-
-
-@pytest.mark.parametrize(
-    ("input_working_directory", "comment_evidence_url"),
-    [
-        ("/workspace/example/.worktree/and-17", LINEAR_ATTACHMENT_URL + "?"),
-        ("/workspace/example/.worktree/and-17", LINEAR_ATTACHMENT_URL + "#"),
-        ("//workspace/example/.worktree/and-17", LINEAR_ATTACHMENT_URL),
-    ],
-)
-def test_shared_evidence_cli_reuse_rejects_noncanonical_identity_substitution(
-    tmp_path: Path,
-    input_working_directory: str,
-    comment_evidence_url: str,
-) -> None:
-    """Reuse fails closed when comment or current path identity has another spelling."""
-
-    script = LIBRARY_ROOT / "verification" / "tool" / "evidence.py"
-    input_path = tmp_path / "input.json"
-    comment_path = tmp_path / "comment.md"
-    input_payload = _verification_input().payload()
-    input_payload["working_directory"] = input_working_directory
-    input_path.write_text(json.dumps(input_payload), encoding="utf-8")
-    receipt = VerificationReceipt.from_input(
-        _verification_input(),
-        outcome="passed",
-        evidence_url=LINEAR_ATTACHMENT_URL,
-        evidence_content_sha256=EVIDENCE_ONE,
-    )
-    receipt_payload = receipt.payload()
-    receipt_payload["evidence_url"] = comment_evidence_url
-    comment_path.write_text(VERIFICATION_RECEIPT_COMMENT_CODEC.render(receipt_payload), encoding="utf-8")
-
-    reused = subprocess.run(
-        [
-            sys.executable,
-            str(script),
-            "receipt-reuse",
-            "--input",
-            str(input_path),
-            "--receipt-comment",
-            str(comment_path),
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-
-    assert reused.returncode == 2
-    assert "reusable" not in reused.stdout
-
-
-def test_receipt_rejects_prior_schema_without_a_compatibility_branch() -> None:
-    """Only the current receipt schema and provider marker are accepted."""
-
-    receipt = VerificationReceipt.from_input(
-        _verification_input(),
-        outcome="passed",
-        evidence_url="https://example.test/evidence",
-        evidence_content_sha256=EVIDENCE_ONE,
-    )
-    payload = receipt.payload()
-    payload["schema_version"] = 4
-
-    with pytest.raises(VerificationReceiptError, match="another shape"):
-        VerificationReceipt.from_payload(payload)
-    with pytest.raises(VerificationReceiptError, match="another shape"):
-        VERIFICATION_RECEIPT_COMMENT_CODEC.payload_parse(
-            VERIFICATION_RECEIPT_COMMENT_CODEC.render(receipt.payload()).replace(
-                "linear-agent-tools-verification:v5",
-                "linear-agent-tools-verification:v4",
-                1,
-            )
-        )
-
-
-def test_candidate_fingerprint_and_attempt_comment_bind_exact_external_state() -> None:
-    """Human approval binds exact sorted heads and concise attempt telemetry round-trips."""
-
-    candidate = CandidateInput(
-        delivery_kind="code",
-        pull_request_head_by_url_map={"https://github.com/antonov-andrey/example/pull/17": COMMIT_ONE},
-        evidence_receipt_by_kind_map={},
-    )
-    summary = AttemptSummary(
-        attempt_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-        issue_identifier="AND-17",
-        role_label="task:implementation",
-        delivery_kind="code",
-        started_at=datetime(2026, 8, 4, 12, 0, tzinfo=timezone.utc),
-        completed_at=datetime(2026, 8, 4, 12, 30, tzinfo=timezone.utc),
-        outcome="human-review",
-        changed_commit_by_repository_map={"antonov-andrey/example": COMMIT_ONE},
-        receipt_hit_count=2,
-        receipt_miss_count=1,
-        external_wait_seconds=12.5,
-        codex_usage=CodexUsage(
-            cached_input_tokens=30,
-            cache_write_input_tokens=5,
-            input_tokens=50,
-            output_tokens=20,
-            reasoning_output_tokens=10,
-        ),
-        candidate_identity=candidate.identity_get(),
-        candidate_fingerprint=candidate.fingerprint(),
-        evidence_url_list=["https://example.test/evidence/17"],
-    )
-
-    rendered = ATTEMPT_COMMENT_CODEC.render(summary.payload())
-    assert "https://example.test/evidence/17" not in rendered
-    assert r"https:\/\/example.test\/evidence\/17" in rendered
-    assert AttemptSummary.from_payload(ATTEMPT_COMMENT_CODEC.payload_parse(rendered)) == summary
-    assert summary.payload()["codex_usage"] == {
-        "cached_input_tokens": 30,
-        "cache_write_input_tokens": 5,
-        "input_tokens": 50,
-        "output_tokens": 20,
-        "reasoning_output_tokens": 10,
-    }
-    with pytest.raises(VerificationReceiptError, match="another shape"):
-        ATTEMPT_COMMENT_CODEC.payload_parse(
-            rendered.replace("linear-agent-tools-attempt:v3", "linear-agent-tools-attempt:v2", 1)
-        )
-    assert (
-        candidate.fingerprint()
-        != CandidateInput(
-            delivery_kind="code",
-            pull_request_head_by_url_map={"https://github.com/antonov-andrey/example/pull/17": COMMIT_TWO},
-            evidence_receipt_by_kind_map={},
-        ).fingerprint()
-    )
-
-    with pytest.raises(VerificationReceiptError, match="canonical GitHub PR"):
-        CandidateInput(
-            delivery_kind="code",
-            pull_request_head_by_url_map={"https://example.test/pull/17": COMMIT_ONE},
-            evidence_receipt_by_kind_map={},
-        )
-
-    for pull_request_url in (
-        "https://GITHUB.com/antonov-andrey/example/pull/17",
-        "https://github.com/.././pull/17",
-        "https://github.com/antonov-andrey/example/pull/17/",
-    ):
-        with pytest.raises(VerificationReceiptError, match="canonical GitHub PR"):
-            CandidateInput(
-                delivery_kind="code",
-                pull_request_head_by_url_map={pull_request_url: COMMIT_ONE},
-                evidence_receipt_by_kind_map={},
-            )
-
-
-@pytest.mark.parametrize(
-    ("replacement", "message"),
-    [
-        ({"input_tokens": -1}, "non-negative"),
-        ({"output_tokens": True}, "non-negative"),
-    ],
-)
-def test_attempt_codex_usage_rejects_invalid_surface_counters(
-    replacement: dict[str, object],
-    message: str,
-) -> None:
-    """Attempt telemetry keeps every direct Codex counter exact and internally valid."""
-
-    payload: dict[str, object] = {
-        "cached_input_tokens": 3,
-        "cache_write_input_tokens": 1,
-        "input_tokens": 5,
-        "output_tokens": 2,
-        "reasoning_output_tokens": 1,
-    }
-    payload.update(replacement)
-
-    with pytest.raises(VerificationReceiptError, match=message):
-        CodexUsage.from_payload(payload)
-
-
-def test_evidence_candidate_uses_validated_receipt_keys_for_every_result_identity() -> None:
-    """Receipt transitions invalidate approval, while only passed evidence is eligible."""
-
-    verification_input = _verification_input()
-    completed_at = datetime(2026, 8, 4, 12, 30, tzinfo=timezone.utc)
-    passed_receipt_list = [
-        VerificationReceipt.from_input(
-            verification_input,
-            outcome="passed",
-            completed_at=instant,
-            evidence_url=evidence_url,
-            evidence_content_sha256=evidence_sha256,
-        )
-        for instant, evidence_url, evidence_sha256 in (
-            (completed_at, LINEAR_ATTACHMENT_URL, EVIDENCE_ONE),
-            (completed_at + timedelta(seconds=1), LINEAR_ATTACHMENT_URL, EVIDENCE_ONE),
-            (completed_at, LINEAR_ATTACHMENT_URL + "-two", EVIDENCE_ONE),
-            (completed_at, LINEAR_ATTACHMENT_URL, EVIDENCE_TWO),
-        )
-    ]
-    candidate_list = [
-        CandidateInput(
-            delivery_kind="evidence",
-            pull_request_head_by_url_map={},
-            evidence_receipt_by_kind_map={"acceptance": receipt},
-        )
-        for receipt in passed_receipt_list
-    ]
-    failed_receipt = VerificationReceipt.from_input(
-        verification_input,
-        outcome="failed",
-        completed_at=completed_at,
-        evidence_url=LINEAR_ATTACHMENT_URL,
-        evidence_content_sha256=EVIDENCE_ONE,
-    )
-
-    assert {receipt.verification_key for receipt in [*passed_receipt_list, failed_receipt]} == {
-        verification_input.key()
-    }
-    assert failed_receipt.receipt_key != passed_receipt_list[0].receipt_key
-    assert len({receipt.receipt_key for receipt in passed_receipt_list}) == len(passed_receipt_list)
-    assert len({candidate.fingerprint() for candidate in candidate_list}) == len(candidate_list)
-    for candidate, receipt in zip(candidate_list, passed_receipt_list, strict=True):
-        assert candidate.identity_get().evidence_receipt_key_by_kind_map == {"acceptance": receipt.receipt_key}
-    with pytest.raises(VerificationReceiptError, match="passed outcome"):
-        CandidateInput(
-            delivery_kind="evidence",
-            pull_request_head_by_url_map={},
-            evidence_receipt_by_kind_map={"acceptance": failed_receipt},
-        )
-
-
-def test_attempt_comment_persists_and_validates_complete_evidence_candidate_identity() -> None:
-    """Fresh review reconstructs the exact evidence-kind-to-receipt-key map from Linear telemetry."""
-
-    completed_at = datetime(2026, 8, 4, 12, 30, tzinfo=timezone.utc)
-    candidate = CandidateInput(
-        delivery_kind="evidence",
-        pull_request_head_by_url_map={},
-        evidence_receipt_by_kind_map={
-            "acceptance": VerificationReceipt.from_input(
-                _verification_input(),
-                outcome="passed",
-                completed_at=completed_at,
-                evidence_url=LINEAR_ATTACHMENT_URL,
-                evidence_content_sha256=EVIDENCE_ONE,
-            ),
-            "semantic-review": VerificationReceipt.from_input(
-                _verification_input(),
-                outcome="passed",
-                completed_at=completed_at + timedelta(seconds=1),
-                evidence_url=LINEAR_ATTACHMENT_URL + "-review",
-                evidence_content_sha256=EVIDENCE_TWO,
-            ),
-        },
-    )
-    summary = AttemptSummary(
-        attempt_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-        issue_identifier="AND-17",
-        role_label="task:review",
-        delivery_kind="evidence",
-        started_at=datetime(2026, 8, 4, 12, 0, tzinfo=timezone.utc),
-        completed_at=completed_at + timedelta(seconds=2),
-        outcome="human-review",
-        changed_commit_by_repository_map={},
-        receipt_hit_count=0,
-        receipt_miss_count=2,
-        external_wait_seconds=0.0,
-        codex_usage=None,
-        candidate_identity=candidate.identity_get(),
-        candidate_fingerprint=candidate.fingerprint(),
-        evidence_url_list=["https://linear.app/example/issue/AND-17"],
-    )
-    roundtrip_payload = ATTEMPT_COMMENT_CODEC.payload_parse(ATTEMPT_COMMENT_CODEC.render(summary.payload()))
-
-    assert AttemptSummary.from_payload(roundtrip_payload) == summary
-    assert roundtrip_payload["candidate_identity"] == candidate.identity_get().payload()
-    roundtrip_payload["candidate_identity"]["evidence_receipt_key_by_kind_map"].pop("semantic-review")
-    with pytest.raises(VerificationReceiptError, match="fingerprint differs"):
-        AttemptSummary.from_payload(roundtrip_payload)
-
-
-def test_evidence_candidate_rejects_verification_key_substitution_and_prior_shape() -> None:
-    """A stable reuse key cannot masquerade as receipt-bearing approval evidence."""
-
-    receipt = VerificationReceipt.from_input(
-        _verification_input(),
-        outcome="passed",
-        completed_at=datetime(2026, 8, 4, 12, 30, tzinfo=timezone.utc),
-        evidence_url=LINEAR_ATTACHMENT_URL,
-        evidence_content_sha256=EVIDENCE_ONE,
-    )
-    candidate = CandidateInput(
-        delivery_kind="evidence",
-        pull_request_head_by_url_map={},
-        evidence_receipt_by_kind_map={"acceptance": receipt},
-    )
-    substituted_payload = candidate.payload()
-    substituted_payload["evidence_receipt_by_kind_map"]["acceptance"]["receipt_key"] = receipt.verification_key
-
-    with pytest.raises(VerificationReceiptError, match="receipt key differs from its exact result"):
-        CandidateInput.from_payload(substituted_payload)
-    with pytest.raises(VerificationReceiptError, match="current receipt schema"):
-        CandidateInput(
-            delivery_kind="evidence",
-            pull_request_head_by_url_map={},
-            evidence_receipt_by_kind_map={"acceptance": receipt.verification_key},
-        )
-
-    prior_payload = candidate.payload()
-    prior_payload["evidence_identity_by_kind_map"] = {
-        "acceptance": prior_payload.pop("evidence_receipt_by_kind_map")["acceptance"]["verification_key"]
-    }
-    with pytest.raises(VerificationReceiptError, match="another shape"):
-        CandidateInput.from_payload(prior_payload)
-
-
-@pytest.mark.parametrize(
-    ("replacement", "message"),
-    [
-        ({"candidate_fingerprint": ""}, "candidate fingerprint"),
-        ({"outcome": "failed"}, "candidate identity"),
-        ({"candidate_identity": None}, "candidate identity"),
-        ({"role_label": "task:review"}, "role and delivery kind"),
-        (
-            {"role_label": "task:cleanup", "delivery_kind": "cleanup"},
-            "role and outcome",
-        ),
-        ({"evidence_url_list": []}, "bounded evidence links"),
-    ],
-)
-def test_attempt_summary_rejects_role_outcome_candidate_and_evidence_mismatch(
-    replacement: dict[str, object],
-    message: str,
-) -> None:
-    """Attempt telemetry cannot claim a semantically impossible role result."""
-
-    candidate_identity = CandidateIdentity(
-        delivery_kind="code",
-        evidence_receipt_key_by_kind_map={},
-        pull_request_head_by_url_map={"https://github.com/antonov-andrey/example/pull/17": COMMIT_ONE},
-    )
-    argument_by_name: dict[str, object] = {
-        "attempt_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-        "issue_identifier": "AND-17",
-        "role_label": "task:implementation",
-        "delivery_kind": "code",
-        "started_at": datetime(2026, 8, 4, 12, 0, tzinfo=timezone.utc),
-        "completed_at": datetime(2026, 8, 4, 12, 30, tzinfo=timezone.utc),
-        "outcome": "human-review",
-        "changed_commit_by_repository_map": {"antonov-andrey/example": COMMIT_ONE},
-        "receipt_hit_count": 1,
-        "receipt_miss_count": 0,
-        "external_wait_seconds": 0.0,
-        "codex_usage": None,
-        "candidate_identity": candidate_identity,
-        "candidate_fingerprint": candidate_identity.fingerprint(),
-        "evidence_url_list": ["https://example.test/evidence/17"],
-    }
-    argument_by_name.update(replacement)
-
-    with pytest.raises(VerificationReceiptError, match=message):
-        AttemptSummary(**argument_by_name)
-
-
-def test_attempt_summary_rejects_commits_for_evidence_delivery() -> None:
-    """Evidence-only implementation telemetry cannot claim Product mutations."""
-
-    with pytest.raises(VerificationReceiptError, match="Non-code attempt"):
-        AttemptSummary(
-            attempt_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-            issue_identifier="AND-17",
-            role_label="task:implementation",
-            delivery_kind="evidence",
-            started_at=datetime(2026, 8, 4, 12, 0, tzinfo=timezone.utc),
-            completed_at=datetime(2026, 8, 4, 12, 30, tzinfo=timezone.utc),
-            outcome="failed",
-            changed_commit_by_repository_map={"antonov-andrey/example": COMMIT_ONE},
-            receipt_hit_count=0,
-            receipt_miss_count=1,
-            external_wait_seconds=0.0,
-            codex_usage=None,
-            candidate_identity=None,
-            candidate_fingerprint="",
-            evidence_url_list=[],
-        )
-
-
-def test_attempt_summary_rejects_noncanonical_or_credential_bearing_evidence_links() -> None:
-    """Concise provider telemetry cannot persist secrets or URL aliases."""
-
-    candidate_identity = CandidateIdentity(
-        delivery_kind="code",
-        evidence_receipt_key_by_kind_map={},
-        pull_request_head_by_url_map={"https://github.com/antonov-andrey/example/pull/17": COMMIT_ONE},
-    )
-
-    with pytest.raises(VerificationReceiptError, match="canonical HTTPS provider URL"):
-        AttemptSummary(
-            attempt_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-            issue_identifier="AND-17",
-            role_label="task:implementation",
-            delivery_kind="code",
-            started_at=datetime(2026, 8, 4, 12, 0, tzinfo=timezone.utc),
-            completed_at=datetime(2026, 8, 4, 12, 30, tzinfo=timezone.utc),
-            outcome="human-review",
-            changed_commit_by_repository_map={"antonov-andrey/example": COMMIT_ONE},
-            receipt_hit_count=1,
-            receipt_miss_count=0,
-            external_wait_seconds=0.0,
-            codex_usage=None,
-            candidate_identity=candidate_identity,
-            candidate_fingerprint=candidate_identity.fingerprint(),
-            evidence_url_list=["https://token:secret@example.test/evidence/17"],
-        )
-
-
-@pytest.mark.parametrize(
-    "repository",
-    [
-        "https://token:secret@github.com/antonov-andrey/example.git",
-        "antonov-andrey/example/another",
-        "./example",
-        "antonov-andrey/..",
-    ],
-)
-def test_attempt_summary_rejects_noncanonical_repository_key_without_echo(
-    repository: str,
-) -> None:
-    """Provider attempt telemetry accepts only the typed GitHub repository key."""
-
-    with pytest.raises(VerificationReceiptError) as error:
-        AttemptSummary(
-            attempt_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-            issue_identifier="AND-17",
-            role_label="task:implementation",
-            delivery_kind="code",
-            started_at=datetime(2026, 8, 4, 12, 0, tzinfo=timezone.utc),
-            completed_at=datetime(2026, 8, 4, 12, 30, tzinfo=timezone.utc),
-            outcome="failed",
-            changed_commit_by_repository_map={repository: COMMIT_ONE},
-            receipt_hit_count=0,
-            receipt_miss_count=1,
-            external_wait_seconds=0.0,
-            codex_usage=None,
-            candidate_identity=None,
-            candidate_fingerprint="",
-            evidence_url_list=[],
-        )
-
-    assert "token" not in str(error.value)
-    assert "secret" not in str(error.value)
-
-
-def test_attempt_cli_rejects_secret_repository_key_without_comment_output(
-    tmp_path: Path,
-) -> None:
-    """A rejected repository credential never reaches provider output or diagnostics."""
-
-    script = LIBRARY_ROOT / "verification" / "tool" / "evidence.py"
-    input_path = tmp_path / "attempt.json"
-    input_path.write_text(
-        json.dumps(
-            {
-                "schema_version": 3,
-                "attempt_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-                "issue_identifier": "AND-17",
-                "role_label": "task:implementation",
-                "delivery_kind": "code",
-                "started_at": "2026-08-04T12:00:00Z",
-                "completed_at": "2026-08-04T12:30:00Z",
-                "outcome": "failed",
-                "changed_commit_by_repository_map": {
-                    "https://token:secret@github.com/antonov-andrey/example.git": COMMIT_ONE
-                },
-                "receipt_hit_count": 0,
-                "receipt_miss_count": 1,
-                "external_wait_seconds": 0.0,
-                "candidate_identity": None,
-                "candidate_fingerprint": "",
-                "evidence_url_list": [],
-            }
-        ),
-        encoding="utf-8",
-    )
-
+    input_path = tmp_path / "handoff.json"
+    input_path.write_text(json.dumps(_handoff().payload()), encoding="utf-8")
     rendered = subprocess.run(
-        [str(script), "attempt", "--input", str(input_path)],
-        check=False,
+        [sys.executable, str(script), "handoff", "--input", str(input_path)],
+        check=True,
         capture_output=True,
         text=True,
-    )
-
-    assert rendered.returncode == 2
-    assert rendered.stdout == ""
-    assert "exact owner/name form" in rendered.stderr
-    assert "token" not in rendered.stderr
-    assert "secret" not in rendered.stderr
+    ).stdout
+    assert TaskHandoff.from_payload(HANDOFF_COMMENT_CODEC.payload_parse(rendered)) == _handoff()
 
 
-@pytest.mark.parametrize(
-    (
-        "role_label",
-        "delivery_kind",
-        "changed_commit_by_repository_map",
-        "candidate_identity",
-    ),
-    [
-        (
-            "task:review",
-            "evidence",
-            {},
-            CandidateIdentity(
-                delivery_kind="code",
-                evidence_receipt_key_by_kind_map={},
-                pull_request_head_by_url_map={
-                    "https://github.com/antonov-andrey/example/pull/17": COMMIT_ONE,
-                },
-            ),
-        ),
-        (
-            "task:implementation",
-            "code",
-            {"antonov-andrey/example": COMMIT_ONE},
-            CandidateIdentity(
-                delivery_kind="evidence",
-                evidence_receipt_key_by_kind_map={"review": "a" * 64},
-                pull_request_head_by_url_map={},
-            ),
-        ),
-    ],
-)
-def test_attempt_summary_rejects_candidate_from_another_delivery_surface(
-    role_label: str,
-    delivery_kind: str,
-    changed_commit_by_repository_map: dict[str, str],
-    candidate_identity: CandidateIdentity,
-) -> None:
-    """A code identity cannot approve evidence and receipt evidence cannot approve code."""
-
-    payload = {
-        "schema_version": 3,
-        "attempt_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-        "issue_identifier": "AND-17",
-        "role_label": role_label,
-        "delivery_kind": delivery_kind,
-        "started_at": "2026-08-04T12:00:00Z",
-        "completed_at": "2026-08-04T12:30:00Z",
-        "outcome": "human-review",
-        "changed_commit_by_repository_map": changed_commit_by_repository_map,
-        "receipt_hit_count": 0,
-        "receipt_miss_count": 1,
-        "external_wait_seconds": 0.0,
-        "candidate_identity": candidate_identity.payload(),
-        "candidate_fingerprint": candidate_identity.fingerprint(),
-        "evidence_url_list": ["https://example.test/evidence/17"],
-    }
-
-    with pytest.raises(VerificationReceiptError, match="delivery kind differs"):
-        AttemptSummary.from_payload(payload)
-    comment = ATTEMPT_COMMENT_CODEC.render(payload)
-    with pytest.raises(VerificationReceiptError, match="delivery kind differs"):
-        AttemptSummary.from_payload(ATTEMPT_COMMENT_CODEC.payload_parse(comment))
-
-
-def test_shared_evidence_cli_rejects_candidate_from_another_delivery_surface(
-    tmp_path: Path,
-) -> None:
-    """The public attempt boundary rejects a code identity on an evidence attempt."""
+def test_evidence_cli_rejects_prior_candidate_shape(tmp_path: Path) -> None:
+    """A legacy approval payload cannot cross the semantic handoff boundary."""
 
     script = LIBRARY_ROOT / "verification" / "tool" / "evidence.py"
-    input_path = tmp_path / "attempt.json"
-    candidate_identity = CandidateIdentity(
-        delivery_kind="code",
-        evidence_receipt_key_by_kind_map={},
-        pull_request_head_by_url_map={"https://github.com/antonov-andrey/example/pull/17": COMMIT_ONE},
-    )
-    input_path.write_text(
-        json.dumps(
-            {
-                "schema_version": 3,
-                "attempt_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-                "issue_identifier": "AND-17",
-                "role_label": "task:review",
-                "delivery_kind": "evidence",
-                "started_at": "2026-08-04T12:00:00Z",
-                "completed_at": "2026-08-04T12:30:00Z",
-                "outcome": "human-review",
-                "changed_commit_by_repository_map": {},
-                "receipt_hit_count": 0,
-                "receipt_miss_count": 1,
-                "external_wait_seconds": 0.0,
-                "candidate_identity": candidate_identity.payload(),
-                "candidate_fingerprint": candidate_identity.fingerprint(),
-                "evidence_url_list": ["https://example.test/evidence/17"],
-            }
-        ),
-        encoding="utf-8",
-    )
+    input_path = tmp_path / "legacy.json"
+    payload = _handoff().payload()
+    payload["candidate_fingerprint"] = "f" * 64
+    input_path.write_text(json.dumps(payload), encoding="utf-8")
 
-    rendered = subprocess.run(
-        [str(script), "attempt", "--input", str(input_path)],
+    result = subprocess.run(
+        [sys.executable, str(script), "handoff", "--input", str(input_path)],
         check=False,
         capture_output=True,
         text=True,
     )
 
-    assert rendered.returncode == 2
-    assert rendered.stdout == ""
-    assert "delivery kind differs" in rendered.stderr
+    assert result.returncode == 2
+    assert "another shape" in result.stderr
+    assert result.stdout == ""
 
 
-def test_local_phase_baseline_requires_every_phase_and_round_trips() -> None:
-    """The local acceptance baseline has one complete fixed phase set."""
+def test_local_phase_baseline_uses_exact_provider_history_without_candidate_identity() -> None:
+    """All five phases round-trip without a synthetic approval fingerprint."""
 
     baseline = LocalPhaseBaseline(
-        project_id="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        project_id="22222222-2222-4222-8222-222222222222",
         source_fingerprint="c" * 64,
-        candidate_fingerprint="d" * 64,
-        measured_at=datetime(2026, 8, 4, 13, 0, tzinfo=timezone.utc),
+        measured_at=datetime(2026, 8, 4, 12, 30, tzinfo=timezone.utc),
         duration_seconds_by_phase_map={
-            "execution": 120.0,
-            "merge": 10.0,
-            "queue": 4.0,
-            "review": 30.0,
+            "queue": 1.0,
             "startup": 2.0,
+            "execution": 3.0,
+            "review": 4.0,
+            "merge": 5.0,
         },
-        evidence_url="https://linear.app/example/project/acceptance",
+        evidence_url=ISSUE_EVIDENCE_URL,
     )
-
     rendered = LOCAL_PHASE_BASELINE_COMMENT_CODEC.render(baseline.payload())
-    assert baseline.evidence_url not in rendered
-    assert r"https:\/\/linear.app\/example\/project\/acceptance" in rendered
+
     assert LocalPhaseBaseline.from_payload(LOCAL_PHASE_BASELINE_COMMENT_CODEC.payload_parse(rendered)) == baseline
-    with pytest.raises(VerificationReceiptError, match="queue, startup, execution, review and merge"):
-        LocalPhaseBaseline(
-            project_id=baseline.project_id,
-            source_fingerprint=baseline.source_fingerprint,
-            candidate_fingerprint=baseline.candidate_fingerprint,
-            measured_at=baseline.measured_at,
-            duration_seconds_by_phase_map={"execution": 1.0},
-            evidence_url=baseline.evidence_url,
-        )
+    assert "candidate" not in rendered
+    with pytest.raises(EvidenceContractError, match="queue, startup, execution, review and merge"):
+        replace(baseline, duration_seconds_by_phase_map={"queue": 1.0})
 
 
-@pytest.mark.parametrize(
-    "evidence_url",
-    [
-        "https://token:secret@uploads.linear.app/evidence",
-        "https://uploads.linear.app:443/evidence",
-        "https://uploads.linear.app/evidence?token=secret",
-        "https://uploads.linear.app/evidence#fragment",
-        "https://127.1/evidence",
-    ],
-)
-def test_local_phase_baseline_rejects_noncanonical_evidence_url(
-    evidence_url: str,
-) -> None:
-    """Local phase telemetry uses the same durable secret-free evidence identity."""
-
-    with pytest.raises(VerificationReceiptError, match="canonical HTTPS provider URL"):
-        LocalPhaseBaseline(
-            project_id="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-            source_fingerprint="c" * 64,
-            candidate_fingerprint="d" * 64,
-            measured_at=datetime(2026, 8, 4, 13, 0, tzinfo=timezone.utc),
-            duration_seconds_by_phase_map={
-                "execution": 120.0,
-                "merge": 10.0,
-                "queue": 4.0,
-                "review": 30.0,
-                "startup": 2.0,
-            },
-            evidence_url=evidence_url,
-        )
-
-
-def test_local_phase_baseline_cli_rejects_secret_url_without_comment_output(
-    tmp_path: Path,
-) -> None:
-    """Rejected baseline secrets never reach provider comment output or diagnostics."""
-
-    script = LIBRARY_ROOT / "verification" / "tool" / "evidence.py"
-    input_path = tmp_path / "baseline.json"
-    input_path.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "project_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-                "source_fingerprint": "c" * 64,
-                "candidate_fingerprint": "d" * 64,
-                "measured_at": "2026-08-04T13:00:00Z",
-                "duration_seconds_by_phase_map": {
-                    "execution": 120.0,
-                    "merge": 10.0,
-                    "queue": 4.0,
-                    "review": 30.0,
-                    "startup": 2.0,
-                },
-                "evidence_url": "https://token:secret@uploads.linear.app/evidence?presigned=secret",
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    rendered = subprocess.run(
-        [sys.executable, str(script), "baseline", "--input", str(input_path)],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-
-    assert rendered.returncode == 2
-    assert rendered.stdout == ""
-    assert "canonical HTTPS provider URL" in rendered.stderr
-    assert "token" not in rendered.stderr
-    assert "secret" not in rendered.stderr
-
-
-def test_task_workspace_baseline_is_deterministic_linear_evidence() -> None:
-    """First dispatch publishes the exact branch and repository baselines once."""
+def test_task_workspace_baseline_is_deterministic_migration_evidence() -> None:
+    """First dispatch remains bound to source, branch and every remote-base commit."""
 
     baseline = TaskWorkspaceBaseline(
         issue_identifier="AND-17",
-        source_fingerprint="c" * 64,
+        source_fingerprint="d" * 64,
         branch_name="linear/and-17",
-        baseline_commit_by_repository_url_map={"git@github.com:antonov-andrey/example.git": COMMIT_ONE},
+        baseline_commit_by_repository_url_map={
+            "git@github.com:antonov-andrey/example.git": COMMIT_ONE,
+            "ssh://git@github.com/antonov-andrey/other.git": COMMIT_TWO,
+        },
     )
-
     rendered = TASK_WORKSPACE_BASELINE_COMMENT_CODEC.render(baseline.payload())
-    assert "git@github.com:antonov-andrey/example.git" not in rendered
-    assert r"git@github.com:antonov-andrey\/example.git" in rendered
-    assert TaskWorkspaceBaseline.from_payload(TASK_WORKSPACE_BASELINE_COMMENT_CODEC.payload_parse(rendered)) == baseline
-    with pytest.raises(VerificationReceiptError, match="branch differs"):
-        TaskWorkspaceBaseline(
-            issue_identifier=baseline.issue_identifier,
-            source_fingerprint=baseline.source_fingerprint,
-            branch_name="linear/and-18",
-            baseline_commit_by_repository_url_map=baseline.baseline_commit_by_repository_url_map,
-        )
 
-    with pytest.raises(VerificationReceiptError, match="repeats one repository identity"):
-        TaskWorkspaceBaseline(
-            issue_identifier=baseline.issue_identifier,
-            source_fingerprint=baseline.source_fingerprint,
-            branch_name=baseline.branch_name,
+    assert TaskWorkspaceBaseline.from_payload(TASK_WORKSPACE_BASELINE_COMMENT_CODEC.payload_parse(rendered)) == baseline
+    with pytest.raises(EvidenceContractError, match="branch differs"):
+        replace(baseline, branch_name="linear/and-18")
+    with pytest.raises(EvidenceContractError, match="repeats one repository identity"):
+        replace(
+            baseline,
             baseline_commit_by_repository_url_map={
                 "git@github.com:antonov-andrey/example.git": COMMIT_ONE,
                 "ssh://git@github.com/antonov-andrey/example.git": COMMIT_TWO,
@@ -1591,158 +554,322 @@ def test_task_workspace_baseline_is_deterministic_linear_evidence() -> None:
         )
 
 
-@pytest.mark.parametrize(
-    "repository_url",
-    [
-        "https://token:secret@github.com/example/repository.git",
-        "https://github.com/example/repository.git?token=secret",
-        "https://github.com/example/repository.git#secret",
-    ],
-)
-def test_workspace_baseline_cli_rejects_unsafe_repository_without_evidence_output(
-    tmp_path: Path,
-    repository_url: str,
-) -> None:
-    """Unsafe baseline origins never reach durable Linear comment output or diagnostics."""
-
-    script = LIBRARY_ROOT / "verification" / "tool" / "evidence.py"
-    input_path = tmp_path / "workspace-baseline.json"
-    input_path.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "issue_identifier": "AND-30",
-                "source_fingerprint": "a" * 64,
-                "branch_name": "linear/and-30",
-                "baseline_commit_by_repository_url_map": {repository_url: COMMIT_ONE},
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    rendered = subprocess.run(
-        [str(script), "workspace-baseline", "--input", str(input_path)],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-
-    assert rendered.returncode == 2
-    assert rendered.stdout == ""
-    assert "unsafe or unsupported" in rendered.stderr
-    assert "token" not in rendered.stderr
-    assert "secret" not in rendered.stderr
-
-
-def test_shared_evidence_cli_renders_candidate_without_persistent_state(
-    tmp_path: Path,
-) -> None:
-    """Every role can use one deterministic owner CLI for candidate evidence."""
-
-    script = LIBRARY_ROOT / "verification" / "tool" / "evidence.py"
-    input_path = tmp_path / "candidate.json"
-    candidate = CandidateInput(
-        delivery_kind="evidence",
-        pull_request_head_by_url_map={},
-        evidence_receipt_by_kind_map={
-            "acceptance": VerificationReceipt.from_input(
-                _verification_input(),
-                outcome="passed",
-                evidence_url=LINEAR_ATTACHMENT_URL,
-                evidence_content_sha256=EVIDENCE_ONE,
-                completed_at=datetime(2026, 8, 4, 12, 30, tzinfo=timezone.utc),
-            )
-        },
-    )
-    input_path.write_text(json.dumps(candidate.payload()), encoding="utf-8")
-
-    rendered = subprocess.run(
-        [sys.executable, str(script), "candidate", "--input", str(input_path)],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-
-    payload = json.loads(rendered.stdout)
-    assert set(payload) == {
-        "candidate_fingerprint",
-        "candidate_identity",
-        "input",
-        "schema_version",
-    }
-    assert payload["schema_version"] == 3
-    assert payload["candidate_fingerprint"] == candidate.fingerprint()
-    assert payload["candidate_identity"] == candidate.identity_get().payload()
-    assert payload["candidate_identity"]["evidence_receipt_key_by_kind_map"] == {
-        "acceptance": candidate.evidence_receipt_by_kind_map["acceptance"].receipt_key
-    }
-    assert payload["input"] == candidate.payload()
-
-
-def test_shared_evidence_cli_rejects_failed_receipt_candidate(tmp_path: Path) -> None:
-    """A failed result cannot cross the shared Human Review candidate boundary."""
-
-    script = LIBRARY_ROOT / "verification" / "tool" / "evidence.py"
-    input_path = tmp_path / "candidate.json"
-    failed_receipt = VerificationReceipt.from_input(
-        _verification_input(),
-        outcome="failed",
-        evidence_url=LINEAR_ATTACHMENT_URL,
-        evidence_content_sha256=EVIDENCE_ONE,
-        completed_at=datetime(2026, 8, 4, 12, 30, tzinfo=timezone.utc),
-    )
-    input_path.write_text(
-        json.dumps(
-            {
-                "delivery_kind": "evidence",
-                "evidence_receipt_by_kind_map": {"acceptance": failed_receipt.payload()},
-                "pull_request_head_by_url_map": {},
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    rendered = subprocess.run(
-        [sys.executable, str(script), "candidate", "--input", str(input_path)],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-
-    assert rendered.returncode == 2
-    assert "passed outcome" in rendered.stderr
-    assert rendered.stdout == ""
-
-
 class _GhRunner:
-    """Return deterministic gh responses and record exact command argv."""
+    """Return deterministic GitHub/Git responses and model remote ref mutation."""
 
-    def __init__(self, *, head_commit: str = COMMIT_ONE, base_branch: str = "main") -> None:
+    def __init__(
+        self,
+        *,
+        base_commit: str = COMMIT_BASE,
+        head_commit: str = COMMIT_ONE,
+        base_branch: str = "main",
+        protection_kind: str = "classic",
+        required_check_name_list: list[str] | None = None,
+    ) -> None:
+        self.base_commit = base_commit
         self.head_commit = head_commit
         self.base_branch = base_branch
+        self.head_repository = "antonov-andrey/example"
+        self.cross_repository = False
+        self.auto_merge_request: dict[str, object] | None = None
+        self.pr_title = "AND-17 Implement exact owner"
+        self.protection_kind = protection_kind
+        self.required_check_name_list = [] if required_check_name_list is None else required_check_name_list
+        self.strict_required_status_checks = True
+        self.execution_login = "octocat"
+        self.execution_user_id = 7
+        self.execution_node_id = "U_octocat"
+        self.changed_execution_login: str | None = None
+        self.changed_execution_user_id: int | None = None
+        self.changed_execution_node_id: str | None = None
+        self.changed_execution_permission: str | None = None
+        self.execution_identity_change_after_read_count = 1
+        self.execution_identity_read_count = 0
+        self.execution_permission_change_after_read_count = 1
+        self.execution_permission_read_count = 0
+        self.enforce_admins = True
+        self.allow_force_pushes = False
+        self.allow_deletions = False
+        self.required_pull_request_reviews: dict[str, object] | None = None
+        self.required_linear_history = False
+        self.required_signatures = False
+        self.required_conversation_resolution = False
+        self.branch_locked = False
+        self.push_restrictions: dict[str, object] | None = None
+        self.block_creations = False
+        self.allow_fork_syncing = False
+        self.classic_extra_field_by_name_map: dict[str, object] = {}
+        self.execution_permission = "admin"
+        self.ruleset_enforcement = "active"
+        self.ruleset_merge_queue = False
+        self.ruleset_additional_rule_type_list: list[str] = []
+        self.ruleset_required_check_extra_parameter_by_name_map: dict[str, object] = {}
+        self.ruleset_bypass_actor_list: list[dict[str, object]] = []
         self.check_bucket = "pass"
+        self.check_returncode: int | None = None
+        self.check_stdout: str | None = None
+        self.status_rollup_returncode = 0
+        self.status_rollup_stdout: str | None = None
         self.state = "OPEN"
+        self.defer_merge_readback = False
         self.pr_exists = False
+        self.advance_base_on_push = False
+        self.advance_head_on_push = False
+        self.operation_mutation_count = 0
+        self.http_proactive_authentication_supported = True
+        self.http_proactive_authentication_failure_probe_number: int | None = None
+        self.http_proactive_authentication_probe_count = 0
+        self.fetch_url_list = ["git@github.com:antonov-andrey/example.git"]
+        self.push_url_list = ["git@github.com:antonov-andrey/example.git"]
+        self.explicit_fetch_url_list = ["https://github.com/antonov-andrey/example.git"]
+        self.explicit_push_url_list = ["https://github.com/antonov-andrey/example.git"]
+        self.local_config_name_list = [
+            "core.repositoryformatversion",
+            "remote.origin.url",
+            "remote.origin.fetch",
+        ]
+        self.pre_push_hook = False
+        self.alternate_object_store = False
+        self.replace_ref_list: list[str] = []
+        self.shallow_repository = False
+        self.reviewed_base_is_ancestor = True
+        self.merge_base_commit = base_commit
+        self.merge_head_commit = head_commit
+        self.merge_commit = COMMIT_TWO
+        self.constructed_merge_tree = "f" * 40
+        self.merge_commit_tree = "f" * 40
+        self.merged_by_login = "octocat"
+        self.merged_by_user_id = 7
+        self.merged_by_node_id = "U_octocat"
+        self.credential_login = "octocat"
+        self.credential_user_id = 7
+        self.credential_node_id = "U_octocat"
+        self.repository_policy_read_count = 0
+        self.repository_policy_payload_override: object | None = None
+        self.repository_policy_field_by_name_map: dict[str, object] = {}
+        self.repository_policy_drift_field_by_name_map: dict[str, object] = {}
+        self.remote_commit_by_ref_map = {
+            f"refs/heads/{base_branch}": base_commit,
+            "refs/heads/linear/and-17": head_commit,
+        }
         self.command_list: list[list[str]] = []
+        self.environment_list: list[dict[str, str]] = []
 
-    def __call__(self, argument_list: list[str]) -> subprocess.CompletedProcess[str]:
-        self.command_list.append(list(argument_list))
-        if argument_list[1:3] == ["pr", "checks"]:
+    def __call__(
+        self,
+        argument_list: Sequence[str],
+        *,
+        environment_by_name_map: Mapping[str, str],
+        input_text: str | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        """Return the provider response for one expected gh command."""
+
+        argument_list = list(argument_list)
+        self.command_list.append(argument_list)
+        self.environment_list.append(dict(environment_by_name_map))
+        if argument_list[0] == "/bin/sh":
+            assert input_text == "protocol=https\nhost=github.com\npath=antonov-andrey/example.git\n\n"
+            expected_identity = (self.execution_login, self.execution_user_id, self.execution_node_id)
+            credential_identity = (self.credential_login, self.credential_user_id, self.credential_node_id)
             return subprocess.CompletedProcess(
                 argument_list,
-                8 if self.check_bucket == "pending" else 0,
+                0 if credential_identity == expected_identity else 1,
+                "",
+                "",
+            )
+        if argument_list[0] == "git":
+            return self._git_call(
+                argument_list,
+                environment_by_name_map=environment_by_name_map,
+                input_text=input_text,
+            )
+        assert input_text is None
+        if argument_list[1:3] == ["pr", "checks"]:
+            payload = [
+                {"name": name, "bucket": self.check_bucket, "link": "https://example.test/check"}
+                for name in self.required_check_name_list
+            ]
+            return subprocess.CompletedProcess(
+                argument_list,
+                (
+                    self.check_returncode
+                    if self.check_returncode is not None
+                    else (8 if self.check_bucket == "pending" else 0)
+                ),
+                self.check_stdout if self.check_stdout is not None else json.dumps(payload),
+                "",
+            )
+        if argument_list[1:5] == ["api", "--hostname", "github.com", "user"]:
+            self.execution_identity_read_count += 1
+            changed = (
+                self.execution_identity_read_count > self.execution_identity_change_after_read_count
+                and self.changed_execution_login is not None
+            )
+            payload = {
+                "login": self.changed_execution_login if changed else self.execution_login,
+                "id": self.changed_execution_user_id if changed else self.execution_user_id,
+                "node_id": self.changed_execution_node_id if changed else self.execution_node_id,
+            }
+            return subprocess.CompletedProcess(argument_list, 0, json.dumps(payload), "")
+        if argument_list[1:5] == ["api", "--hostname", "github.com", "repos/antonov-andrey/example"]:
+            self.repository_policy_read_count += 1
+            if self.repository_policy_payload_override is not None:
+                payload = self.repository_policy_payload_override
+            else:
+                payload = self._repository_policy_payload_get()
+                if self.repository_policy_read_count > 1:
+                    payload.update(self.repository_policy_drift_field_by_name_map)
+            return subprocess.CompletedProcess(argument_list, 0, json.dumps(payload), "")
+        if (
+            argument_list[1:4] == ["api", "--hostname", "github.com"]
+            and argument_list[4] == "repos/antonov-andrey/example/pulls/17"
+        ):
+            return subprocess.CompletedProcess(
+                argument_list,
+                0,
                 json.dumps(
-                    [
-                        {
-                            "name": "test",
-                            "bucket": self.check_bucket,
-                            "link": "https://example.test/check",
-                        }
-                    ]
+                    {
+                        "login": self.merged_by_login,
+                        "user_id": self.merged_by_user_id,
+                        "node_id": self.merged_by_node_id,
+                    }
                 ),
                 "",
             )
-        if argument_list[1:3] == ["api", "--method"]:
+        if argument_list[1:3] == ["api", "--include"]:
+            if self.protection_kind == "classic":
+                payload = {
+                    "url": (
+                        "https://api.github.com/repos/antonov-andrey/example/branches/" f"{self.base_branch}/protection"
+                    ),
+                    "enforce_admins": {
+                        "enabled": self.enforce_admins,
+                        "url": "https://api.github.com/repos/antonov-andrey/example/branches/main/protection/enforce_admins",
+                    },
+                    "allow_force_pushes": {"enabled": self.allow_force_pushes},
+                    "allow_deletions": {"enabled": self.allow_deletions},
+                    "required_linear_history": {"enabled": self.required_linear_history},
+                    "required_signatures": {
+                        "enabled": self.required_signatures,
+                        "url": "https://api.github.com/repos/antonov-andrey/example/branches/main/protection/required_signatures",
+                    },
+                    "required_conversation_resolution": {"enabled": self.required_conversation_resolution},
+                    "lock_branch": {"enabled": self.branch_locked},
+                    "block_creations": {"enabled": self.block_creations},
+                    "allow_fork_syncing": {"enabled": self.allow_fork_syncing},
+                    **self.classic_extra_field_by_name_map,
+                }
+                if self.required_pull_request_reviews is not None:
+                    payload["required_pull_request_reviews"] = self.required_pull_request_reviews
+                if self.push_restrictions is not None:
+                    payload["restrictions"] = self.push_restrictions
+                if self.required_check_name_list:
+                    payload["required_status_checks"] = {
+                        "url": "https://api.github.com/repos/antonov-andrey/example/branches/main/protection/required_status_checks",
+                        "contexts_url": (
+                            "https://api.github.com/repos/antonov-andrey/example/branches/main/protection/"
+                            "required_status_checks/contexts"
+                        ),
+                        "strict": self.strict_required_status_checks,
+                        "contexts": list(self.required_check_name_list),
+                        "checks": [],
+                    }
+                return _included_response(argument_list, status=200, payload=payload)
+            return _included_response(
+                argument_list,
+                status=404,
+                payload={"message": "Branch not protected", "status": "404"},
+            )
+        if argument_list[1] == "api" and "/collaborators/" in argument_list[-1]:
+            self.execution_permission_read_count += 1
+            identity_changed = (
+                self.execution_identity_read_count > self.execution_identity_change_after_read_count
+                and self.changed_execution_login is not None
+            )
+            permission_changed = (
+                self.execution_permission_read_count > self.execution_permission_change_after_read_count
+                and self.changed_execution_permission is not None
+            )
+            return subprocess.CompletedProcess(
+                argument_list,
+                0,
+                json.dumps(
+                    {
+                        "permission": (
+                            self.changed_execution_permission if permission_changed else self.execution_permission
+                        ),
+                        "user": {
+                            "login": self.changed_execution_login if identity_changed else self.execution_login,
+                            "id": self.changed_execution_user_id if identity_changed else self.execution_user_id,
+                            "node_id": self.changed_execution_node_id if identity_changed else self.execution_node_id,
+                        },
+                    }
+                ),
+                "",
+            )
+        if argument_list[1:4] == ["api", "--method", "GET"] and "/rules/branches/" in argument_list[-3]:
+            if self.protection_kind != "ruleset":
+                return subprocess.CompletedProcess(argument_list, 0, "[[]]", "")
+            rule_list = [
+                {
+                    **definition,
+                    "ruleset_source_type": "Repository",
+                    "ruleset_source": "antonov-andrey/example",
+                    "ruleset_id": 42,
+                }
+                for definition in self._ruleset_definition_list()
+            ]
+            if self.ruleset_merge_queue:
+                rule_list.append(
+                    {
+                        "type": "merge_queue",
+                        "ruleset_source_type": "Repository",
+                        "ruleset_source": "antonov-andrey/example",
+                        "ruleset_id": 42,
+                        "parameters": {"merge_method": "SQUASH"},
+                    }
+                )
+            return subprocess.CompletedProcess(argument_list, 0, json.dumps([rule_list]), "")
+        if argument_list[1] == "api" and "/rulesets/42?" in argument_list[-1]:
+            rule_list = self._ruleset_definition_list()
+            if self.ruleset_merge_queue:
+                rule_list.append({"type": "merge_queue", "parameters": {"merge_method": "SQUASH"}})
+            return subprocess.CompletedProcess(
+                argument_list,
+                0,
+                json.dumps(
+                    {
+                        "id": 42,
+                        "target": "branch",
+                        "source_type": "Repository",
+                        "source": "antonov-andrey/example",
+                        "enforcement": self.ruleset_enforcement,
+                        "bypass_actors": self.ruleset_bypass_actor_list,
+                        "rules": rule_list,
+                    }
+                ),
+                "",
+            )
+        if argument_list[1:4] == ["api", "--method", "PUT"] and argument_list[4].endswith("/protection"):
+            self.protection_kind = "classic"
+            self.required_check_name_list = []
+            self.enforce_admins = True
+            self.allow_force_pushes = False
+            self.allow_deletions = False
+            return subprocess.CompletedProcess(
+                argument_list,
+                0,
+                json.dumps(
+                    {
+                        "enforce_admins": {"enabled": True},
+                        "allow_force_pushes": {"enabled": False},
+                        "allow_deletions": {"enabled": False},
+                        "required_status_checks": None,
+                    }
+                ),
+                "",
+            )
+        if argument_list[1:3] == ["api", "--method"] and any("/pulls" in item for item in argument_list):
             payload = (
                 [
                     [
@@ -1762,7 +889,7 @@ class _GhRunner:
             return subprocess.CompletedProcess(
                 argument_list,
                 0,
-                "https://github.com/antonov-andrey/example/pull/17\n",
+                PULL_REQUEST_URL + "\n",
                 "",
             )
         if argument_list[1:3] == ["pr", "merge"]:
@@ -1772,66 +899,2729 @@ class _GhRunner:
             self.state = "CLOSED"
             return subprocess.CompletedProcess(argument_list, 0, "", "")
         if argument_list[1:3] == ["pr", "view"]:
+            if argument_list[-1] == "statusCheckRollup":
+                return subprocess.CompletedProcess(
+                    argument_list,
+                    self.status_rollup_returncode,
+                    (
+                        self.status_rollup_stdout
+                        if self.status_rollup_stdout is not None
+                        else json.dumps({"statusCheckRollup": []})
+                    ),
+                    "",
+                )
             payload = {
                 "number": 17,
-                "url": "https://github.com/antonov-andrey/example/pull/17",
-                "title": "AND-17 Implement exact owner",
+                "url": PULL_REQUEST_URL,
+                "title": self.pr_title,
                 "state": self.state,
                 "isDraft": False,
+                "autoMergeRequest": self.auto_merge_request,
                 "baseRefName": self.base_branch,
+                "baseRefOid": self.base_commit,
                 "headRefName": "linear/and-17",
                 "headRefOid": self.head_commit,
+                "headRepository": {
+                    "id": "R_example",
+                    "name": "example",
+                    "nameWithOwner": self.head_repository,
+                },
+                "headRepositoryOwner": {"id": "U_octocat", "name": "Octocat", "login": "octocat"},
+                "isCrossRepository": self.cross_repository,
                 "mergeStateStatus": "CLEAN",
-                "reviewDecision": "APPROVED",
                 "mergedAt": "2026-08-04T12:30:00Z" if self.state == "MERGED" else None,
-                "mergeCommit": {"oid": COMMIT_TWO} if self.state == "MERGED" else None,
+                "mergeCommit": {"oid": self.merge_commit} if self.state == "MERGED" else None,
+                "mergedBy": (
+                    {
+                        "id": self.merged_by_node_id,
+                        "login": self.merged_by_login,
+                        "name": "Octocat",
+                        "is_bot": False,
+                    }
+                    if self.state == "MERGED"
+                    else None
+                ),
             }
             return subprocess.CompletedProcess(argument_list, 0, json.dumps(payload), "")
         raise AssertionError(f"Unexpected gh command: {argument_list}")
 
+    def _ruleset_definition_list(self) -> list[dict[str, object]]:
+        """Return the exact full ruleset definitions used by both provider reads."""
 
-def test_github_merge_binds_exact_human_approved_head_and_required_checks() -> None:
-    """The merge boundary uses --match-head-commit and verifies merged state."""
+        rule_list: list[dict[str, object]] = [{"type": "non_fast_forward"}, {"type": "deletion"}]
+        if self.required_check_name_list:
+            rule_list.append(
+                {
+                    "type": "required_status_checks",
+                    "parameters": {
+                        "strict_required_status_checks_policy": self.strict_required_status_checks,
+                        **self.ruleset_required_check_extra_parameter_by_name_map,
+                        "required_status_checks": [
+                            {"context": name, "integration_id": None} for name in self.required_check_name_list
+                        ],
+                    },
+                }
+            )
+        rule_list.extend({"type": rule_type} for rule_type in self.ruleset_additional_rule_type_list)
+        return rule_list
 
-    runner = _GhRunner()
-    boundary = GitHubPullRequestBoundary(runner)
-    repository = RepositoryIdentity("antonov-andrey/example")
+    def _repository_policy_payload_get(self) -> dict[str, object]:
+        """Return one complete strict repository-policy response."""
 
-    merged = boundary.merge(
-        repository=repository,
-        number=17,
-        issue_identifier="AND-17",
-        base_branch="main",
-        head_branch="linear/and-17",
-        approved_head_commit=COMMIT_ONE,
-        merge_method="merge",
+        payload: dict[str, object] = {
+            "id": 123,
+            "node_id": "R_example",
+            "name": "example",
+            "full_name": "antonov-andrey/example",
+            "owner": {
+                "login": "antonov-andrey",
+                "id": 13316422,
+                "node_id": "U_owner",
+                "type": "User",
+                "site_admin": False,
+            },
+            "private": False,
+            "fork": False,
+            "archived": False,
+            "disabled": False,
+            "visibility": "public",
+            "default_branch": "main",
+            "mirror_url": None,
+            "allow_forking": True,
+            "is_template": False,
+            "web_commit_signoff_required": False,
+            "has_discussions": False,
+            "allow_squash_merge": True,
+            "allow_merge_commit": True,
+            "allow_rebase_merge": True,
+            "allow_auto_merge": False,
+            "delete_branch_on_merge": False,
+            "use_squash_pr_title_as_default": False,
+            "squash_merge_commit_title": "COMMIT_OR_PR_TITLE",
+            "squash_merge_commit_message": "COMMIT_MESSAGES",
+            "merge_commit_title": "MERGE_MESSAGE",
+            "merge_commit_message": "PR_TITLE",
+            "allow_update_branch": False,
+        }
+        payload.update(self.repository_policy_field_by_name_map)
+        return payload
+
+    def _git_call(
+        self,
+        argument_list: list[str],
+        *,
+        environment_by_name_map: Mapping[str, str],
+        input_text: str | None,
+    ) -> subprocess.CompletedProcess[str]:
+        """Model local object creation and one atomic remote ref transaction."""
+
+        assert environment_by_name_map["GIT_CONFIG_GLOBAL"] == "/dev/null"
+        assert environment_by_name_map["GIT_CONFIG_SYSTEM"] == "/dev/null"
+        assert "GIT_CONFIG" not in environment_by_name_map
+        probe_url = next(
+            (
+                argument
+                for argument in argument_list
+                if argument.startswith("http://127.0.0.1:")
+                and argument.endswith("/linear-agent-proactive-authentication-probe.git")
+            ),
+            None,
+        )
+        if probe_url is not None:
+            self.http_proactive_authentication_probe_count += 1
+            parsed = urlsplit(probe_url)
+            connection = HTTPConnection(parsed.hostname, parsed.port)
+            header_by_name_map = {}
+            if self.http_proactive_authentication_supported and (
+                self.http_proactive_authentication_failure_probe_number
+                != self.http_proactive_authentication_probe_count
+            ):
+                helper_argument = next(
+                    argument for argument in argument_list if argument.startswith("credential.helper=!f()")
+                )
+                probe_password = helper_argument.split("'password=", 1)[1].split("'", 1)[0]
+                credential = b64encode(
+                    f"linear-agent-proactive-authentication-probe:{probe_password}".encode("utf-8")
+                ).decode("ascii")
+                header_by_name_map["Authorization"] = f"Basic {credential}"
+            connection.request(
+                "GET",
+                f"{parsed.path}/info/refs?service=git-upload-pack",
+                headers=header_by_name_map,
+            )
+            response = connection.getresponse()
+            response.read()
+            connection.close()
+            return subprocess.CompletedProcess(argument_list, 128, "", "probe rejected")
+        if "init" in argument_list:
+            assert input_text is None
+            private_git_dir = Path(argument_list[-1])
+            (private_git_dir / "hooks").mkdir(parents=True)
+            (private_git_dir / "objects" / "info").mkdir(parents=True)
+            (private_git_dir / "info").mkdir(parents=True)
+            (private_git_dir / "refs").mkdir(parents=True)
+            (private_git_dir / "config").write_text("[core]\n\tbare = true\n", encoding="utf-8")
+            return subprocess.CompletedProcess(argument_list, 0, "", "")
+        if argument_list[:2] == ["git", "config"]:
+            assert input_text is not None
+            assert argument_list[2:4] == ["--file", "-"]
+            if "--name-only" in argument_list:
+                return subprocess.CompletedProcess(
+                    argument_list,
+                    0,
+                    "".join(f"{name}\x00" for name in self.local_config_name_list),
+                    "",
+                )
+            if argument_list[-1] == "remote.origin.url":
+                value_list = self.fetch_url_list
+            elif argument_list[-1] == "remote.origin.pushurl":
+                value_list = self.push_url_list if self.push_url_list != self.fetch_url_list else []
+            else:
+                raise AssertionError(f"Unexpected config value read: {argument_list}")
+            return subprocess.CompletedProcess(
+                argument_list,
+                0 if value_list else 1,
+                "".join(f"{value}\x00" for value in value_list),
+                "",
+            )
+        assert input_text is None
+        if "fetch" in argument_list:
+            return subprocess.CompletedProcess(argument_list, 0, "", "")
+        if "merge-base" in argument_list:
+            return subprocess.CompletedProcess(argument_list, 0 if self.reviewed_base_is_ancestor else 1, "", "")
+        if "rev-parse" in argument_list:
+            revision = argument_list[-1]
+            if revision.endswith("^{tree}"):
+                return subprocess.CompletedProcess(argument_list, 0, self.constructed_merge_tree + "\n", "")
+            if revision == "refs/provider/reviewed-base^{commit}":
+                commit = self.base_commit
+            elif revision == "refs/provider/reviewed-head^{commit}":
+                commit = self.head_commit
+            else:
+                commit = revision.removesuffix("^{commit}")
+            return subprocess.CompletedProcess(argument_list, 0, commit + "\n", "")
+        if "cat-file" in argument_list and "-p" in argument_list:
+            payload = (
+                f"tree {self.merge_commit_tree}\n"
+                f"parent {self.merge_base_commit}\n"
+                f"parent {self.merge_head_commit}\n"
+                "author Octocat <octocat@users.noreply.github.com> 0 +0000\n"
+                "committer Octocat <octocat@users.noreply.github.com> 0 +0000\n\n"
+                "Merge reviewed pull request\n"
+            )
+            return subprocess.CompletedProcess(argument_list, 0, payload, "")
+        if "commit-tree" in argument_list:
+            return subprocess.CompletedProcess(argument_list, 0, self.merge_commit + "\n", "")
+        if "push" in argument_list:
+            if self.advance_base_on_push:
+                self.remote_commit_by_ref_map[f"refs/heads/{self.base_branch}"] = "d" * 40
+                self.advance_base_on_push = False
+            if self.advance_head_on_push:
+                self.remote_commit_by_ref_map["refs/heads/linear/and-17"] = "e" * 40
+                self.advance_head_on_push = False
+            expected_by_ref_map: dict[str, str] = {}
+            for argument in argument_list:
+                if argument.startswith("--force-with-lease="):
+                    ref_name, expected = argument.removeprefix("--force-with-lease=").split(":", 1)
+                    expected_by_ref_map[ref_name] = expected
+            if any(
+                self.remote_commit_by_ref_map.get(ref_name) != expected
+                for ref_name, expected in expected_by_ref_map.items()
+            ):
+                return subprocess.CompletedProcess(argument_list, 1, "", "stale info")
+            assert "--atomic" in argument_list
+            base_ref = f"refs/heads/{self.base_branch}"
+            head_ref = "refs/heads/linear/and-17"
+            self.remote_commit_by_ref_map[base_ref] = self.merge_commit
+            del self.remote_commit_by_ref_map[head_ref]
+            self.operation_mutation_count += 1
+            if not self.defer_merge_readback:
+                self.state = "MERGED"
+            return subprocess.CompletedProcess(argument_list, 0, "", "")
+        if "ls-remote" in argument_list:
+            ls_remote_index = argument_list.index("ls-remote")
+            remote_index = (
+                ls_remote_index + 2 if argument_list[ls_remote_index + 1] == "--refs" else ls_remote_index + 1
+            )
+            requested_ref_set = set(argument_list[remote_index + 1 :])
+            output = "".join(
+                f"{commit}\t{ref_name}\n"
+                for ref_name, commit in sorted(self.remote_commit_by_ref_map.items())
+                if ref_name in requested_ref_set
+            )
+            return subprocess.CompletedProcess(argument_list, 0, output, "")
+        raise AssertionError(f"Unexpected git command: {argument_list}")
+
+
+def _included_response(
+    argument_list: list[str],
+    *,
+    status: int,
+    payload: object,
+) -> subprocess.CompletedProcess[str]:
+    """Return one deterministic ``gh api --include`` response."""
+
+    reason = "OK" if status == 200 else "Not Found"
+    stdout = f"HTTP/2.0 {status} {reason}\r\nContent-Type: application/json\r\n\r\n{json.dumps(payload)}"
+    return subprocess.CompletedProcess(argument_list, 0 if status == 200 else 1, stdout, "")
+
+
+@dataclass(frozen=True, slots=True)
+class _RealGitHistory:
+    """Carry one local remote and exact commits for real-subprocess tests."""
+
+    remote_path: Path
+    task_path: Path
+    base_commit: str
+    head_commit: str
+    head_tree: str
+    merge_commit: str
+
+
+class _RealGitBoundaryRunner:
+    """Run Git as a real subprocess while keeping GitHub reads deterministic."""
+
+    def __init__(
+        self,
+        *,
+        provider: _GhRunner,
+        remote_path: Path,
+        isolated_home: Path,
+        mutate_task_config_path: Path | None = None,
+        inject_private_attributes: bool = False,
+        adopt_successful_push: bool = False,
+    ) -> None:
+        self.provider = provider
+        self.remote_path = remote_path
+        self.isolated_home = isolated_home
+        self.mutate_task_config_path = mutate_task_config_path
+        self.inject_private_attributes = inject_private_attributes
+        self.adopt_successful_push = adopt_successful_push
+        self.git_command_list: list[list[str]] = []
+        self.git_push_count = 0
+        self.task_config_mutated = False
+
+    def __call__(
+        self,
+        argument_list: Sequence[str],
+        *,
+        environment_by_name_map: Mapping[str, str],
+        input_text: str | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        """Delegate Git to the executable and GitHub/token reads to the fake provider."""
+
+        argument_list = list(argument_list)
+        if argument_list[0] != "git":
+            return self.provider(
+                argument_list,
+                environment_by_name_map=environment_by_name_map,
+                input_text=input_text,
+            )
+        if any("/linear-agent-proactive-authentication-probe.git" in argument for argument in argument_list):
+            return self.provider(
+                argument_list,
+                environment_by_name_map=environment_by_name_map,
+                input_text=input_text,
+            )
+        assert environment_by_name_map["HOME"] == "/home/andrey"
+        assert environment_by_name_map["GIT_CONFIG_GLOBAL"] == "/dev/null"
+        assert environment_by_name_map["GIT_CONFIG_SYSTEM"] == "/dev/null"
+        assert environment_by_name_map["GIT_ATTR_NOSYSTEM"] == "1"
+        assert "GIT_CONFIG" not in environment_by_name_map
+        assert "CODEX_HOME" not in environment_by_name_map
+        transformed_argument_list = [
+            (
+                str(self.remote_path)
+                if argument == "https://github.com/antonov-andrey/example.git"
+                else "protocol.file.allow=always" if argument == "protocol.https.allow=always" else argument
+            )
+            for argument in argument_list
+        ]
+        self.git_command_list.append(list(transformed_argument_list))
+        if "push" in transformed_argument_list:
+            self.git_push_count += 1
+        child_environment = dict(environment_by_name_map)
+        child_environment["HOME"] = str(self.isolated_home)
+        completed_process = command_run(
+            transformed_argument_list,
+            environment_by_name_map=child_environment,
+            input_text=input_text,
+        )
+        if "push" in transformed_argument_list and completed_process.returncode == 0 and self.adopt_successful_push:
+            base_refspec = next(
+                argument
+                for argument in transformed_argument_list
+                if argument.endswith(":refs/heads/main") and not argument.startswith("--force-with-lease=")
+            )
+            self.provider.merge_commit = base_refspec.split(":", 1)[0]
+            self.provider.base_commit = self.provider.merge_commit
+            self.provider.state = "MERGED"
+        if "init" in transformed_argument_list and completed_process.returncode == 0:
+            private_git_dir = Path(transformed_argument_list[-1])
+            if self.mutate_task_config_path is not None:
+                self.mutate_task_config_path.write_text(
+                    "[include]\n\tpath = /tmp/attacker-git-config\n"
+                    '[url "https://attacker.invalid/"]\n\tinsteadOf = https://github.com/\n'
+                    '[http "https://github.com/"]\n\textraHeader = Authorization: bearer hidden\n'
+                    '[merge "attacker"]\n\tdriver = /bin/false\n',
+                    encoding="utf-8",
+                )
+                self.task_config_mutated = True
+            if self.inject_private_attributes:
+                (private_git_dir / "info").mkdir(exist_ok=True)
+                (private_git_dir / "info" / "attributes").write_text(
+                    "*.txt merge=attacker\n",
+                    encoding="utf-8",
+                )
+        return completed_process
+
+
+def _real_git_environment(home: Path) -> dict[str, str]:
+    """Return a deterministic isolated environment for test repository construction."""
+
+    return {
+        "GIT_ATTR_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_SYSTEM": "/dev/null",
+        "GIT_TERMINAL_PROMPT": "0",
+        "HOME": str(home),
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "PATH": "/usr/bin:/bin",
+    }
+
+
+def test_command_run_resolves_semantic_git_to_the_owned_absolute_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The closed path cannot select an older host Git for a semantic Git command."""
+
+    runtime = GitTransportRuntime(
+        root=tmp_path / "runtime",
+        executable=tmp_path / "runtime" / "usr" / "bin" / "git",
+        exec_path=tmp_path / "runtime" / "usr" / "lib" / "git-core",
+    )
+    captured_argument_list: list[str] = []
+
+    def fake_run(
+        argument_list: Sequence[str],
+        *,
+        check: bool,
+        capture_output: bool,
+        text: bool,
+        env: Mapping[str, str],
+        input: str | None,
+    ) -> subprocess.CompletedProcess[str]:
+        """Capture the final direct argument vector without executing it."""
+
+        assert check is False
+        assert capture_output is True
+        assert text is True
+        assert env["PATH"] == "/usr/bin:/bin"
+        assert input is None
+        captured_argument_list.extend(argument_list)
+        return subprocess.CompletedProcess(argument_list, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(git_host_command, "git_transport_runtime_get", lambda: runtime)
+    monkeypatch.setattr(git_host_command.subprocess, "run", fake_run)
+
+    completed_process = git_host_command.command_run(
+        ["git", "ls-remote", "https://github.com/antonov-andrey/example.git"],
+        environment_by_name_map={"PATH": "/usr/bin:/bin"},
     )
 
-    assert merged.state == "MERGED"
-    assert merged.merge_commit == COMMIT_TWO
-    merge_command = next(item for item in runner.command_list if item[1:3] == ["pr", "merge"])
-    assert merge_command[-2:] == ["--match-head-commit", COMMIT_ONE]
+    assert completed_process.returncode == 0
+    assert captured_argument_list == [
+        str(runtime.executable),
+        f"--exec-path={runtime.exec_path}",
+        "ls-remote",
+        "https://github.com/antonov-andrey/example.git",
+    ]
 
 
-def test_github_merge_retry_adopts_exact_already_merged_candidate() -> None:
-    """A crash after provider merge is recovered by exact merged-result read-back."""
+def _real_git_checked(argument_list: list[str], *, home: Path, input_text: str | None = None) -> str:
+    """Run one successful real Git subprocess for a test fixture."""
 
-    runner = _GhRunner()
-    runner.state = "MERGED"
-    boundary = GitHubPullRequestBoundary(runner)
+    completed_process = command_run(
+        argument_list,
+        environment_by_name_map=_real_git_environment(home),
+        input_text=input_text,
+    )
+    assert completed_process.returncode == 0, completed_process.stderr
+    return completed_process.stdout.strip()
 
-    merged = boundary.merge(
+
+def _real_git_history_create(
+    root: Path,
+    *,
+    divergent: bool,
+    altered_merge: bool,
+) -> _RealGitHistory:
+    """Create exact local refs and objects used through the production Git boundary."""
+
+    root.mkdir()
+    home = root / "fixture-home"
+    home.mkdir()
+    source_path = root / "source"
+    task_path = root / "task"
+    remote_path = root / "remote.git"
+    source_path.mkdir()
+    task_path.mkdir()
+    _real_git_checked(["git", "init", "--initial-branch=main", str(source_path)], home=home)
+    (source_path / "shared.txt").write_text("root\n", encoding="utf-8")
+    _real_git_checked(["git", "-C", str(source_path), "add", "shared.txt"], home=home)
+    _real_git_checked(
+        [
+            "git",
+            "-C",
+            str(source_path),
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.test",
+            "commit",
+            "-m",
+            "root",
+        ],
+        home=home,
+    )
+    root_commit = _real_git_checked(["git", "-C", str(source_path), "rev-parse", "HEAD"], home=home)
+    if divergent:
+        (source_path / "base.txt").write_text("base\n", encoding="utf-8")
+        _real_git_checked(["git", "-C", str(source_path), "add", "base.txt"], home=home)
+        _real_git_checked(
+            [
+                "git",
+                "-C",
+                str(source_path),
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.test",
+                "commit",
+                "-m",
+                "base",
+            ],
+            home=home,
+        )
+        base_commit = _real_git_checked(["git", "-C", str(source_path), "rev-parse", "HEAD"], home=home)
+        _real_git_checked(
+            ["git", "-C", str(source_path), "checkout", "-b", "linear/and-17", root_commit],
+            home=home,
+        )
+    else:
+        base_commit = root_commit
+        _real_git_checked(["git", "-C", str(source_path), "checkout", "-b", "linear/and-17"], home=home)
+    (source_path / "head.txt").write_text("head\n", encoding="utf-8")
+    _real_git_checked(["git", "-C", str(source_path), "add", "head.txt"], home=home)
+    _real_git_checked(
+        [
+            "git",
+            "-C",
+            str(source_path),
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.test",
+            "commit",
+            "-m",
+            "head",
+        ],
+        home=home,
+    )
+    head_commit = _real_git_checked(["git", "-C", str(source_path), "rev-parse", "HEAD"], home=home)
+    head_tree = _real_git_checked(["git", "-C", str(source_path), "rev-parse", f"{head_commit}^{{tree}}"], home=home)
+    merge_commit = ""
+    if altered_merge:
+        base_tree = _real_git_checked(
+            ["git", "-C", str(source_path), "rev-parse", f"{base_commit}^{{tree}}"],
+            home=home,
+        )
+        merge_commit = _real_git_checked(
+            [
+                "git",
+                "-C",
+                str(source_path),
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.test",
+                "commit-tree",
+                base_tree,
+                "-p",
+                base_commit,
+                "-p",
+                head_commit,
+                "-m",
+                "malicious altered merge",
+            ],
+            home=home,
+        )
+    _real_git_checked(
+        ["git", "-c", "protocol.file.allow=always", "clone", "--bare", str(source_path), str(remote_path)],
+        home=home,
+    )
+    remote_base_commit = merge_commit or base_commit
+    _real_git_checked(
+        ["git", f"--git-dir={remote_path}", "symbolic-ref", "HEAD", "refs/heads/main"],
+        home=home,
+    )
+    _real_git_checked(
+        ["git", f"--git-dir={remote_path}", "update-ref", "refs/heads/main", remote_base_commit],
+        home=home,
+    )
+    if altered_merge:
+        _real_git_checked(
+            ["git", f"--git-dir={remote_path}", "update-ref", "-d", "refs/heads/linear/and-17"],
+            home=home,
+        )
+    else:
+        _real_git_checked(
+            ["git", f"--git-dir={remote_path}", "update-ref", "refs/heads/linear/and-17", head_commit],
+            home=home,
+        )
+    git_dir = task_path / ".git"
+    (git_dir / "hooks").mkdir(parents=True)
+    (git_dir / "objects" / "info").mkdir(parents=True)
+    (git_dir / "info").mkdir(parents=True)
+    (git_dir / "refs").mkdir(parents=True)
+    (git_dir / "HEAD").write_text("ref: refs/heads/linear/and-17\n", encoding="utf-8")
+    (git_dir / "config").write_text(
+        "[core]\n\trepositoryformatversion = 0\n"
+        '[remote "origin"]\n\turl = git@github.com:antonov-andrey/example.git\n'
+        "\tfetch = +refs/heads/*:refs/remotes/origin/*\n",
+        encoding="utf-8",
+    )
+    return _RealGitHistory(
+        remote_path=remote_path,
+        task_path=task_path,
+        base_commit=base_commit,
+        head_commit=head_commit,
+        head_tree=head_tree,
+        merge_commit=merge_commit,
+    )
+
+
+def test_real_git_global_include_url_header_merge_driver_and_attributes_are_closed(tmp_path: Path) -> None:
+    """Real Git cannot load any malicious global config or attribute source."""
+
+    home = tmp_path / "hostile-home"
+    repository_path = tmp_path / "repository"
+    home.mkdir()
+    include_path = home / "included.gitconfig"
+    marker_path = tmp_path / "merge-driver-invoked"
+    include_path.write_text(
+        '[url "https://attacker.invalid/"]\n\tinsteadOf = https://github.com/\n'
+        '[http "https://github.com/"]\n\textraHeader = Authorization: bearer hidden\n'
+        f'[merge "attacker"]\n\tdriver = /usr/bin/touch {marker_path}\n',
+        encoding="utf-8",
+    )
+    (home / ".gitconfig").write_text(f"[include]\n\tpath = {include_path}\n", encoding="utf-8")
+    global_attributes_path = home / ".config" / "git" / "attributes"
+    global_attributes_path.parent.mkdir(parents=True)
+    global_attributes_path.write_text("*.txt merge=attacker\n", encoding="utf-8")
+    _real_git_checked(["git", "init", str(repository_path)], home=home)
+    _real_git_checked(
+        [
+            "git",
+            "-C",
+            str(repository_path),
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/antonov-andrey/example.git",
+        ],
+        home=home,
+    )
+    closed_environment = _real_git_environment(home)
+    ineffective_git_config_environment = dict(closed_environment)
+    del ineffective_git_config_environment["GIT_CONFIG_GLOBAL"]
+    del ineffective_git_config_environment["GIT_CONFIG_SYSTEM"]
+    ineffective_git_config_environment["GIT_CONFIG"] = "/dev/null"
+    ineffective_url_process = command_run(
+        ["git", "-C", str(repository_path), "remote", "get-url", "origin"],
+        environment_by_name_map=ineffective_git_config_environment,
+    )
+    closed_url_process = command_run(
+        ["git", "-C", str(repository_path), "remote", "get-url", "origin"],
+        environment_by_name_map=closed_environment,
+    )
+    config_process = command_run(
+        [
+            "git",
+            "-C",
+            str(repository_path),
+            "-c",
+            "core.attributesFile=/dev/null",
+            "config",
+            "--includes",
+            "--get-regexp",
+            "^(include|url|http|merge)\\.",
+        ],
+        environment_by_name_map=closed_environment,
+    )
+    attribute_process = command_run(
+        [
+            "git",
+            "-C",
+            str(repository_path),
+            "-c",
+            "core.attributesFile=/dev/null",
+            "check-attr",
+            "merge",
+            "--",
+            "conflict.txt",
+        ],
+        environment_by_name_map=closed_environment,
+    )
+
+    assert ineffective_url_process.returncode == 0
+    assert ineffective_url_process.stdout == "https://attacker.invalid/antonov-andrey/example.git\n"
+    assert closed_url_process.returncode == 0
+    assert closed_url_process.stdout == "https://github.com/antonov-andrey/example.git\n"
+    assert config_process.returncode == 1
+    assert config_process.stdout == ""
+    assert attribute_process.returncode == 0
+    assert attribute_process.stdout == "conflict.txt: merge: unspecified\n"
+    assert not marker_path.exists()
+
+
+@pytest.mark.parametrize(
+    "credential_request",
+    (
+        "protocol=https\nhost=attacker.invalid\npath=antonov-andrey/example.git\n\n",
+        "protocol=https\nhost=github.com\npath=attacker/example.git\n\n",
+    ),
+)
+def test_real_git_destination_mismatch_never_receives_invocation_credential(
+    credential_request: str,
+) -> None:
+    """The real credential protocol fails before emitting a token to another destination."""
+
+    captured_environment: dict[str, str] = {}
+
+    def recording_runner(
+        argument_list: Sequence[str],
+        *,
+        environment_by_name_map: Mapping[str, str],
+        input_text: str | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        captured_environment.update(environment_by_name_map)
+        return command_run(
+            argument_list,
+            environment_by_name_map=environment_by_name_map,
+            input_text=input_text,
+        )
+
+    principal = GitHubPrincipal(login="octocat", user_id=7, node_id="U_octocat")
+    repository = RepositoryIdentity("antonov-andrey/example")
+    completed_process = command_closed_run(
+        recording_runner,
+        [
+            "git",
+            *git_credential_config_argument_list_get(principal, repository),
+            "credential",
+            "fill",
+        ],
+        input_text=credential_request,
+    )
+
+    assert completed_process.returncode != 0
+    assert "password=" not in completed_process.stdout
+    assert "x-access-token" not in completed_process.stdout
+    assert captured_environment["HOME"] == "/home/andrey"
+    assert captured_environment["GIT_CONFIG_GLOBAL"] == "/dev/null"
+    assert captured_environment["GIT_CONFIG_SYSTEM"] == "/dev/null"
+    assert "CODEX_HOME" not in captured_environment
+
+
+def test_real_git_divergent_merge_ignores_global_and_task_attributes_without_push(tmp_path: Path) -> None:
+    """Divergent reviewed commits cannot invoke a merge driver or produce an altered tree."""
+
+    history = _real_git_history_create(tmp_path / "history", divergent=True, altered_merge=False)
+    hostile_home = tmp_path / "boundary-home"
+    hostile_home.mkdir()
+    marker_path = tmp_path / "merge-driver-invoked"
+    included_config_path = hostile_home / "included.gitconfig"
+    included_config_path.write_text(
+        '[url "https://attacker.invalid/"]\n\tinsteadOf = https://github.com/\n'
+        '[http "https://github.com/"]\n\textraHeader = Authorization: bearer hidden\n'
+        f'[merge "attacker"]\n\tdriver = /usr/bin/touch {marker_path}\n',
+        encoding="utf-8",
+    )
+    (hostile_home / ".gitconfig").write_text(
+        f"[include]\n\tpath = {included_config_path}\n[core]\n\tattributesFile = {hostile_home / 'attributes'}\n",
+        encoding="utf-8",
+    )
+    (hostile_home / "attributes").write_text("*.txt merge=attacker\n", encoding="utf-8")
+    (history.task_path / ".git" / "info" / "attributes").write_text(
+        "*.txt merge=attacker\n",
+        encoding="utf-8",
+    )
+    provider = _GhRunner(base_commit=history.base_commit, head_commit=history.head_commit)
+    runner = _RealGitBoundaryRunner(
+        provider=provider,
+        remote_path=history.remote_path,
+        isolated_home=hostile_home,
+    )
+
+    with pytest.raises(GitHubContractError, match="base is not an ancestor"):
+        GitHubPullRequestBoundary(runner).merge(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=history.base_commit,
+            reviewed_head_commit=history.head_commit,
+            merge_method="merge",
+            repository_path=history.task_path,
+        )
+
+    assert runner.git_push_count == 0
+    assert provider.operation_mutation_count == 0
+    assert not marker_path.exists()
+    assert not any("merge-tree" in command for command in runner.git_command_list)
+
+
+def test_real_git_task_local_config_change_after_audit_cannot_redirect_private_operations(tmp_path: Path) -> None:
+    """A post-audit task config replacement is never used for objects, network or recovery."""
+
+    history = _real_git_history_create(tmp_path / "history", divergent=True, altered_merge=False)
+    hostile_home = tmp_path / "boundary-home"
+    hostile_home.mkdir()
+    task_config_path = history.task_path / ".git" / "config"
+    provider = _GhRunner(base_commit=history.base_commit, head_commit=history.head_commit)
+    runner = _RealGitBoundaryRunner(
+        provider=provider,
+        remote_path=history.remote_path,
+        isolated_home=hostile_home,
+        mutate_task_config_path=task_config_path,
+    )
+
+    with pytest.raises(GitHubContractError, match="base is not an ancestor"):
+        GitHubPullRequestBoundary(runner).merge(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=history.base_commit,
+            reviewed_head_commit=history.head_commit,
+            merge_method="merge",
+            repository_path=history.task_path,
+        )
+
+    assert runner.task_config_mutated is True
+    assert "attacker.invalid" in task_config_path.read_text(encoding="utf-8")
+    assert runner.git_push_count == 0
+    assert provider.operation_mutation_count == 0
+    assert all(str(history.task_path) not in argument for command in runner.git_command_list for argument in command)
+
+
+def test_real_git_private_info_attributes_injection_fails_before_fetch_or_push(tmp_path: Path) -> None:
+    """The resolved provider-owned info/attributes path must remain absent."""
+
+    history = _real_git_history_create(tmp_path / "history", divergent=False, altered_merge=False)
+    hostile_home = tmp_path / "boundary-home"
+    hostile_home.mkdir()
+    provider = _GhRunner(base_commit=history.base_commit, head_commit=history.head_commit)
+    runner = _RealGitBoundaryRunner(
+        provider=provider,
+        remote_path=history.remote_path,
+        isolated_home=hostile_home,
+        inject_private_attributes=True,
+    )
+
+    with pytest.raises(GitHubContractError, match="Private Git repository contains unsafe"):
+        GitHubPullRequestBoundary(runner).merge(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=history.base_commit,
+            reviewed_head_commit=history.head_commit,
+            merge_method="merge",
+            repository_path=history.task_path,
+        )
+
+    assert runner.git_push_count == 0
+    assert provider.operation_mutation_count == 0
+    assert not any("fetch" in command for command in runner.git_command_list)
+
+
+def test_real_git_recovery_rejects_altered_tree_despite_global_and_task_attributes(tmp_path: Path) -> None:
+    """Recovery accepts only the exact reviewed head tree and ordered parents."""
+
+    history = _real_git_history_create(tmp_path / "history", divergent=False, altered_merge=True)
+    hostile_home = tmp_path / "boundary-home"
+    hostile_home.mkdir()
+    (hostile_home / ".gitconfig").write_text(
+        f"[core]\n\tattributesFile = {hostile_home / 'attributes'}\n" '[merge "attacker"]\n\tdriver = /bin/true\n',
+        encoding="utf-8",
+    )
+    (hostile_home / "attributes").write_text("*.txt merge=attacker\n", encoding="utf-8")
+    (history.task_path / ".git" / "info" / "attributes").write_text(
+        "*.txt merge=attacker\n",
+        encoding="utf-8",
+    )
+    provider = _GhRunner(base_commit=history.merge_commit, head_commit=history.head_commit)
+    provider.state = "MERGED"
+    provider.merge_commit = history.merge_commit
+    runner = _RealGitBoundaryRunner(
+        provider=provider,
+        remote_path=history.remote_path,
+        isolated_home=hostile_home,
+    )
+
+    with pytest.raises(GitHubContractError, match="exact reviewed merge identity"):
+        GitHubPullRequestBoundary(runner).merge(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=history.base_commit,
+            reviewed_head_commit=history.head_commit,
+            merge_method="merge",
+            repository_path=history.task_path,
+        )
+
+    assert history.merge_commit
+    assert runner.git_push_count == 0
+    assert provider.operation_mutation_count == 0
+    assert not any("merge-tree" in command for command in runner.git_command_list)
+
+
+def test_real_git_private_repository_constructs_and_recovers_exact_head_tree(tmp_path: Path) -> None:
+    """The complete real Git path pushes and re-proves one exact two-parent result."""
+
+    history = _real_git_history_create(tmp_path / "history", divergent=False, altered_merge=False)
+    isolated_home = tmp_path / "boundary-home"
+    isolated_home.mkdir()
+    provider = _GhRunner(base_commit=history.base_commit, head_commit=history.head_commit)
+    runner = _RealGitBoundaryRunner(
+        provider=provider,
+        remote_path=history.remote_path,
+        isolated_home=isolated_home,
+        adopt_successful_push=True,
+    )
+
+    merged = GitHubPullRequestBoundary(runner).merge(
         repository=RepositoryIdentity("antonov-andrey/example"),
         number=17,
         issue_identifier="AND-17",
         base_branch="main",
         head_branch="linear/and-17",
-        approved_head_commit=COMMIT_ONE,
+        reviewed_base_commit=history.base_commit,
+        reviewed_head_commit=history.head_commit,
         merge_method="merge",
+        repository_path=history.task_path,
+    )
+
+    isolated_git_home = tmp_path / "inspection-home"
+    isolated_git_home.mkdir()
+    commit_payload = _real_git_checked(
+        ["git", f"--git-dir={history.remote_path}", "cat-file", "-p", merged.merge_commit],
+        home=isolated_git_home,
+    )
+    ref_output = _real_git_checked(
+        ["git", f"--git-dir={history.remote_path}", "for-each-ref", "--format=%(refname)", "refs/heads/"],
+        home=isolated_git_home,
+    )
+
+    assert merged.state == "MERGED"
+    assert f"tree {history.head_tree}\n" in commit_payload
+    assert f"parent {history.base_commit}\nparent {history.head_commit}\n" in commit_payload
+    assert ref_output == "refs/heads/main"
+    assert runner.git_push_count == 1
+    assert runner.provider.repository_policy_read_count == 2
+    assert not any("merge-tree" in command for command in runner.git_command_list)
+
+
+def test_github_inspect_reads_current_base_oid_for_review_identity() -> None:
+    """The provider inspector returns the exact base commit needed by review."""
+
+    runner = _GhRunner()
+    snapshot = GitHubPullRequestBoundary(runner).inspect(
+        repository=RepositoryIdentity("antonov-andrey/example"),
+        number=17,
+    )
+
+    assert snapshot.base_branch == "main"
+    assert snapshot.base_commit == COMMIT_BASE
+    assert snapshot.head_commit == COMMIT_ONE
+    assert snapshot.required_checks_verified is False
+    view_command = next(item for item in runner.command_list if item[1:3] == ["pr", "view"])
+    assert "baseRefOid" in view_command[-1]
+    assert "headRepository" in view_command[-1]
+
+
+def test_github_inspect_rejects_cross_repository_head_before_any_merge_gate() -> None:
+    """Atomic ref mutation cannot target a fork or a foreign same-name head."""
+
+    runner = _GhRunner()
+    runner.head_repository = "attacker/example"
+    runner.cross_repository = True
+    with pytest.raises(GitHubContractError, match="head repository"):
+        GitHubPullRequestBoundary(runner).inspect(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+        )
+
+
+def test_github_inspect_rejects_existing_deferred_auto_merge_request() -> None:
+    """A later-base auto-merge cannot race the exact reviewed mutation owner."""
+
+    runner = _GhRunner()
+    runner.auto_merge_request = {"enabledAt": "2026-08-07T07:00:00Z"}
+    with pytest.raises(GitHubContractError, match="deferred auto-merge"):
+        GitHubPullRequestBoundary(runner).inspect(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+        )
+
+
+def test_merge_cli_requires_reviewed_base_and_head_identity() -> None:
+    """The inspect/merge CLI cannot omit either independently reviewed commit."""
+
+    script = PLUGIN_ROOT / "skills" / "task-merge" / "scripts" / "pull_request.py"
+    result = subprocess.run(
+        [sys.executable, str(script), "--help"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "--reviewed-base-commit" in result.stdout
+    assert "--reviewed-head-commit" in result.stdout
+    assert "--merge-method" in result.stdout
+    assert "--repository-path" in result.stdout
+
+    terminal_inspection_without_worktree = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "inspect",
+            "--repository",
+            "antonov-andrey/example",
+            "--number",
+            "17",
+            "--issue-identifier",
+            "AND-17",
+            "--base-branch",
+            "main",
+            "--head-branch",
+            "linear/and-17",
+            "--reviewed-base-commit",
+            COMMIT_BASE,
+            "--reviewed-head-commit",
+            COMMIT_ONE,
+            "--merge-method",
+            "merge",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert terminal_inspection_without_worktree.returncode == 2
+    assert "require --repository-path" in terminal_inspection_without_worktree.stderr
+
+    protection_script = PLUGIN_ROOT / "skills" / "workflow-configure" / "scripts" / "branch_protection.py"
+    protection_help = subprocess.run(
+        [sys.executable, str(protection_script), "plan", "--help"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert "--merge-method" in protection_help.stdout
+
+
+def test_github_merge_binds_exact_reviewed_base_head_and_typed_zero_required_checks(tmp_path: Path) -> None:
+    """The protected transaction leases both refs after a typed zero-check read."""
+
+    runner = _GhRunner()
+    merged = GitHubPullRequestBoundary(runner).merge(
+        repository=RepositoryIdentity("antonov-andrey/example"),
+        number=17,
+        issue_identifier="AND-17",
+        base_branch="main",
+        head_branch="linear/and-17",
+        reviewed_base_commit=COMMIT_BASE,
+        reviewed_head_commit=COMMIT_ONE,
+        merge_method="merge",
+        repository_path=tmp_path,
+    )
+
+    assert merged.state == "MERGED"
+    assert merged.merge_commit == COMMIT_TWO
+    push_command = next(item for item in runner.command_list if "push" in item)
+    assert "--atomic" in push_command
+    assert f"--force-with-lease=refs/heads/main:{COMMIT_BASE}" in push_command
+    assert f"--force-with-lease=refs/heads/linear/and-17:{COMMIT_ONE}" in push_command
+    assert f"{COMMIT_TWO}:refs/heads/main" in push_command
+    assert ":refs/heads/linear/and-17" in push_command
+    assert "https://github.com/antonov-andrey/example.git" in push_command
+    assert "origin" not in push_command
+    assert "credential.helper=" in push_command
+    helper_argument = next(item for item in push_command if item.startswith("credential.helper=!"))
+    assert "/usr/bin/gh auth token --hostname github.com --user octocat" in helper_argument
+    assert (
+        "/usr/bin/curl -q --fail --silent --show-error --proto '=https' --netrc-file /dev/null --config -"
+        in helper_argument
+    )
+    assert "/usr/bin/jq -er" in helper_argument
+    assert "Authorization: Bearer %s" in helper_argument
+    assert "GH_TOKEN" not in helper_argument
+    assert "7" in helper_argument
+    assert "U_octocat" in helper_argument
+    assert helper_argument.index("response=") < helper_argument.index("/usr/bin/curl")
+    assert helper_argument.index("/usr/bin/curl") < helper_argument.index("actual=")
+    assert helper_argument.index("actual=") < helper_argument.index("/usr/bin/jq")
+    assert helper_argument.index("/user") < helper_argument.index("username=x-access-token")
+    assert "credential.useHttpPath=true" in push_command
+    assert "http.proactiveAuth=basic" in push_command
+    github_network_command_list = [
+        command for command in runner.command_list if "https://github.com/antonov-andrey/example.git" in command
+    ]
+    assert {
+        verb for command in github_network_command_list for verb in ("fetch", "push", "ls-remote") if verb in command
+    } == {
+        "fetch",
+        "push",
+        "ls-remote",
+    }
+    assert all("http.proactiveAuth=basic" in command for command in github_network_command_list)
+    assert "core.hooksPath=/dev/null" in push_command
+    assert "http.extraHeader=" in push_command
+    assert "http.followRedirects=false" in push_command
+    assert "--no-verify" in push_command
+    assert "--no-signed" in push_command
+    assert not any(item[1:3] == ["config", "--global"] for item in runner.command_list)
+    assert not any("ghp_" in argument for item in runner.command_list for argument in item)
+    assert not any(item[1:3] == ["pr", "merge"] for item in runner.command_list)
+    assert runner.operation_mutation_count == 1
+    assert runner.http_proactive_authentication_probe_count == 5
+    probe_index_set = {
+        index
+        for index, command in enumerate(runner.command_list)
+        if any("/linear-agent-proactive-authentication-probe.git" in argument for argument in command)
+    }
+    github_network_index_list = [
+        index
+        for index, command in enumerate(runner.command_list)
+        if "https://github.com/antonov-andrey/example.git" in command
+        and any(verb in command for verb in ("fetch", "push", "ls-remote"))
+    ]
+    github_network_verb_list = [
+        next(verb for verb in ("fetch", "push", "ls-remote") if verb in runner.command_list[index])
+        for index in github_network_index_list
+    ]
+    assert github_network_verb_list == ["fetch", "push", "ls-remote", "fetch", "ls-remote"]
+    assert all(index > 0 and index - 1 in probe_index_set for index in github_network_index_list)
+    push_environment = runner.environment_list[runner.command_list.index(push_command)]
+    assert push_environment["HOME"] == "/home/andrey"
+    assert push_environment["GIT_CONFIG_GLOBAL"] == "/dev/null"
+    assert push_environment["GIT_CONFIG_SYSTEM"] == "/dev/null"
+    assert "GIT_CONFIG" not in push_environment
+    assert push_environment["GIT_TERMINAL_PROMPT"] == "0"
+    assert "CODEX_HOME" not in push_environment
+    assert "GIT_ASKPASS" not in push_environment
+    assert "GH_TOKEN" not in push_environment
+    view_command = next(item for item in runner.command_list if item[1:3] == ["pr", "view"])
+    assert "baseRefOid" in view_command[-1]
+    assert "reviewDecision" not in view_command[-1]
+
+
+def test_atomic_merge_fails_before_remote_ref_access_when_git_cannot_prove_proactive_authentication(
+    tmp_path: Path,
+) -> None:
+    """An ignored proactive-auth key cannot fall through to fetch or mutation."""
+
+    runner = _GhRunner()
+    runner.http_proactive_authentication_supported = False
+    original_ref_map = dict(runner.remote_commit_by_ref_map)
+
+    with pytest.raises(GitHubContractError, match="cannot prove proactive invocation-helper authentication"):
+        GitHubPullRequestBoundary(runner).merge(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+            repository_path=tmp_path,
+        )
+
+    assert runner.http_proactive_authentication_probe_count == 1
+    assert not any("fetch" in command or "push" in command for command in runner.command_list)
+    assert not any("https://github.com/antonov-andrey/example.git" in command for command in runner.command_list)
+    assert runner.remote_commit_by_ref_map == original_ref_map
+    assert runner.operation_mutation_count == 0
+
+
+@pytest.mark.parametrize("failure_probe_number", (1, 2, 3))
+def test_atomic_merge_probes_each_authenticated_git_command_and_stops_at_exact_failed_boundary(
+    tmp_path: Path,
+    failure_probe_number: int,
+) -> None:
+    """Fetch, push and ref readback each require their own immediately preceding probe."""
+
+    runner = _GhRunner()
+    snapshot = GitHubPullRequestBoundary(runner).inspect(
+        repository=RepositoryIdentity("antonov-andrey/example"),
+        number=17,
+    )
+    runner.command_list.clear()
+    runner.environment_list.clear()
+    runner.http_proactive_authentication_failure_probe_number = failure_probe_number
+    runner.http_proactive_authentication_probe_count = 0
+
+    with pytest.raises(GitHubContractError, match="cannot prove proactive invocation-helper authentication"):
+        GitHubAtomicMergeBoundary(runner).merge(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            repository_path=tmp_path,
+            snapshot=snapshot,
+            execution_login="octocat",
+            execution_user_id=7,
+            execution_node_id="U_octocat",
+            merge_method="merge",
+        )
+
+    github_network_verb_list = [
+        next(verb for verb in ("fetch", "push", "ls-remote") if verb in command)
+        for command in runner.command_list
+        if "https://github.com/antonov-andrey/example.git" in command
+        and any(verb in command for verb in ("fetch", "push", "ls-remote"))
+    ]
+    assert (
+        github_network_verb_list
+        == {
+            1: [],
+            2: ["fetch"],
+            3: ["fetch", "push"],
+        }[failure_probe_number]
+    )
+    assert runner.http_proactive_authentication_probe_count == failure_probe_number
+    assert runner.operation_mutation_count == (1 if failure_probe_number == 3 else 0)
+
+
+@pytest.mark.parametrize("failure_probe_number", (1, 2))
+def test_atomic_merge_recovery_probes_each_authenticated_git_command_and_stops_at_failed_boundary(
+    tmp_path: Path,
+    failure_probe_number: int,
+) -> None:
+    """Recovery fetch and deleted-ref readback each require a fresh adjacent probe."""
+
+    runner = _GhRunner()
+    runner.state = "MERGED"
+    runner.remote_commit_by_ref_map = {"refs/heads/main": COMMIT_TWO}
+    snapshot = GitHubPullRequestBoundary(runner).inspect(
+        repository=RepositoryIdentity("antonov-andrey/example"),
+        number=17,
+    )
+    runner.command_list.clear()
+    runner.environment_list.clear()
+    runner.http_proactive_authentication_failure_probe_number = failure_probe_number
+    runner.http_proactive_authentication_probe_count = 0
+
+    with pytest.raises(GitHubContractError, match="cannot prove proactive invocation-helper authentication"):
+        GitHubAtomicMergeBoundary(runner).merged_result_require(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            repository_path=tmp_path,
+            snapshot=snapshot,
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+        )
+
+    github_network_verb_list = [
+        next(verb for verb in ("fetch", "ls-remote") if verb in command)
+        for command in runner.command_list
+        if "https://github.com/antonov-andrey/example.git" in command
+        and any(verb in command for verb in ("fetch", "ls-remote"))
+    ]
+    assert github_network_verb_list == {1: [], 2: ["fetch"]}[failure_probe_number]
+    assert runner.http_proactive_authentication_probe_count == failure_probe_number
+    assert runner.operation_mutation_count == 0
+
+
+def test_atomic_merge_reads_exact_principal_bound_repository_policy_before_construction_and_push(
+    tmp_path: Path,
+) -> None:
+    """Both complete policy reads surround construction and bind the same principal."""
+
+    runner = _GhRunner()
+    GitHubPullRequestBoundary(runner).merge(
+        repository=RepositoryIdentity("antonov-andrey/example"),
+        number=17,
+        issue_identifier="AND-17",
+        base_branch="main",
+        head_branch="linear/and-17",
+        reviewed_base_commit=COMMIT_BASE,
+        reviewed_head_commit=COMMIT_ONE,
+        merge_method="merge",
+        repository_path=tmp_path,
+    )
+
+    policy_index_list = [
+        index
+        for index, command in enumerate(runner.command_list)
+        if command[1:5] == ["api", "--hostname", "github.com", "repos/antonov-andrey/example"]
+    ]
+    construction_index = next(index for index, command in enumerate(runner.command_list) if "commit-tree" in command)
+    push_index = next(index for index, command in enumerate(runner.command_list) if "push" in command)
+    assert len(policy_index_list) == 2
+    assert policy_index_list[0] < construction_index < policy_index_list[1] < push_index
+    assert runner.execution_identity_read_count >= 6
+
+
+def test_atomic_merge_rejects_identical_reviewed_base_and_head_before_git_mutation(tmp_path: Path) -> None:
+    """Commit construction cannot collapse duplicate ordered parents after review."""
+
+    runner = _GhRunner(base_commit=COMMIT_BASE, head_commit=COMMIT_BASE)
+
+    with pytest.raises(GitHubContractError, match="distinct commits"):
+        GitHubPullRequestBoundary(runner).merge(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_BASE,
+            merge_method="merge",
+            repository_path=tmp_path,
+        )
+
+    assert runner.operation_mutation_count == 0
+    assert not any(command[0] == "git" for command in runner.command_list)
+
+
+@pytest.mark.parametrize(
+    ("field_by_name_map", "message"),
+    (
+        ({"allow_merge_commit": False}, "merge method is not enabled"),
+        ({"disabled": True}, "policy is inactive"),
+        ({"allow_merge_commit": "true"}, "boolean field"),
+        ({"merge_commit_title": "UNKNOWN"}, "merge-policy option"),
+        ({"full_name": "attacker/example"}, "identity differs"),
+    ),
+)
+def test_atomic_merge_rejects_disabled_malformed_or_identity_conflicting_repository_policy_without_ref_mutation(
+    tmp_path: Path,
+    field_by_name_map: dict[str, object],
+    message: str,
+) -> None:
+    """A strict fresh repository response cannot be partial, disabled or foreign."""
+
+    runner = _GhRunner()
+    runner.repository_policy_field_by_name_map.update(field_by_name_map)
+
+    with pytest.raises(GitHubContractError, match=message):
+        GitHubPullRequestBoundary(runner).merge(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+            repository_path=tmp_path,
+        )
+
+    assert runner.operation_mutation_count == 0
+    assert not any("commit-tree" in command or "push" in command for command in runner.command_list)
+
+
+def test_atomic_merge_rejects_missing_repository_policy_field_without_ref_mutation(tmp_path: Path) -> None:
+    """Every relevant provider field is mandatory rather than defaulted."""
+
+    runner = _GhRunner()
+    payload = runner._repository_policy_payload_get()
+    del payload["allow_merge_commit"]
+    runner.repository_policy_payload_override = payload
+
+    with pytest.raises(GitHubContractError, match="response has another shape"):
+        GitHubPullRequestBoundary(runner).merge(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+            repository_path=tmp_path,
+        )
+
+    assert runner.operation_mutation_count == 0
+    assert not any("commit-tree" in command or "push" in command for command in runner.command_list)
+
+
+def test_atomic_merge_rejects_repository_policy_drift_after_construction_without_ref_mutation(tmp_path: Path) -> None:
+    """Any relevant metadata change between the two reads stops before push."""
+
+    runner = _GhRunner()
+    runner.repository_policy_drift_field_by_name_map["delete_branch_on_merge"] = True
+
+    with pytest.raises(GitHubContractError, match="policy changed during merge construction"):
+        GitHubPullRequestBoundary(runner).merge(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+            repository_path=tmp_path,
+        )
+
+    assert any("commit-tree" in command for command in runner.command_list)
+    assert runner.operation_mutation_count == 0
+    assert not any("push" in command for command in runner.command_list)
+
+
+def test_atomic_merge_rejects_principal_change_around_repository_policy_without_ref_mutation(tmp_path: Path) -> None:
+    """The repository policy is accepted only between matching fresh identity reads."""
+
+    runner = _GhRunner()
+    runner.changed_execution_login = "mallory"
+    runner.changed_execution_user_id = 8
+    runner.changed_execution_node_id = "U_mallory"
+    runner.execution_identity_change_after_read_count = 3
+
+    with pytest.raises(GitHubContractError, match="identity changed before Git mutation"):
+        GitHubPullRequestBoundary(runner).merge(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+            repository_path=tmp_path,
+        )
+
+    assert runner.repository_policy_read_count == 1
+    assert runner.operation_mutation_count == 0
+    assert not any("commit-tree" in command or "push" in command for command in runner.command_list)
+
+
+@pytest.mark.parametrize(
+    ("attribute_name", "value", "message"),
+    (
+        (
+            "fetch_url_list",
+            [
+                "git@github.com:antonov-andrey/example.git",
+                "https://github.com/antonov-andrey/example.git",
+            ],
+            "configured fetch URL set.*exactly one",
+        ),
+        (
+            "push_url_list",
+            [
+                "git@github.com:antonov-andrey/example.git",
+                "https://github.com/antonov-andrey/example.git",
+            ],
+            "configured push URL set.*exactly one",
+        ),
+        (
+            "push_url_list",
+            ["git@github.com:attacker/example.git"],
+            "configured fetch and push URLs diverge",
+        ),
+        (
+            "fetch_url_list",
+            ["ssh://git@github.com/antonov-andrey/example.git"],
+            "canonical GitHub URL",
+        ),
+        (
+            "fetch_url_list",
+            ["git@github.com:attacker/example.git"],
+            "configured fetch and push URLs diverge",
+        ),
+        (
+            "local_config_name_list",
+            ["remote.origin.url", "url.https://attacker.example/.insteadof"],
+            "merge-unsafe keys",
+        ),
+        (
+            "local_config_name_list",
+            ["remote.origin.url", "url.https://attacker.example/.pushinsteadof"],
+            "merge-unsafe keys",
+        ),
+        (
+            "local_config_name_list",
+            ["remote.origin.url", "http.https://github.com/.extraheader"],
+            "merge-unsafe keys",
+        ),
+    ),
+)
+def test_atomic_merge_rejects_ambiguous_or_noncanonical_git_destination_without_mutation(
+    tmp_path: Path,
+    attribute_name: str,
+    value: object,
+    message: str,
+) -> None:
+    """Every effective URL and the explicit destination are closed before push."""
+
+    runner = _GhRunner()
+    setattr(runner, attribute_name, value)
+
+    with pytest.raises(GitHubContractError, match=message):
+        GitHubPullRequestBoundary(runner).merge(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+            repository_path=tmp_path,
+        )
+
+    assert runner.operation_mutation_count == 0
+    assert not any("push" in item for item in runner.command_list)
+
+
+@pytest.mark.parametrize(
+    "config_name",
+    (
+        "http.https://github.com/.extraheader",
+        "url.https://attacker.example/.insteadof",
+    ),
+)
+def test_atomic_merge_rejects_local_authorization_or_url_redirection_without_mutation(
+    tmp_path: Path,
+    config_name: str,
+) -> None:
+    """Local headers and URL rewrites cannot enter the explicit GitHub transaction."""
+
+    runner = _GhRunner()
+    runner.local_config_name_list.append(config_name)
+
+    with pytest.raises(GitHubContractError, match="merge-unsafe keys"):
+        GitHubPullRequestBoundary(runner).merge(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+            repository_path=tmp_path,
+        )
+
+    assert runner.operation_mutation_count == 0
+    assert not any("commit-tree" in item or "push" in item for item in runner.command_list)
+
+
+@pytest.mark.parametrize(
+    "environment_by_name_map",
+    (
+        {"GIT_ASKPASS": "/tmp/task-askpass"},
+        {
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "http.extraHeader",
+            "GIT_CONFIG_VALUE_0": "Authorization: bearer hidden",
+        },
+        {"HTTPS_PROXY": "http://task-proxy.invalid"},
+        {"CODEX_HOME": "/tmp/task-codex-home"},
+        {"HOME": "/tmp/task-home"},
+    ),
+)
+def test_merge_rejects_ambient_process_controls_without_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    environment_by_name_map: dict[str, str],
+) -> None:
+    """Ambient task process controls are rejected by name before any mutation."""
+
+    for name, value in environment_by_name_map.items():
+        monkeypatch.setenv(name, value)
+    runner = _GhRunner()
+
+    with pytest.raises(GitHubContractError, match="unsafe inputs"):
+        GitHubPullRequestBoundary(runner).merge(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+            repository_path=tmp_path,
+        )
+
+    assert runner.operation_mutation_count == 0
+    assert runner.command_list == []
+
+
+def test_atomic_merge_rejects_mutating_pre_push_hook_even_with_no_verify(tmp_path: Path) -> None:
+    """Repository hooks are rejected and also disabled on the atomic push."""
+
+    runner = _GhRunner()
+    hook_path = tmp_path / ".git" / "hooks" / "pre-push"
+    hook_path.write_text(f"#!/bin/sh\nprintf attacked > {tmp_path / 'hook-mutated'}\n", encoding="utf-8")
+    hook_path.chmod(0o755)
+
+    with pytest.raises(GitHubContractError, match="hook or object substitution"):
+        GitHubPullRequestBoundary(runner).merge(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+            repository_path=tmp_path,
+        )
+
+    assert runner.operation_mutation_count == 0
+    assert not (tmp_path / "hook-mutated").exists()
+    assert not any("push" in item for item in runner.command_list)
+
+
+def test_atomic_merge_rejects_replace_refs_without_mutation(tmp_path: Path) -> None:
+    """A local replacement object cannot alter reviewed commit or tree semantics."""
+
+    runner = _GhRunner()
+    replace_ref_path = tmp_path / ".git" / "refs" / "replace" / COMMIT_BASE
+    replace_ref_path.parent.mkdir(parents=True)
+    replace_ref_path.write_text(COMMIT_ONE + "\n", encoding="utf-8")
+
+    with pytest.raises(GitHubContractError, match="hook or object substitution"):
+        GitHubPullRequestBoundary(runner).merge(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+            repository_path=tmp_path,
+        )
+
+    assert runner.operation_mutation_count == 0
+    assert not any("commit-tree" in item or "push" in item for item in runner.command_list)
+
+
+def test_atomic_merge_rejects_alternate_object_store_without_mutation(tmp_path: Path) -> None:
+    """Repository-local alternate object storage cannot supply reviewed objects."""
+
+    runner = _GhRunner()
+    (tmp_path / ".git" / "objects" / "info" / "alternates").write_text("/tmp/foreign\n", encoding="utf-8")
+
+    with pytest.raises(GitHubContractError, match="hook or object substitution"):
+        GitHubPullRequestBoundary(runner).merge(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+            repository_path=tmp_path,
+        )
+
+    assert runner.operation_mutation_count == 0
+    assert not any("commit-tree" in item or "push" in item for item in runner.command_list)
+
+
+@pytest.mark.parametrize(
+    ("attribute_name", "value"),
+    (
+        ("credential_login", "mallory"),
+        ("credential_user_id", 8),
+        ("credential_node_id", "U_mallory"),
+    ),
+)
+def test_atomic_merge_rejects_actual_credential_token_principal_mismatch_without_mutation(
+    tmp_path: Path,
+    attribute_name: str,
+    value: object,
+) -> None:
+    """The helper validates its token's login, numeric ID and node ID before object creation."""
+
+    runner = _GhRunner()
+    setattr(runner, attribute_name, value)
+
+    with pytest.raises(GitHubContractError, match="credential token differs"):
+        GitHubPullRequestBoundary(runner).merge(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+            repository_path=tmp_path,
+        )
+
+    assert any(item[0] == "/bin/sh" for item in runner.command_list)
+    assert runner.operation_mutation_count == 0
+    assert not any("commit-tree" in item or "push" in item for item in runner.command_list)
+
+
+def test_atomic_merge_rejects_changed_gh_principal_before_git_mutation(tmp_path: Path) -> None:
+    """The credential principal cannot differ from the inspected authority principal."""
+
+    runner = _GhRunner()
+    runner.changed_execution_login = "mallory"
+    runner.changed_execution_user_id = 8
+    runner.changed_execution_node_id = "U_mallory"
+
+    with pytest.raises(GitHubContractError, match="identity changed before Git mutation"):
+        GitHubPullRequestBoundary(runner).merge(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+            repository_path=tmp_path,
+        )
+
+    assert runner.operation_mutation_count == 0
+    assert not any("push" in item for item in runner.command_list)
+
+
+def test_atomic_merge_rejects_matching_foreign_fetch_and_push_destination_without_mutation(tmp_path: Path) -> None:
+    """Two internally consistent URLs still must identify the reviewed repository."""
+
+    runner = _GhRunner()
+    runner.fetch_url_list = ["git@github.com:attacker/example.git"]
+    runner.push_url_list = ["git@github.com:attacker/example.git"]
+
+    with pytest.raises(GitHubContractError, match="destination differs"):
+        GitHubPullRequestBoundary(runner).merge(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+            repository_path=tmp_path,
+        )
+
+    assert runner.operation_mutation_count == 0
+
+
+@pytest.mark.parametrize("racing_ref", ("base", "head"))
+def test_github_atomic_merge_rejects_ref_advance_in_preflight_mutation_window_without_ref_mutation(
+    tmp_path: Path,
+    racing_ref: str,
+) -> None:
+    """A racing base or head advance rejects both ref updates as one transaction."""
+
+    runner = _GhRunner()
+    if racing_ref == "base":
+        runner.advance_base_on_push = True
+    else:
+        runner.advance_head_on_push = True
+    with pytest.raises(GitHubContractError, match="Atomic reviewed Git ref transaction failed"):
+        GitHubPullRequestBoundary(runner).merge(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+            repository_path=tmp_path,
+        )
+
+    # The injected external base advance is observable, but the merge boundary
+    # changed neither ref and did not delete the reviewed head.
+    assert runner.operation_mutation_count == 0
+    assert runner.remote_commit_by_ref_map == (
+        {
+            "refs/heads/main": "d" * 40,
+            "refs/heads/linear/and-17": COMMIT_ONE,
+        }
+        if racing_ref == "base"
+        else {
+            "refs/heads/main": COMMIT_BASE,
+            "refs/heads/linear/and-17": "e" * 40,
+        }
+    )
+    push_command = next(item for item in runner.command_list if "push" in item)
+    assert "--atomic" in push_command
+    assert f"--force-with-lease=refs/heads/main:{COMMIT_BASE}" in push_command
+    assert f"--force-with-lease=refs/heads/linear/and-17:{COMMIT_ONE}" in push_command
+
+
+def test_atomic_merge_terminal_read_lag_routes_to_exact_recovery_not_another_mutation(tmp_path: Path) -> None:
+    """An accepted ref transaction can be recovered after delayed PR state visibility."""
+
+    runner = _GhRunner()
+    runner.defer_merge_readback = True
+    with pytest.raises(GitHubContractError, match="transaction completed.*retry exact recovery"):
+        GitHubPullRequestBoundary(runner).merge(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+            repository_path=tmp_path,
+        )
+
+    assert runner.operation_mutation_count == 1
+    runner.state = "MERGED"
+    recovered = GitHubPullRequestBoundary(runner).merge(
+        repository=RepositoryIdentity("antonov-andrey/example"),
+        number=17,
+        issue_identifier="AND-17",
+        base_branch="main",
+        head_branch="linear/and-17",
+        reviewed_base_commit=COMMIT_BASE,
+        reviewed_head_commit=COMMIT_ONE,
+        merge_method="merge",
+        repository_path=tmp_path,
+    )
+
+    assert recovered.state == "MERGED"
+    assert runner.operation_mutation_count == 1
+
+
+def test_classic_protection_accepts_typed_legitimate_zero_required_checks() -> None:
+    """Classic protected-ref CAS can distinguish a typed empty set from failure."""
+
+    runner = _GhRunner(required_check_name_list=[])
+    inspection = GitHubPullRequestBoundary(runner).reviewed_inspect(
+        repository=RepositoryIdentity("antonov-andrey/example"),
+        number=17,
+        issue_identifier="AND-17",
+        base_branch="main",
+        head_branch="linear/and-17",
+        reviewed_base_commit=COMMIT_BASE,
+        reviewed_head_commit=COMMIT_ONE,
+        merge_method="merge",
+    )
+
+    snapshot = inspection.pull_request
+    protection = inspection.branch_protection
+    assert protection is not None
+    assert snapshot.required_check_list == []
+    assert snapshot.required_checks_verified is True
+    assert protection.protection_source_list == ["classic"]
+    assert protection.required_check_name_list == []
+    assert any(item[1:3] == ["pr", "view"] and item[-1] == "statusCheckRollup" for item in runner.command_list)
+    assert not any(item[1:3] == ["pr", "checks"] for item in runner.command_list)
+
+
+def test_classic_protection_snapshot_captures_nonblocking_creation_and_fork_sync_conditions() -> None:
+    """The closed classic snapshot retains every known boolean even when compatible."""
+
+    runner = _GhRunner()
+    runner.block_creations = True
+    runner.allow_fork_syncing = True
+    inspection = GitHubPullRequestBoundary(runner).reviewed_inspect(
+        repository=RepositoryIdentity("antonov-andrey/example"),
+        number=17,
+        issue_identifier="AND-17",
+        base_branch="main",
+        head_branch="linear/and-17",
+        reviewed_base_commit=COMMIT_BASE,
+        reviewed_head_commit=COMMIT_ONE,
+        merge_method="merge",
+    )
+
+    protection = inspection.branch_protection
+    assert protection is not None
+    assert protection.creation_blocked is True
+    assert protection.fork_sync_allowed is True
+    assert protection.admin_enforcement_enabled is True
+    assert protection.force_push_allowed is False
+    assert protection.deletion_allowed is False
+
+
+@pytest.mark.parametrize(
+    ("attribute_name", "value", "message"),
+    (
+        (
+            "required_pull_request_reviews",
+            {
+                "url": (
+                    "https://api.github.com/repos/antonov-andrey/example/branches/main/protection/"
+                    "required_pull_request_reviews"
+                ),
+                "dismiss_stale_reviews": False,
+                "require_code_owner_reviews": False,
+                "required_approving_review_count": 1,
+                "require_last_push_approval": False,
+            },
+            "pull-request reviews",
+        ),
+        ("required_linear_history", True, "linear history"),
+        ("required_signatures", True, "signatures"),
+        ("required_conversation_resolution", True, "conversation resolution"),
+        ("branch_locked", True, "branch lock"),
+        (
+            "push_restrictions",
+            {
+                "url": "https://api.github.com/repos/antonov-andrey/example/branches/main/protection/restrictions",
+                "users_url": (
+                    "https://api.github.com/repos/antonov-andrey/example/branches/main/protection/restrictions/users"
+                ),
+                "teams_url": (
+                    "https://api.github.com/repos/antonov-andrey/example/branches/main/protection/restrictions/teams"
+                ),
+                "apps_url": (
+                    "https://api.github.com/repos/antonov-andrey/example/branches/main/protection/restrictions/apps"
+                ),
+                "users": [],
+                "teams": [],
+                "apps": [],
+            },
+            "push restrictions",
+        ),
+    ),
+)
+def test_classic_protection_rejects_each_incompatible_merge_family(
+    attribute_name: str,
+    value: object,
+    message: str,
+) -> None:
+    """Each classic gate that can reject the local merge is an explicit conflict."""
+
+    runner = _GhRunner()
+    setattr(runner, attribute_name, value)
+
+    with pytest.raises(GitHubContractError, match=f"incompatible.*{message}"):
+        GitHubPullRequestBoundary(runner).reviewed_inspect(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+        )
+
+    assert runner.operation_mutation_count == 0
+
+
+def test_classic_protection_rejects_unknown_top_level_condition() -> None:
+    """A newly introduced classic protection condition fails closed."""
+
+    runner = _GhRunner()
+    runner.classic_extra_field_by_name_map = {"future_merge_gate": {"enabled": True}}
+
+    with pytest.raises(GitHubContractError, match="unknown or missing fields"):
+        GitHubPullRequestBoundary(runner).reviewed_inspect(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+        )
+
+
+def test_classic_protection_rejects_foreign_response_identity() -> None:
+    """A typed classic response still must belong to the exact repository/base."""
+
+    runner = _GhRunner()
+    runner.classic_extra_field_by_name_map = {
+        "url": "https://api.github.com/repos/attacker/example/branches/main/protection"
+    }
+
+    with pytest.raises(GitHubContractError, match="unknown or missing fields"):
+        GitHubPullRequestBoundary(runner).reviewed_inspect(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+        )
+
+
+def test_classic_protection_rejects_unknown_nested_condition() -> None:
+    """A new nested classic condition cannot be silently discarded."""
+
+    runner = _GhRunner()
+    runner.classic_extra_field_by_name_map = {
+        "allow_force_pushes": {"enabled": False, "future_bypass_mode": "selected_users"}
+    }
+
+    with pytest.raises(GitHubContractError, match="allow_force_pushes has another shape"):
+        GitHubPullRequestBoundary(runner).reviewed_inspect(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+        )
+
+
+@pytest.mark.parametrize(
+    ("attribute_name", "value", "permission", "message"),
+    (
+        ("enforce_admins", False, "write", "bypass"),
+        ("allow_force_pushes", True, "write", "CAS safety"),
+        ("allow_deletions", True, "write", "CAS safety"),
+    ),
+)
+def test_classic_protection_rejects_each_ref_or_identity_bypass_family(
+    attribute_name: str,
+    value: bool,
+    permission: str,
+    message: str,
+) -> None:
+    """Admin enforcement, force updates and deletion are direct closed gates."""
+
+    runner = _GhRunner()
+    setattr(runner, attribute_name, value)
+    runner.execution_permission = permission
+
+    with pytest.raises(GitHubContractError, match=message):
+        GitHubPullRequestBoundary(runner).reviewed_inspect(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+        )
+
+
+@pytest.mark.parametrize("permission", ("read", "triage"))
+def test_protection_rejects_execution_identity_without_write_authority(permission: str) -> None:
+    """Repository visibility or triage is never mistaken for mutation authority."""
+
+    runner = _GhRunner()
+    runner.execution_permission = permission
+    with pytest.raises(GitHubContractError, match="write authority"):
+        GitHubPullRequestBoundary(runner).reviewed_inspect(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+        )
+
+
+def test_exact_configuration_path_creates_only_absent_minimal_cas_protection() -> None:
+    """Approved configuration can close an absence without adding a human gate."""
+
+    runner = _GhRunner(protection_kind="none", required_check_name_list=[])
+    boundary = GitHubBranchProtectionBoundary(runner)
+    approved_snapshot = boundary.inspect(
+        repository=RepositoryIdentity("antonov-andrey/example"),
+        base_branch="main",
+    )
+    protection = boundary.configure_for_protected_ref_cas(
+        repository=RepositoryIdentity("antonov-andrey/example"),
+        base_branch="main",
+        approved_snapshot=approved_snapshot,
+    )
+
+    protection.merge_mechanism_require("merge")
+    assert protection.protection_source_list == ["classic"]
+    assert protection.required_check_name_list == []
+    configure_command = next(item for item in runner.command_list if item[1:4] == ["api", "--method", "PUT"])
+    assert "required_pull_request_reviews=null" in configure_command
+    assert "enforce_admins=true" in configure_command
+    assert "allow_force_pushes=false" in configure_command
+    assert "allow_deletions=false" in configure_command
+
+
+def test_exact_configuration_rejects_compatible_second_snapshot_drift_before_mutation() -> None:
+    """The second pre-mutation snapshot must equal the approved snapshot."""
+
+    runner = _GhRunner(protection_kind="none", required_check_name_list=[])
+    boundary = GitHubBranchProtectionBoundary(runner)
+    approved_snapshot = boundary.inspect(
+        repository=RepositoryIdentity("antonov-andrey/example"),
+        base_branch="main",
+    )
+    runner.changed_execution_permission = "maintain"
+
+    with pytest.raises(GitHubContractError, match="differs from the approved snapshot"):
+        boundary.configure_for_protected_ref_cas(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            base_branch="main",
+            approved_snapshot=approved_snapshot,
+        )
+
+    assert not any(item[1:4] == ["api", "--method", "PUT"] for item in runner.command_list)
+
+
+def test_exact_configuration_rejects_changed_second_snapshot_principal_before_mutation() -> None:
+    """A compatible replacement principal cannot execute the approved transaction."""
+
+    runner = _GhRunner(protection_kind="none", required_check_name_list=[])
+    boundary = GitHubBranchProtectionBoundary(runner)
+    approved_snapshot = boundary.inspect(
+        repository=RepositoryIdentity("antonov-andrey/example"),
+        base_branch="main",
+    )
+    runner.changed_execution_login = "mallory"
+    runner.changed_execution_user_id = 8
+    runner.changed_execution_node_id = "U_mallory"
+
+    with pytest.raises(GitHubContractError, match="differs from the approved snapshot"):
+        boundary.configure_for_protected_ref_cas(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            base_branch="main",
+            approved_snapshot=approved_snapshot,
+        )
+
+    assert not any(item[1:4] == ["api", "--method", "PUT"] for item in runner.command_list)
+
+
+def test_exact_configuration_final_readback_requires_the_approved_principal() -> None:
+    """Final configured state cannot be certified through another compatible principal."""
+
+    runner = _GhRunner(protection_kind="none", required_check_name_list=[])
+    boundary = GitHubBranchProtectionBoundary(runner)
+    approved_snapshot = boundary.inspect(
+        repository=RepositoryIdentity("antonov-andrey/example"),
+        base_branch="main",
+    )
+    runner.changed_execution_login = "mallory"
+    runner.changed_execution_user_id = 8
+    runner.changed_execution_node_id = "U_mallory"
+    runner.execution_identity_change_after_read_count = 2
+
+    with pytest.raises(GitHubContractError, match="Final.*approved GitHub identity"):
+        boundary.configure_for_protected_ref_cas(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            base_branch="main",
+            approved_snapshot=approved_snapshot,
+        )
+
+    configure_command_list = [item for item in runner.command_list if item[1:4] == ["api", "--method", "PUT"]]
+    assert len(configure_command_list) == 1
+
+
+def test_exact_configuration_plan_rejects_absent_protection_without_write_authority() -> None:
+    """An absent branch rule cannot hide an executing identity that cannot create it."""
+
+    script = PLUGIN_ROOT / "skills" / "workflow-configure" / "scripts" / "branch_protection.py"
+    spec = importlib.util.spec_from_file_location("linear_branch_protection_configuration_authority", script)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    runner = _GhRunner(protection_kind="none")
+    runner.execution_permission = "read"
+    snapshot = GitHubBranchProtectionBoundary(runner).inspect(
+        repository=RepositoryIdentity("antonov-andrey/example"),
+        base_branch="main",
+    )
+
+    with pytest.raises(GitHubContractError, match="write authority"):
+        module._plan_payload(snapshot, merge_method="merge")
+
+
+def test_effective_ruleset_protection_enforces_strict_merge_and_has_typed_sources() -> None:
+    """Active no-bypass rulesets can prove both protected CAS and strict API merge."""
+
+    runner = _GhRunner(protection_kind="ruleset", required_check_name_list=["test"])
+    inspection = GitHubPullRequestBoundary(runner).reviewed_inspect(
+        repository=RepositoryIdentity("antonov-andrey/example"),
+        number=17,
+        issue_identifier="AND-17",
+        base_branch="main",
+        head_branch="linear/and-17",
+        reviewed_base_commit=COMMIT_BASE,
+        reviewed_head_commit=COMMIT_ONE,
+        merge_method="squash",
+    )
+
+    protection = inspection.branch_protection
+    assert protection is not None
+    assert protection.protection_source_list == ["ruleset:42"]
+    assert protection.ruleset_id_list == [42]
+    assert protection.strict_required_status_checks is True
+    assert protection.non_fast_forward_protected is True
+    assert protection.deletion_protected is True
+
+
+def test_effective_merge_queue_rule_is_rejected_as_deferred_later_base_mutation() -> None:
+    """Exact reviewed-base merge never enables auto-merge or joins a queue."""
+
+    runner = _GhRunner(protection_kind="ruleset", required_check_name_list=["test"])
+    runner.ruleset_merge_queue = True
+    with pytest.raises(GitHubContractError, match="incompatible.*merge_queue"):
+        GitHubPullRequestBoundary(runner).reviewed_inspect(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="squash",
+        )
+
+
+@pytest.mark.parametrize(
+    "rule_type",
+    (
+        "branch_name_pattern",
+        "code_scanning",
+        "commit_author_email_pattern",
+        "commit_message_pattern",
+        "committer_email_pattern",
+        "copilot_code_review",
+        "creation",
+        "file_extension_restriction",
+        "file_path_restriction",
+        "license_compliance_scanning",
+        "max_file_path_length",
+        "max_file_size",
+        "pull_request",
+        "required_deployments",
+        "required_linear_history",
+        "required_signatures",
+        "tag_name_pattern",
+        "update",
+        "workflows",
+    ),
+)
+def test_effective_ruleset_rejects_each_known_incompatible_rule_family(rule_type: str) -> None:
+    """Every known rule that can alter or reject the constructed merge is explicit."""
+
+    runner = _GhRunner(protection_kind="ruleset", required_check_name_list=["test"])
+    runner.ruleset_additional_rule_type_list = [rule_type]
+
+    with pytest.raises(GitHubContractError, match=f"incompatible.*{rule_type}"):
+        GitHubPullRequestBoundary(runner).reviewed_inspect(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="squash",
+        )
+
+
+def test_effective_ruleset_rejects_unknown_rule_type_fail_closed() -> None:
+    """An unimplemented provider rule cannot become an implicit allow."""
+
+    runner = _GhRunner(protection_kind="ruleset", required_check_name_list=["test"])
+    runner.ruleset_additional_rule_type_list = ["future_repository_rule"]
+
+    with pytest.raises(GitHubContractError, match="unknown rule type"):
+        GitHubPullRequestBoundary(runner).reviewed_inspect(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="squash",
+        )
+
+
+def test_effective_ruleset_rejects_unknown_compatible_rule_parameter_fail_closed() -> None:
+    """A future status-check parameter cannot silently change an allowed rule."""
+
+    runner = _GhRunner(protection_kind="ruleset", required_check_name_list=["test"])
+    runner.ruleset_required_check_extra_parameter_by_name_map = {"future_merge_gate": True}
+
+    with pytest.raises(GitHubContractError, match="required-status-check rule has another shape"):
+        GitHubPullRequestBoundary(runner).reviewed_inspect(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="squash",
+        )
+
+
+def test_workflow_configuration_cannot_plan_none_for_incompatible_protection() -> None:
+    """The canonical configuration owner reports conflict instead of action none."""
+
+    script = PLUGIN_ROOT / "skills" / "workflow-configure" / "scripts" / "branch_protection.py"
+    spec = importlib.util.spec_from_file_location("linear_branch_protection_configuration", script)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    runner = _GhRunner()
+    runner.required_signatures = True
+    snapshot = GitHubBranchProtectionBoundary(runner).inspect(
+        repository=RepositoryIdentity("antonov-andrey/example"),
+        base_branch="main",
+    )
+
+    with pytest.raises(GitHubContractError, match="incompatible.*required signatures"):
+        module._plan_payload(snapshot, merge_method="merge")
+
+
+@pytest.mark.parametrize("merge_method", ("squash", "rebase"))
+def test_unprovable_strategy_fails_closed_before_provider_mutation(merge_method: str) -> None:
+    """No unsupported strategy mutates a PR before exact immutable proof exists."""
+
+    runner = _GhRunner(protection_kind="ruleset", required_check_name_list=["test"])
+    with pytest.raises(GitHubContractError, match="unsupported without exact immutable strategy proof"):
+        GitHubPullRequestBoundary(runner).merge(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method=merge_method,
+        )
+
+    assert runner.operation_mutation_count == 0
+    assert not any(item[1:3] == ["pr", "merge"] for item in runner.command_list)
+
+
+@pytest.mark.parametrize("protection_kind", ("classic", "ruleset"))
+def test_api_merge_rejects_each_nonstrict_required_check_family(protection_kind: str) -> None:
+    """Classic and ruleset checks must both enforce the reviewed base."""
+
+    runner = _GhRunner(protection_kind=protection_kind, required_check_name_list=["test"])
+    runner.strict_required_status_checks = False
+
+    with pytest.raises(GitHubContractError, match="strict up-to-date"):
+        GitHubPullRequestBoundary(runner).reviewed_inspect(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="squash",
+        )
+
+
+def test_protected_ref_cas_rejects_nonzero_required_check_definitions() -> None:
+    """A newly constructed CAS merge commit cannot pre-satisfy provider checks."""
+
+    runner = _GhRunner(required_check_name_list=["test"])
+    with pytest.raises(GitHubContractError, match="zero required-check"):
+        GitHubPullRequestBoundary(runner).reviewed_inspect(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+        )
+
+
+@pytest.mark.parametrize(
+    ("returncode", "stdout", "message"),
+    (
+        (1, '{"statusCheckRollup":[]}', "Unable to read empty"),
+        (0, "", "Unable to read empty"),
+        (0, "not-json", "malformed"),
+    ),
+)
+def test_zero_required_check_read_rejects_provider_failure_empty_or_malformed_output(
+    returncode: int,
+    stdout: str,
+    message: str,
+) -> None:
+    """A legitimate zero set still requires a typed successful provider read."""
+
+    runner = _GhRunner()
+    runner.status_rollup_returncode = returncode
+    runner.status_rollup_stdout = stdout
+    with pytest.raises(GitHubContractError, match=message):
+        GitHubPullRequestBoundary(runner).reviewed_inspect(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+        )
+
+
+@pytest.mark.parametrize(
+    ("protection_kind", "mutate", "message"),
+    (
+        ("none", lambda runner: None, "unprotected"),
+        ("classic", lambda runner: setattr(runner, "enforce_admins", False), "bypass"),
+        ("classic", lambda runner: setattr(runner, "allow_force_pushes", True), "CAS safety"),
+        ("ruleset", lambda runner: setattr(runner, "ruleset_enforcement", "disabled"), "ruleset identity"),
+        (
+            "ruleset",
+            lambda runner: runner.ruleset_bypass_actor_list.append(
+                {"actor_id": 7, "actor_type": "User", "bypass_mode": "always"}
+            ),
+            "bypass",
+        ),
+    ),
+)
+def test_merge_rejects_absent_disabled_bypassed_or_ineffective_protection(
+    protection_kind: str,
+    mutate: Callable[[_GhRunner], None],
+    message: str,
+) -> None:
+    """No provider protection gap can silently authorize a merge mutation."""
+
+    runner = _GhRunner(protection_kind=protection_kind)
+    mutate(runner)
+    with pytest.raises(GitHubContractError, match=message):
+        GitHubPullRequestBoundary(runner).reviewed_inspect(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+        )
+
+
+@pytest.mark.parametrize(
+    ("returncode", "stdout", "message"),
+    (
+        (1, "[]", "Unable to read required"),
+        (0, "", "Unable to read required"),
+        (0, "not-json", "malformed"),
+    ),
+)
+def test_required_check_provider_failure_or_malformed_output_never_becomes_success(
+    returncode: int,
+    stdout: str,
+    message: str,
+) -> None:
+    """Only typed provider success or pending status can carry required results."""
+
+    runner = _GhRunner(required_check_name_list=["test"])
+    runner.check_returncode = returncode
+    runner.check_stdout = stdout
+    with pytest.raises(GitHubContractError, match=message):
+        GitHubPullRequestBoundary(runner).reviewed_inspect(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="squash",
+        )
+
+
+def test_branch_protection_provider_failure_never_becomes_absence() -> None:
+    """A generic failed or empty protection read is not an unprotected 404."""
+
+    delegate = _GhRunner()
+
+    def runner(
+        argument_list: Sequence[str],
+        *,
+        environment_by_name_map: Mapping[str, str],
+        input_text: str | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        """Replace only the classic-protection response with a generic failure."""
+
+        argument_list = list(argument_list)
+        if argument_list[1:3] == ["api", "--include"]:
+            return subprocess.CompletedProcess(argument_list, 1, "", "provider failed")
+        return delegate(
+            argument_list,
+            environment_by_name_map=environment_by_name_map,
+            input_text=input_text,
+        )
+
+    with pytest.raises(GitHubContractError, match="response is malformed"):
+        GitHubPullRequestBoundary(runner).reviewed_inspect(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="squash",
+        )
+
+
+def test_github_merge_retry_adopts_exact_already_merged_reviewed_identity(tmp_path: Path) -> None:
+    """A crash after provider merge recovers from exact reviewed base/head readback."""
+
+    runner = _GhRunner()
+    runner.state = "MERGED"
+    runner.remote_commit_by_ref_map = {"refs/heads/main": COMMIT_TWO}
+    merged = GitHubPullRequestBoundary(runner).merge(
+        repository=RepositoryIdentity("antonov-andrey/example"),
+        number=17,
+        issue_identifier="AND-17",
+        base_branch="main",
+        head_branch="linear/and-17",
+        reviewed_base_commit=COMMIT_BASE,
+        reviewed_head_commit=COMMIT_ONE,
+        merge_method="merge",
+        repository_path=tmp_path,
     )
 
     assert merged.state == "MERGED"
     assert not any(item[1:3] == ["pr", "merge"] for item in runner.command_list)
+    assert any("cat-file" in item and "-p" in item for item in runner.command_list)
+
+
+def test_public_reviewed_inspection_proves_terminal_merge_before_reporting_success(tmp_path: Path) -> None:
+    """Public terminal inspection performs REST identity, tree, parent and deletion proof."""
+
+    runner = _GhRunner()
+    runner.state = "MERGED"
+    runner.remote_commit_by_ref_map = {"refs/heads/main": COMMIT_TWO}
+
+    inspection = GitHubPullRequestBoundary(runner).reviewed_inspect(
+        repository=RepositoryIdentity("antonov-andrey/example"),
+        number=17,
+        issue_identifier="AND-17",
+        base_branch="main",
+        head_branch="linear/and-17",
+        reviewed_base_commit=COMMIT_BASE,
+        reviewed_head_commit=COMMIT_ONE,
+        merge_method="merge",
+        repository_path=tmp_path,
+    )
+
+    assert inspection.pull_request.state == "MERGED"
+    assert inspection.pull_request.merged_by_user_id == 7
+    assert inspection.branch_protection is None
+    assert any(
+        item[1:4] == ["api", "--hostname", "github.com"] and "/pulls/17" in item[4] for item in runner.command_list
+    )
+    assert any("merge-base" in item for item in runner.command_list)
+    assert any("rev-parse" in item and item[-1].endswith("^{tree}") for item in runner.command_list)
+    assert any("cat-file" in item and "-p" in item for item in runner.command_list)
+    assert any("ls-remote" in item for item in runner.command_list)
+    assert not any(item[1:3] == ["api", "--include"] for item in runner.command_list)
+
+
+def test_public_terminal_inspection_requires_repository_for_immutable_proof() -> None:
+    """A terminal PR cannot fall back to generic metadata when Git proof is unavailable."""
+
+    runner = _GhRunner()
+    runner.state = "MERGED"
+
+    with pytest.raises(GitHubContractError, match="requires the exact repository worktree path"):
+        GitHubPullRequestBoundary(runner).reviewed_inspect(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+        )
+
+    assert not any("fetch" in item or "commit-tree" in item for item in runner.command_list)
+
+
+@pytest.mark.parametrize(
+    ("reviewed_base_commit", "reviewed_head_commit", "message"),
+    (
+        (COMMIT_ONE, COMMIT_ONE, "distinct commits"),
+        (COMMIT_BASE, COMMIT_TWO, "head changed after independent review"),
+    ),
+)
+def test_public_terminal_inspection_rejects_changed_reviewed_base_or_head(
+    tmp_path: Path,
+    reviewed_base_commit: str,
+    reviewed_head_commit: str,
+    message: str,
+) -> None:
+    """Neither reviewed commit can drift behind generic merged metadata."""
+
+    runner = _GhRunner()
+    runner.state = "MERGED"
+    runner.remote_commit_by_ref_map = {"refs/heads/main": COMMIT_TWO}
+
+    with pytest.raises(GitHubContractError, match=message):
+        GitHubPullRequestBoundary(runner).reviewed_inspect(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=reviewed_base_commit,
+            reviewed_head_commit=reviewed_head_commit,
+            merge_method="merge",
+            repository_path=tmp_path,
+        )
+
+    assert runner.operation_mutation_count == 0
+
+
+@pytest.mark.parametrize("merge_method", ("squash", "rebase"))
+def test_public_terminal_inspection_rejects_unprovable_strategy(
+    tmp_path: Path,
+    merge_method: str,
+) -> None:
+    """Generic provider metadata never certifies an unsupported terminal strategy."""
+
+    runner = _GhRunner()
+    runner.state = "MERGED"
+    runner.remote_commit_by_ref_map = {"refs/heads/main": COMMIT_TWO}
+
+    with pytest.raises(GitHubContractError, match="unsupported without exact immutable strategy proof"):
+        GitHubPullRequestBoundary(runner).reviewed_inspect(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method=merge_method,
+            repository_path=tmp_path,
+        )
+
+    assert not any("fetch" in item or "commit-tree" in item for item in runner.command_list)
+
+
+@pytest.mark.parametrize(
+    ("protection_kind", "required_check_name_list"),
+    (("none", []), ("classic", ["replacement-check"])),
+)
+def test_atomic_merge_recovery_ignores_current_protection_and_check_definition_drift(
+    tmp_path: Path,
+    protection_kind: str,
+    required_check_name_list: list[str],
+) -> None:
+    """Post-mutation recovery uses immutable result identity, not later gate state."""
+
+    runner = _GhRunner(protection_kind=protection_kind, required_check_name_list=required_check_name_list)
+    runner.state = "MERGED"
+    runner.base_commit = "d" * 40
+    runner.remote_commit_by_ref_map = {"refs/heads/main": "d" * 40}
+    runner.status_rollup_returncode = 1
+    runner.check_returncode = 1
+    runner.pr_title = "Mutable title edited after merge"
+    runner.auto_merge_request = {"enabledAt": "2026-08-07T07:00:00Z"}
+
+    merged = GitHubPullRequestBoundary(runner).merge(
+        repository=RepositoryIdentity("antonov-andrey/example"),
+        number=17,
+        issue_identifier="AND-17",
+        base_branch="main",
+        head_branch="linear/and-17",
+        reviewed_base_commit=COMMIT_BASE,
+        reviewed_head_commit=COMMIT_ONE,
+        merge_method="merge",
+        repository_path=tmp_path,
+    )
+
+    assert merged.state == "MERGED"
+    assert not any(item[1:3] == ["api", "--include"] for item in runner.command_list)
+    assert not any("/rules/branches/" in part for item in runner.command_list for part in item)
+    assert not any(item[1:3] == ["pr", "checks"] for item in runner.command_list)
+    assert not any(item[1:3] == ["pr", "view"] and item[-1] == "statusCheckRollup" for item in runner.command_list)
+
+
+@pytest.mark.parametrize(
+    ("attribute_name", "value", "message"),
+    (
+        ("merge_commit_tree", "a" * 40, "exact reviewed merge identity"),
+        ("merge_base_commit", COMMIT_ONE, "exact reviewed merge identity"),
+        ("merge_head_commit", COMMIT_BASE, "exact reviewed merge identity"),
+        ("merged_by_login", "mallory", "merged provider identity"),
+        ("merged_by_user_id", 8, "merged provider identity"),
+        ("merged_by_node_id", "U_mallory", "merged provider identity"),
+    ),
+)
+def test_atomic_merge_recovery_rejects_inexact_immutable_terminal_identity(
+    tmp_path: Path,
+    attribute_name: str,
+    value: object,
+    message: str,
+) -> None:
+    """Tree, ordered parents and terminal provider principal are all exact."""
+
+    runner = _GhRunner()
+    runner.state = "MERGED"
+    runner.remote_commit_by_ref_map = {"refs/heads/main": "d" * 40}
+    setattr(runner, attribute_name, value)
+
+    with pytest.raises(GitHubContractError, match=message):
+        GitHubPullRequestBoundary(runner).merge(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+            repository_path=tmp_path,
+        )
+
+    assert runner.operation_mutation_count == 0
+
+
+def test_atomic_merge_recovery_rejects_merged_pr_without_atomic_head_deletion(tmp_path: Path) -> None:
+    """A foreign provider merge cannot masquerade as a recovered two-ref transaction."""
+
+    runner = _GhRunner()
+    runner.state = "MERGED"
+    with pytest.raises(GitHubContractError, match="did not delete"):
+        GitHubPullRequestBoundary(runner).merge(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+            repository_path=tmp_path,
+        )
 
 
 def test_github_pr_create_is_idempotent_for_exact_issue_branch(tmp_path: Path) -> None:
@@ -1840,7 +3630,7 @@ def test_github_pr_create_is_idempotent_for_exact_issue_branch(tmp_path: Path) -
     runner = _GhRunner()
     boundary = GitHubPullRequestBoundary(runner)
     body = tmp_path / "body.md"
-    body.write_text("# Candidate\n", encoding="utf-8")
+    body.write_text("# Change\n", encoding="utf-8")
     arguments = {
         "repository": RepositoryIdentity("antonov-andrey/example"),
         "issue_identifier": "AND-17",
@@ -1858,34 +3648,32 @@ def test_github_pr_create_is_idempotent_for_exact_issue_branch(tmp_path: Path) -
     lookup_command = next(item for item in runner.command_list if item[1:3] == ["api", "--method"])
     assert "--paginate" in lookup_command
     assert "--slurp" in lookup_command
-    assert "--jq" not in lookup_command
 
 
 @pytest.mark.parametrize(
     "payload",
     (
         [{"number": 17, "base": {"ref": "main"}, "head": {"ref": "linear/and-17"}}],
-        [
-            [
-                {
-                    "number": 17,
-                    "base": {"ref": "release"},
-                    "head": {"ref": "linear/and-17"},
-                }
-            ]
-        ],
+        [[{"number": 17, "base": {"ref": "release"}, "head": {"ref": "linear/and-17"}}]],
         [
             [{"number": 17, "base": {"ref": "main"}, "head": {"ref": "linear/and-17"}}],
             [{"number": 17, "base": {"ref": "main"}, "head": {"ref": "linear/and-17"}}],
         ],
     ),
 )
-def test_github_pr_lookup_rejects_malformed_or_conflicting_pages(
-    payload: object,
-) -> None:
+def test_github_pr_lookup_rejects_malformed_or_conflicting_pages(payload: object) -> None:
     """Native paginated output cannot weaken exact PR identity or uniqueness."""
 
-    def runner(argument_list: list[str]) -> subprocess.CompletedProcess[str]:
+    def runner(
+        argument_list: Sequence[str],
+        *,
+        environment_by_name_map: Mapping[str, str],
+        input_text: str | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        """Return one malformed or conflicting lookup payload."""
+
+        del environment_by_name_map, input_text
+        argument_list = list(argument_list)
         return subprocess.CompletedProcess(argument_list, 0, json.dumps(payload), "")
 
     with pytest.raises(GitHubContractError, match="lookup"):
@@ -1896,119 +3684,107 @@ def test_github_pr_lookup_rejects_malformed_or_conflicting_pages(
         )
 
 
-def test_github_pr_title_requires_exact_linear_identifier_token(tmp_path: Path) -> None:
-    """A substring embedded in another token is not integration-compatible identity."""
-
-    body = tmp_path / "body.md"
-    body.write_text("# Candidate\n", encoding="utf-8")
-    runner = _GhRunner()
-
-    with pytest.raises(GitHubContractError, match="exact Linear issue token"):
-        GitHubPullRequestBoundary(runner).create(
-            repository=RepositoryIdentity("antonov-andrey/example"),
-            issue_identifier="AND-17",
-            base_branch="main",
-            head_branch="linear/and-17",
-            title="XAND-17Y is not the issue token",
-            body_file=body,
-        )
-
-    assert not runner.command_list
-
-
-def test_github_merge_rejects_candidate_mutation_before_external_merge() -> None:
+def test_github_merge_rejects_head_change_after_independent_review() -> None:
     """A changed PR head forces Rework and no merge call occurs."""
 
     runner = _GhRunner(head_commit=COMMIT_TWO)
-    boundary = GitHubPullRequestBoundary(runner)
-
-    with pytest.raises(GitHubContractError, match="changed after human approval"):
-        boundary.merge(
+    with pytest.raises(GitHubContractError, match="changed after independent review"):
+        GitHubPullRequestBoundary(runner).merge(
             repository=RepositoryIdentity("antonov-andrey/example"),
             number=17,
             issue_identifier="AND-17",
             base_branch="main",
             head_branch="linear/and-17",
-            approved_head_commit=COMMIT_ONE,
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
             merge_method="merge",
         )
 
     assert not any(item[1:3] == ["pr", "merge"] for item in runner.command_list)
 
 
-def test_github_merge_reads_gh_check_bucket_and_rejects_pending_required_check() -> None:
-    """gh exit 8 remains an inspectable pending check, never an allowed merge."""
+def test_github_merge_rejects_open_base_change_after_independent_review() -> None:
+    """A changed base forces Rework while the pull request remains open."""
 
-    runner = _GhRunner()
+    runner = _GhRunner(base_commit=COMMIT_TWO)
+    with pytest.raises(GitHubContractError, match="base changed after independent review"):
+        GitHubPullRequestBoundary(runner).merge(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+        )
+
+    assert not any(item[1:3] == ["pr", "merge"] for item in runner.command_list)
+
+
+def test_github_merge_rejects_pending_required_check() -> None:
+    """A pending branch-protection check is never an allowed merge."""
+
+    runner = _GhRunner(required_check_name_list=["test"])
     runner.check_bucket = "pending"
-    boundary = GitHubPullRequestBoundary(runner)
-
     with pytest.raises(GitHubContractError, match="not passing"):
-        boundary.merge(
+        GitHubPullRequestBoundary(runner).reviewed_inspect(
             repository=RepositoryIdentity("antonov-andrey/example"),
             number=17,
             issue_identifier="AND-17",
             base_branch="main",
             head_branch="linear/and-17",
-            approved_head_commit=COMMIT_ONE,
-            merge_method="merge",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="squash",
         )
 
-    check_command = next(item for item in runner.command_list if item[1:3] == ["pr", "checks"])
-    assert check_command[-1] == "name,bucket,link"
     assert not any(item[1:3] == ["pr", "merge"] for item in runner.command_list)
 
 
-def test_github_merge_rejects_wrong_base_before_external_merge() -> None:
-    """A PR aimed at another base cannot be merged before the target mismatch is detected."""
+def test_github_merge_rejects_wrong_base_before_mutation() -> None:
+    """A PR aimed at another base cannot enter the provider merge."""
 
     runner = _GhRunner(base_branch="release")
-    boundary = GitHubPullRequestBoundary(runner)
-
-    with pytest.raises(GitHubContractError, match="base or head differs"):
-        boundary.merge(
+    with pytest.raises(GitHubContractError, match="declared repository target"):
+        GitHubPullRequestBoundary(runner).merge(
             repository=RepositoryIdentity("antonov-andrey/example"),
             number=17,
             issue_identifier="AND-17",
             base_branch="main",
             head_branch="linear/and-17",
-            approved_head_commit=COMMIT_ONE,
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
             merge_method="merge",
         )
 
     assert not any(item[1:3] == ["pr", "merge"] for item in runner.command_list)
 
 
-def test_canceled_pull_request_close_is_idempotent() -> None:
-    """An open linked PR closes once while terminal read-back is accepted."""
+def test_canceled_pull_request_close_is_idempotent_and_exact() -> None:
+    """An open linked PR closes once while terminal readback is accepted."""
 
     runner = _GhRunner()
     boundary = GitHubPullRequestBoundary(runner)
-    repository = RepositoryIdentity("antonov-andrey/example")
-
     arguments = {
-        "repository": repository,
+        "repository": RepositoryIdentity("antonov-andrey/example"),
         "number": 17,
         "issue_identifier": "AND-17",
         "base_branch": "main",
         "head_branch": "linear/and-17",
     }
-    first = boundary.close_if_open(**arguments)
-    second = boundary.close_if_open(**arguments)
 
-    assert first.state == "CLOSED"
-    assert second.state == "CLOSED"
+    assert boundary.close_if_open(**arguments).state == "CLOSED"
+    assert boundary.close_if_open(**arguments).state == "CLOSED"
     assert sum(item[1:3] == ["pr", "close"] for item in runner.command_list) == 1
 
 
-def test_canceled_pull_request_close_rejects_foreign_target_before_mutation() -> None:
-    """Cancellation cannot close another PR from the same participating repository."""
+def test_canceled_pull_request_close_rejects_foreign_target() -> None:
+    """Cancellation cannot close another PR from the same repository."""
 
     runner = _GhRunner(base_branch="release")
-    boundary = GitHubPullRequestBoundary(runner)
-
-    with pytest.raises(GitHubContractError, match="base or head differs"):
-        boundary.close_if_open(
+    with pytest.raises(GitHubContractError, match="declared repository target"):
+        GitHubPullRequestBoundary(runner).close_if_open(
             repository=RepositoryIdentity("antonov-andrey/example"),
             number=17,
             issue_identifier="AND-17",

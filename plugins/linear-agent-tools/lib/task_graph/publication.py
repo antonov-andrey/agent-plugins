@@ -142,17 +142,16 @@ class IssuePublication:
                 f"dependencies `{json.dumps(verification.dependency_path_list, ensure_ascii=False)}`; "
                 f"environment identity required `{str(verification.environment_identity_required).lower()}`"
             )
+        if node.human_decision_boundary:
+            section_list.extend(("", "## Final Human Decision Boundary", "", node.human_decision_boundary))
         section_list.extend(
             (
                 "",
-                "## Human Decision Boundary",
-                "",
-                node.human_decision_boundary,
-                "",
                 "## Evidence And Links",
                 "",
-                "Agent attempts append concise comments with commits, receipts, PRs, CI and telemetry. "
-                "Raw logs, prompts and credentials are excluded.",
+                "Agent attempts reconcile nested attempt resources before appending concise semantic handoffs with "
+                "direct verification, commits, exact reviewed PR base/head identities, CI and any exact exposed "
+                "usage telemetry. Raw logs, prompts and credentials are excluded.",
             )
         )
         return cls(

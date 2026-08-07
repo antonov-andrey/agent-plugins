@@ -136,6 +136,35 @@ class StatusDefinition:
         }
 
     @classmethod
+    def from_graphql_node(cls, value: object) -> "StatusDefinition":
+        """Parse one complete status selected by the owned GraphQL documents.
+
+        Args:
+            value: Candidate status node.
+
+        Returns:
+            Exact typed status definition.
+        """
+
+        expected = {"id", "name", "type", "color", "description", "position"}
+        if not isinstance(value, dict) or set(value) != expected:
+            raise LinearContractError("Linear status node has another shape")
+        for name in ("id", "name", "type", "color"):
+            if not isinstance(value[name], str) or not value[name]:
+                raise LinearContractError(f"Linear field {name} must be non-empty text")
+        description = value["description"]
+        if description is not None and not isinstance(description, str):
+            raise LinearContractError("Linear status description must be text or null")
+        return cls(
+            id=value["id"],
+            name=value["name"],
+            category=value["type"],
+            color=value["color"],
+            description="" if description is None else description,
+            position=value["position"],
+        )
+
+    @classmethod
     def list_from_payload(cls, value: object) -> list["StatusDefinition"]:
         """Parse one strict status list.
 
@@ -165,32 +194,12 @@ class StatusDefinition:
             Typed status definitions.
         """
 
-        node_list = connection.get("nodes")
+        if set(connection) != {"nodes", "pageInfo"}:
+            raise LinearContractError("Linear status connection has another shape")
+        node_list = connection["nodes"]
         if not isinstance(node_list, list) or any(not isinstance(item, dict) for item in node_list):
             raise LinearContractError("Linear status connection nodes have another shape")
-        status_list: list[StatusDefinition] = []
-        for item in node_list:
-            required_text_by_name_map: dict[str, str] = {}
-            for name in ("id", "name", "type", "color"):
-                value = item.get(name)
-                if not isinstance(value, str) or not value:
-                    raise LinearContractError(f"Linear field {name} must be non-empty text")
-                required_text_by_name_map[name] = value
-            description = item.get("description")
-            position = item.get("position")
-            status_list.append(
-                cls(
-                    id=required_text_by_name_map["id"],
-                    name=required_text_by_name_map["name"],
-                    category=required_text_by_name_map["type"],
-                    color=required_text_by_name_map["color"],
-                    description=description if isinstance(description, str) else "",
-                    position=(
-                        position if isinstance(position, (int, float)) and not isinstance(position, bool) else 0.0
-                    ),
-                )
-            )
-        return status_list
+        return [cls.from_graphql_node(item) for item in node_list]
 
 
 @dataclass(frozen=True, slots=True)
@@ -487,6 +496,7 @@ class ConfigurationPlan:
 
     destination: DestinationIdentity
     issue_status_create_list: list[StatusDefinition]
+    issue_status_update_list: list[StatusDefinition]
     project_status_create_list: list[StatusDefinition]
     label_create_list: list[LinearLabel]
     git_status_automation_delete_list: list[GitStatusAutomation]
@@ -504,6 +514,13 @@ class ConfigurationPlan:
             label="issue status",
         )
         _plan_definition_list_validate(
+            self.issue_status_update_list,
+            expected_type=StatusDefinition,
+            label="issue status update",
+        )
+        if any(not item.id for item in self.issue_status_update_list):
+            raise LinearContractError("Configuration plan issue status update requires an existing status ID")
+        _plan_definition_list_validate(
             self.project_status_create_list,
             expected_type=StatusDefinition,
             label="Project status",
@@ -520,6 +537,7 @@ class ConfigurationPlan:
             label="conflict",
         )
         object.__setattr__(self, "issue_status_create_list", list(self.issue_status_create_list))
+        object.__setattr__(self, "issue_status_update_list", list(self.issue_status_update_list))
         object.__setattr__(self, "project_status_create_list", list(self.project_status_create_list))
         object.__setattr__(self, "label_create_list", list(self.label_create_list))
         object.__setattr__(
@@ -547,6 +565,7 @@ class ConfigurationPlan:
 
         return self.can_mutate() and not (
             self.issue_status_create_list
+            or self.issue_status_update_list
             or self.project_status_create_list
             or self.label_create_list
             or self.git_status_automation_delete_list
@@ -596,6 +615,9 @@ class ConfigurationPlan:
             for item in self.issue_status_create_list
         ):
             raise LinearContractError("Linear issue status plan changed after approval")
+        approved_issue_status_update_by_id_map = {item.id: item for item in approved.issue_status_update_list}
+        if any(approved_issue_status_update_by_id_map.get(item.id) != item for item in self.issue_status_update_list):
+            raise LinearContractError("Linear issue status update plan changed after approval")
         approved_project_status_by_name_map = {item.name: item for item in approved.project_status_create_list}
         if any(
             approved_project_status_by_name_map.get(item.name) is None
@@ -631,6 +653,7 @@ class ConfigurationPlan:
                 {"kind": item.kind, "name": item.name, "reason": item.reason} for item in self.conflict_list
             ],
             "issue_status_create_list": [item.payload() for item in self.issue_status_create_list],
+            "issue_status_update_list": [item.payload() for item in self.issue_status_update_list],
             "git_status_automation_delete_list": [item.payload() for item in self.git_status_automation_delete_list],
             "label_create_list": [item.payload() for item in self.label_create_list],
             "project_status_create_list": [item.payload() for item in self.project_status_create_list],
@@ -668,6 +691,7 @@ class ConfigurationPlan:
             "destination",
             "conflict_list",
             "issue_status_create_list",
+            "issue_status_update_list",
             "git_status_automation_delete_list",
             "label_create_list",
             "project_status_create_list",
@@ -688,6 +712,7 @@ class ConfigurationPlan:
         return cls(
             destination=DestinationIdentity(**destination_payload),
             issue_status_create_list=StatusDefinition.list_from_payload(payload["issue_status_create_list"]),
+            issue_status_update_list=StatusDefinition.list_from_payload(payload["issue_status_update_list"]),
             project_status_create_list=StatusDefinition.list_from_payload(payload["project_status_create_list"]),
             label_create_list=LinearLabel.list_from_payload(payload["label_create_list"]),
             git_status_automation_delete_list=GitStatusAutomation.list_from_payload(
