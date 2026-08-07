@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime, timezone
+import importlib.util
 import json
 from pathlib import Path
 import subprocess
@@ -463,14 +464,34 @@ class _GhRunner:
         self.head_repository = "antonov-andrey/example"
         self.cross_repository = False
         self.auto_merge_request: dict[str, object] | None = None
+        self.pr_title = "AND-17 Implement exact owner"
         self.protection_kind = protection_kind
         self.required_check_name_list = [] if required_check_name_list is None else required_check_name_list
+        self.strict_required_status_checks = True
+        self.execution_login = "octocat"
+        self.execution_user_id = 7
+        self.execution_node_id = "U_octocat"
+        self.changed_execution_login: str | None = None
+        self.changed_execution_user_id: int | None = None
+        self.changed_execution_node_id: str | None = None
+        self.execution_identity_read_count = 0
         self.enforce_admins = True
         self.allow_force_pushes = False
         self.allow_deletions = False
+        self.required_pull_request_reviews: dict[str, object] | None = None
+        self.required_linear_history = False
+        self.required_signatures = False
+        self.required_conversation_resolution = False
+        self.branch_locked = False
+        self.push_restrictions: dict[str, object] | None = None
+        self.block_creations = False
+        self.allow_fork_syncing = False
+        self.classic_extra_field_by_name_map: dict[str, object] = {}
         self.execution_permission = "admin"
         self.ruleset_enforcement = "active"
         self.ruleset_merge_queue = False
+        self.ruleset_additional_rule_type_list: list[str] = []
+        self.ruleset_required_check_extra_parameter_by_name_map: dict[str, object] = {}
         self.ruleset_bypass_actor_list: list[dict[str, object]] = []
         self.check_bucket = "pass"
         self.check_returncode: int | None = None
@@ -483,6 +504,16 @@ class _GhRunner:
         self.advance_base_on_push = False
         self.advance_head_on_push = False
         self.operation_mutation_count = 0
+        self.fetch_url_list = ["git@github.com:antonov-andrey/example.git"]
+        self.push_url_list = ["git@github.com:antonov-andrey/example.git"]
+        self.explicit_fetch_url_list = ["https://github.com/antonov-andrey/example.git"]
+        self.explicit_push_url_list = ["https://github.com/antonov-andrey/example.git"]
+        self.merge_base_commit = base_commit
+        self.merge_head_commit = head_commit
+        self.constructed_merge_tree = "f" * 40
+        self.merge_commit_tree = "f" * 40
+        self.merged_by_login = "octocat"
+        self.merged_by_node_id = "U_octocat"
         self.remote_commit_by_ref_map = {
             f"refs/heads/{base_branch}": base_commit,
             "refs/heads/linear/and-17": head_commit,
@@ -511,24 +542,53 @@ class _GhRunner:
                 self.check_stdout if self.check_stdout is not None else json.dumps(payload),
                 "",
             )
-        if argument_list[1:3] == ["api", "user"]:
-            return subprocess.CompletedProcess(argument_list, 0, json.dumps({"login": "octocat", "id": 7}), "")
+        if argument_list[1:5] == ["api", "--hostname", "github.com", "user"]:
+            self.execution_identity_read_count += 1
+            changed = self.execution_identity_read_count > 1 and self.changed_execution_login is not None
+            payload = {
+                "login": self.changed_execution_login if changed else self.execution_login,
+                "id": self.changed_execution_user_id if changed else self.execution_user_id,
+                "node_id": self.changed_execution_node_id if changed else self.execution_node_id,
+            }
+            return subprocess.CompletedProcess(argument_list, 0, json.dumps(payload), "")
         if argument_list[1:3] == ["api", "--include"]:
             if self.protection_kind == "classic":
                 payload = {
-                    "enforce_admins": {"enabled": self.enforce_admins},
+                    "url": (
+                        "https://api.github.com/repos/antonov-andrey/example/branches/" f"{self.base_branch}/protection"
+                    ),
+                    "enforce_admins": {
+                        "enabled": self.enforce_admins,
+                        "url": "https://api.github.com/repos/antonov-andrey/example/branches/main/protection/enforce_admins",
+                    },
                     "allow_force_pushes": {"enabled": self.allow_force_pushes},
                     "allow_deletions": {"enabled": self.allow_deletions},
-                    "required_status_checks": (
-                        {
-                            "strict": True,
-                            "contexts": list(self.required_check_name_list),
-                            "checks": [],
-                        }
-                        if self.required_check_name_list
-                        else None
-                    ),
+                    "required_linear_history": {"enabled": self.required_linear_history},
+                    "required_signatures": {
+                        "enabled": self.required_signatures,
+                        "url": "https://api.github.com/repos/antonov-andrey/example/branches/main/protection/required_signatures",
+                    },
+                    "required_conversation_resolution": {"enabled": self.required_conversation_resolution},
+                    "lock_branch": {"enabled": self.branch_locked},
+                    "block_creations": {"enabled": self.block_creations},
+                    "allow_fork_syncing": {"enabled": self.allow_fork_syncing},
+                    **self.classic_extra_field_by_name_map,
                 }
+                if self.required_pull_request_reviews is not None:
+                    payload["required_pull_request_reviews"] = self.required_pull_request_reviews
+                if self.push_restrictions is not None:
+                    payload["restrictions"] = self.push_restrictions
+                if self.required_check_name_list:
+                    payload["required_status_checks"] = {
+                        "url": "https://api.github.com/repos/antonov-andrey/example/branches/main/protection/required_status_checks",
+                        "contexts_url": (
+                            "https://api.github.com/repos/antonov-andrey/example/branches/main/protection/"
+                            "required_status_checks/contexts"
+                        ),
+                        "strict": self.strict_required_status_checks,
+                        "contexts": list(self.required_check_name_list),
+                        "checks": [],
+                    }
                 return _included_response(argument_list, status=200, payload=payload)
             return _included_response(
                 argument_list,
@@ -539,41 +599,30 @@ class _GhRunner:
             return subprocess.CompletedProcess(
                 argument_list,
                 0,
-                json.dumps({"permission": self.execution_permission, "user": {"login": "octocat"}}),
+                json.dumps(
+                    {
+                        "permission": self.execution_permission,
+                        "user": {
+                            "login": self.execution_login,
+                            "id": self.execution_user_id,
+                            "node_id": self.execution_node_id,
+                        },
+                    }
+                ),
                 "",
             )
         if argument_list[1:4] == ["api", "--method", "GET"] and "/rules/branches/" in argument_list[-3]:
             if self.protection_kind != "ruleset":
                 return subprocess.CompletedProcess(argument_list, 0, "[[]]", "")
-            rule_list: list[dict[str, object]] = [
+            rule_list = [
                 {
-                    "type": "non_fast_forward",
+                    **definition,
                     "ruleset_source_type": "Repository",
                     "ruleset_source": "antonov-andrey/example",
                     "ruleset_id": 42,
-                },
-                {
-                    "type": "deletion",
-                    "ruleset_source_type": "Repository",
-                    "ruleset_source": "antonov-andrey/example",
-                    "ruleset_id": 42,
-                },
+                }
+                for definition in self._ruleset_definition_list()
             ]
-            if self.required_check_name_list:
-                rule_list.append(
-                    {
-                        "type": "required_status_checks",
-                        "ruleset_source_type": "Repository",
-                        "ruleset_source": "antonov-andrey/example",
-                        "ruleset_id": 42,
-                        "parameters": {
-                            "strict_required_status_checks_policy": True,
-                            "required_status_checks": [
-                                {"context": name, "integration_id": None} for name in self.required_check_name_list
-                            ],
-                        },
-                    }
-                )
             if self.ruleset_merge_queue:
                 rule_list.append(
                     {
@@ -586,11 +635,9 @@ class _GhRunner:
                 )
             return subprocess.CompletedProcess(argument_list, 0, json.dumps([rule_list]), "")
         if argument_list[1] == "api" and "/rulesets/42?" in argument_list[-1]:
-            rule_list: list[dict[str, object]] = [{"type": "non_fast_forward"}, {"type": "deletion"}]
-            if self.required_check_name_list:
-                rule_list.append({"type": "required_status_checks"})
+            rule_list = self._ruleset_definition_list()
             if self.ruleset_merge_queue:
-                rule_list.append({"type": "merge_queue"})
+                rule_list.append({"type": "merge_queue", "parameters": {"merge_method": "SQUASH"}})
             return subprocess.CompletedProcess(
                 argument_list,
                 0,
@@ -670,7 +717,7 @@ class _GhRunner:
             payload = {
                 "number": 17,
                 "url": PULL_REQUEST_URL,
-                "title": "AND-17 Implement exact owner",
+                "title": self.pr_title,
                 "state": self.state,
                 "isDraft": False,
                 "autoMergeRequest": self.auto_merge_request,
@@ -688,24 +735,74 @@ class _GhRunner:
                 "mergeStateStatus": "CLEAN",
                 "mergedAt": "2026-08-04T12:30:00Z" if self.state == "MERGED" else None,
                 "mergeCommit": {"oid": COMMIT_TWO} if self.state == "MERGED" else None,
+                "mergedBy": (
+                    {
+                        "id": self.merged_by_node_id,
+                        "login": self.merged_by_login,
+                        "name": "Octocat",
+                        "is_bot": False,
+                    }
+                    if self.state == "MERGED"
+                    else None
+                ),
             }
             return subprocess.CompletedProcess(argument_list, 0, json.dumps(payload), "")
         raise AssertionError(f"Unexpected gh command: {argument_list}")
+
+    def _ruleset_definition_list(self) -> list[dict[str, object]]:
+        """Return the exact full ruleset definitions used by both provider reads."""
+
+        rule_list: list[dict[str, object]] = [{"type": "non_fast_forward"}, {"type": "deletion"}]
+        if self.required_check_name_list:
+            rule_list.append(
+                {
+                    "type": "required_status_checks",
+                    "parameters": {
+                        "strict_required_status_checks_policy": self.strict_required_status_checks,
+                        **self.ruleset_required_check_extra_parameter_by_name_map,
+                        "required_status_checks": [
+                            {"context": name, "integration_id": None} for name in self.required_check_name_list
+                        ],
+                    },
+                }
+            )
+        rule_list.extend({"type": rule_type} for rule_type in self.ruleset_additional_rule_type_list)
+        return rule_list
 
     def _git_call(self, argument_list: list[str]) -> subprocess.CompletedProcess[str]:
         """Model local object creation and one atomic remote ref transaction."""
 
         if "rev-parse" in argument_list:
             return subprocess.CompletedProcess(argument_list, 0, argument_list[2] + "\n", "")
-        if argument_list[-3:] == ["remote", "get-url", "origin"]:
-            return subprocess.CompletedProcess(argument_list, 0, "git@github.com:antonov-andrey/example.git\n", "")
+        if argument_list[-4:] == ["remote", "get-url", "--all", "origin"]:
+            return subprocess.CompletedProcess(argument_list, 0, "\n".join(self.fetch_url_list) + "\n", "")
+        if argument_list[-5:] == ["remote", "get-url", "--push", "--all", "origin"]:
+            return subprocess.CompletedProcess(argument_list, 0, "\n".join(self.push_url_list) + "\n", "")
+        if "config" in argument_list and "--get-regexp" in argument_list:
+            canonical = "https://github.com/antonov-andrey/example.git"
+            record_list = [
+                f"url.{resolved}.insteadof\n{canonical}\x00"
+                for resolved in self.explicit_fetch_url_list
+                if resolved != canonical or len(self.explicit_fetch_url_list) > 1
+            ]
+            record_list.extend(
+                f"url.{resolved}.pushinsteadof\n{canonical}\x00"
+                for resolved in self.explicit_push_url_list
+                if resolved != canonical or len(self.explicit_push_url_list) > 1
+            )
+            return subprocess.CompletedProcess(
+                argument_list,
+                0 if record_list else 1,
+                "".join(record_list),
+                "",
+            )
         if "fetch" in argument_list:
             return subprocess.CompletedProcess(argument_list, 0, "", "")
         if "cat-file" in argument_list and "-p" in argument_list:
             payload = (
-                f"tree {'f' * 40}\n"
-                f"parent {self.base_commit}\n"
-                f"parent {self.head_commit}\n"
+                f"tree {self.merge_commit_tree}\n"
+                f"parent {self.merge_base_commit}\n"
+                f"parent {self.merge_head_commit}\n"
                 "author Octocat <octocat@users.noreply.github.com> 0 +0000\n"
                 "committer Octocat <octocat@users.noreply.github.com> 0 +0000\n\n"
                 "Merge reviewed pull request\n"
@@ -714,7 +811,7 @@ class _GhRunner:
         if "cat-file" in argument_list:
             return subprocess.CompletedProcess(argument_list, 0, "", "")
         if "merge-tree" in argument_list:
-            return subprocess.CompletedProcess(argument_list, 0, "f" * 40 + "\n", "")
+            return subprocess.CompletedProcess(argument_list, 0, self.constructed_merge_tree + "\n", "")
         if "commit-tree" in argument_list:
             return subprocess.CompletedProcess(argument_list, 0, COMMIT_TWO + "\n", "")
         if "push" in argument_list:
@@ -744,7 +841,11 @@ class _GhRunner:
                 self.state = "MERGED"
             return subprocess.CompletedProcess(argument_list, 0, "", "")
         if "ls-remote" in argument_list:
-            requested_ref_set = set(argument_list[argument_list.index("origin") + 1 :])
+            ls_remote_index = argument_list.index("ls-remote")
+            remote_index = (
+                ls_remote_index + 2 if argument_list[ls_remote_index + 1] == "--refs" else ls_remote_index + 1
+            )
+            requested_ref_set = set(argument_list[remote_index + 1 :])
             output = "".join(
                 f"{commit}\t{ref_name}\n"
                 for ref_name, commit in sorted(self.remote_commit_by_ref_map.items())
@@ -860,11 +961,149 @@ def test_github_merge_binds_exact_reviewed_base_head_and_typed_zero_required_che
     assert f"--force-with-lease=refs/heads/linear/and-17:{COMMIT_ONE}" in push_command
     assert f"{COMMIT_TWO}:refs/heads/main" in push_command
     assert ":refs/heads/linear/and-17" in push_command
+    assert "https://github.com/antonov-andrey/example.git" in push_command
+    assert "origin" not in push_command
+    assert "credential.helper=" in push_command
+    helper_argument = next(item for item in push_command if item.startswith("credential.helper=!"))
+    assert "gh auth token --hostname github.com --user 'octocat'" in helper_argument
+    assert "credential.useHttpPath=true" in push_command
+    assert not any(item[1:3] == ["config", "--global"] for item in runner.command_list)
+    assert not any("ghp_" in argument for item in runner.command_list for argument in item)
     assert not any(item[1:3] == ["pr", "merge"] for item in runner.command_list)
     assert runner.operation_mutation_count == 1
     view_command = next(item for item in runner.command_list if item[1:3] == ["pr", "view"])
     assert "baseRefOid" in view_command[-1]
     assert "reviewDecision" not in view_command[-1]
+
+
+@pytest.mark.parametrize(
+    ("attribute_name", "value", "message"),
+    (
+        (
+            "fetch_url_list",
+            [
+                "git@github.com:antonov-andrey/example.git",
+                "https://github.com/antonov-andrey/example.git",
+            ],
+            "fetch URL set.*exactly one",
+        ),
+        (
+            "push_url_list",
+            [
+                "git@github.com:antonov-andrey/example.git",
+                "https://github.com/antonov-andrey/example.git",
+            ],
+            "push URL set.*exactly one",
+        ),
+        (
+            "push_url_list",
+            ["git@github.com:attacker/example.git"],
+            "fetch and push URLs diverge",
+        ),
+        (
+            "fetch_url_list",
+            ["ssh://git@github.com/antonov-andrey/example.git"],
+            "canonical GitHub URL",
+        ),
+        (
+            "fetch_url_list",
+            ["git@github.com:attacker/example.git"],
+            "fetch and push URLs diverge",
+        ),
+        (
+            "explicit_fetch_url_list",
+            ["https://github.com/attacker/example.git"],
+            "rewritten by Git configuration",
+        ),
+        (
+            "explicit_push_url_list",
+            ["https://github.com/attacker/example.git"],
+            "rewritten by Git configuration",
+        ),
+        (
+            "explicit_push_url_list",
+            [
+                "https://github.com/antonov-andrey/example.git",
+                "https://github.com/attacker/example.git",
+            ],
+            "multiple effective destinations",
+        ),
+    ),
+)
+def test_atomic_merge_rejects_ambiguous_or_noncanonical_git_destination_without_mutation(
+    tmp_path: Path,
+    attribute_name: str,
+    value: object,
+    message: str,
+) -> None:
+    """Every effective URL and the explicit destination are closed before push."""
+
+    runner = _GhRunner()
+    setattr(runner, attribute_name, value)
+
+    with pytest.raises(GitHubContractError, match=message):
+        GitHubPullRequestBoundary(runner).merge(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+            repository_path=tmp_path,
+        )
+
+    assert runner.operation_mutation_count == 0
+    assert not any("push" in item for item in runner.command_list)
+
+
+def test_atomic_merge_rejects_changed_gh_principal_before_git_mutation(tmp_path: Path) -> None:
+    """The credential principal cannot differ from the inspected authority principal."""
+
+    runner = _GhRunner()
+    runner.changed_execution_login = "mallory"
+    runner.changed_execution_user_id = 8
+    runner.changed_execution_node_id = "U_mallory"
+
+    with pytest.raises(GitHubContractError, match="identity changed before Git mutation"):
+        GitHubPullRequestBoundary(runner).merge(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+            repository_path=tmp_path,
+        )
+
+    assert runner.operation_mutation_count == 0
+    assert not any("push" in item for item in runner.command_list)
+
+
+def test_atomic_merge_rejects_matching_foreign_fetch_and_push_destination_without_mutation(tmp_path: Path) -> None:
+    """Two internally consistent URLs still must identify the reviewed repository."""
+
+    runner = _GhRunner()
+    runner.fetch_url_list = ["git@github.com:attacker/example.git"]
+    runner.push_url_list = ["git@github.com:attacker/example.git"]
+
+    with pytest.raises(GitHubContractError, match="destination differs"):
+        GitHubPullRequestBoundary(runner).merge(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+            repository_path=tmp_path,
+        )
+
+    assert runner.operation_mutation_count == 0
 
 
 @pytest.mark.parametrize("racing_ref", ("base", "head"))
@@ -952,7 +1191,7 @@ def test_classic_protection_accepts_typed_legitimate_zero_required_checks() -> N
     """Classic protected-ref CAS can distinguish a typed empty set from failure."""
 
     runner = _GhRunner(required_check_name_list=[])
-    snapshot, protection = GitHubPullRequestBoundary(runner).reviewed_inspect(
+    inspection = GitHubPullRequestBoundary(runner).reviewed_inspect(
         repository=RepositoryIdentity("antonov-andrey/example"),
         number=17,
         issue_identifier="AND-17",
@@ -963,12 +1202,221 @@ def test_classic_protection_accepts_typed_legitimate_zero_required_checks() -> N
         merge_method="merge",
     )
 
+    snapshot = inspection.pull_request
+    protection = inspection.branch_protection
+    assert protection is not None
     assert snapshot.required_check_list == []
     assert snapshot.required_checks_verified is True
     assert protection.protection_source_list == ["classic"]
     assert protection.required_check_name_list == []
     assert any(item[1:3] == ["pr", "view"] and item[-1] == "statusCheckRollup" for item in runner.command_list)
     assert not any(item[1:3] == ["pr", "checks"] for item in runner.command_list)
+
+
+def test_classic_protection_snapshot_captures_nonblocking_creation_and_fork_sync_conditions() -> None:
+    """The closed classic snapshot retains every known boolean even when compatible."""
+
+    runner = _GhRunner()
+    runner.block_creations = True
+    runner.allow_fork_syncing = True
+    inspection = GitHubPullRequestBoundary(runner).reviewed_inspect(
+        repository=RepositoryIdentity("antonov-andrey/example"),
+        number=17,
+        issue_identifier="AND-17",
+        base_branch="main",
+        head_branch="linear/and-17",
+        reviewed_base_commit=COMMIT_BASE,
+        reviewed_head_commit=COMMIT_ONE,
+        merge_method="merge",
+    )
+
+    protection = inspection.branch_protection
+    assert protection is not None
+    assert protection.creation_blocked is True
+    assert protection.fork_sync_allowed is True
+    assert protection.admin_enforcement_enabled is True
+    assert protection.force_push_allowed is False
+    assert protection.deletion_allowed is False
+
+
+@pytest.mark.parametrize(
+    ("attribute_name", "value", "message"),
+    (
+        (
+            "required_pull_request_reviews",
+            {
+                "url": (
+                    "https://api.github.com/repos/antonov-andrey/example/branches/main/protection/"
+                    "required_pull_request_reviews"
+                ),
+                "dismiss_stale_reviews": False,
+                "require_code_owner_reviews": False,
+                "required_approving_review_count": 1,
+                "require_last_push_approval": False,
+            },
+            "pull-request reviews",
+        ),
+        ("required_linear_history", True, "linear history"),
+        ("required_signatures", True, "signatures"),
+        ("required_conversation_resolution", True, "conversation resolution"),
+        ("branch_locked", True, "branch lock"),
+        (
+            "push_restrictions",
+            {
+                "url": "https://api.github.com/repos/antonov-andrey/example/branches/main/protection/restrictions",
+                "users_url": (
+                    "https://api.github.com/repos/antonov-andrey/example/branches/main/protection/restrictions/users"
+                ),
+                "teams_url": (
+                    "https://api.github.com/repos/antonov-andrey/example/branches/main/protection/restrictions/teams"
+                ),
+                "apps_url": (
+                    "https://api.github.com/repos/antonov-andrey/example/branches/main/protection/restrictions/apps"
+                ),
+                "users": [],
+                "teams": [],
+                "apps": [],
+            },
+            "push restrictions",
+        ),
+    ),
+)
+def test_classic_protection_rejects_each_incompatible_merge_family(
+    attribute_name: str,
+    value: object,
+    message: str,
+) -> None:
+    """Each classic gate that can reject the local merge is an explicit conflict."""
+
+    runner = _GhRunner()
+    setattr(runner, attribute_name, value)
+
+    with pytest.raises(GitHubContractError, match=f"incompatible.*{message}"):
+        GitHubPullRequestBoundary(runner).reviewed_inspect(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+        )
+
+    assert runner.operation_mutation_count == 0
+
+
+def test_classic_protection_rejects_unknown_top_level_condition() -> None:
+    """A newly introduced classic protection condition fails closed."""
+
+    runner = _GhRunner()
+    runner.classic_extra_field_by_name_map = {"future_merge_gate": {"enabled": True}}
+
+    with pytest.raises(GitHubContractError, match="unknown or missing fields"):
+        GitHubPullRequestBoundary(runner).reviewed_inspect(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+        )
+
+
+def test_classic_protection_rejects_foreign_response_identity() -> None:
+    """A typed classic response still must belong to the exact repository/base."""
+
+    runner = _GhRunner()
+    runner.classic_extra_field_by_name_map = {
+        "url": "https://api.github.com/repos/attacker/example/branches/main/protection"
+    }
+
+    with pytest.raises(GitHubContractError, match="unknown or missing fields"):
+        GitHubPullRequestBoundary(runner).reviewed_inspect(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+        )
+
+
+def test_classic_protection_rejects_unknown_nested_condition() -> None:
+    """A new nested classic condition cannot be silently discarded."""
+
+    runner = _GhRunner()
+    runner.classic_extra_field_by_name_map = {
+        "allow_force_pushes": {"enabled": False, "future_bypass_mode": "selected_users"}
+    }
+
+    with pytest.raises(GitHubContractError, match="allow_force_pushes has another shape"):
+        GitHubPullRequestBoundary(runner).reviewed_inspect(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+        )
+
+
+@pytest.mark.parametrize(
+    ("attribute_name", "value", "permission", "message"),
+    (
+        ("enforce_admins", False, "write", "bypass"),
+        ("allow_force_pushes", True, "write", "CAS safety"),
+        ("allow_deletions", True, "write", "CAS safety"),
+    ),
+)
+def test_classic_protection_rejects_each_ref_or_identity_bypass_family(
+    attribute_name: str,
+    value: bool,
+    permission: str,
+    message: str,
+) -> None:
+    """Admin enforcement, force updates and deletion are direct closed gates."""
+
+    runner = _GhRunner()
+    setattr(runner, attribute_name, value)
+    runner.execution_permission = permission
+
+    with pytest.raises(GitHubContractError, match=message):
+        GitHubPullRequestBoundary(runner).reviewed_inspect(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+        )
+
+
+@pytest.mark.parametrize("permission", ("read", "triage"))
+def test_protection_rejects_execution_identity_without_write_authority(permission: str) -> None:
+    """Repository visibility or triage is never mistaken for mutation authority."""
+
+    runner = _GhRunner()
+    runner.execution_permission = permission
+    with pytest.raises(GitHubContractError, match="write authority"):
+        GitHubPullRequestBoundary(runner).reviewed_inspect(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+        )
 
 
 def test_exact_configuration_path_creates_only_absent_minimal_cas_protection() -> None:
@@ -990,11 +1438,30 @@ def test_exact_configuration_path_creates_only_absent_minimal_cas_protection() -
     assert "allow_deletions=false" in configure_command
 
 
+def test_exact_configuration_plan_rejects_absent_protection_without_write_authority() -> None:
+    """An absent branch rule cannot hide an executing identity that cannot create it."""
+
+    script = PLUGIN_ROOT / "skills" / "workflow-configure" / "scripts" / "branch_protection.py"
+    spec = importlib.util.spec_from_file_location("linear_branch_protection_configuration_authority", script)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    runner = _GhRunner(protection_kind="none")
+    runner.execution_permission = "read"
+    snapshot = GitHubBranchProtectionBoundary(runner).inspect(
+        repository=RepositoryIdentity("antonov-andrey/example"),
+        base_branch="main",
+    )
+
+    with pytest.raises(GitHubContractError, match="write authority"):
+        module._plan_payload(snapshot, merge_method="merge")
+
+
 def test_effective_ruleset_protection_enforces_strict_merge_and_has_typed_sources() -> None:
     """Active no-bypass rulesets can prove both protected CAS and strict API merge."""
 
     runner = _GhRunner(protection_kind="ruleset", required_check_name_list=["test"])
-    _snapshot, protection = GitHubPullRequestBoundary(runner).reviewed_inspect(
+    inspection = GitHubPullRequestBoundary(runner).reviewed_inspect(
         repository=RepositoryIdentity("antonov-andrey/example"),
         number=17,
         issue_identifier="AND-17",
@@ -1005,6 +1472,8 @@ def test_effective_ruleset_protection_enforces_strict_merge_and_has_typed_source
         merge_method="squash",
     )
 
+    protection = inspection.branch_protection
+    assert protection is not None
     assert protection.protection_source_list == ["ruleset:42"]
     assert protection.ruleset_id_list == [42]
     assert protection.strict_required_status_checks is True
@@ -1017,7 +1486,7 @@ def test_effective_merge_queue_rule_is_rejected_as_deferred_later_base_mutation(
 
     runner = _GhRunner(protection_kind="ruleset", required_check_name_list=["test"])
     runner.ruleset_merge_queue = True
-    with pytest.raises(GitHubContractError, match="merge-queue.*incompatible"):
+    with pytest.raises(GitHubContractError, match="incompatible.*merge_queue"):
         GitHubPullRequestBoundary(runner).reviewed_inspect(
             repository=RepositoryIdentity("antonov-andrey/example"),
             number=17,
@@ -1028,6 +1497,106 @@ def test_effective_merge_queue_rule_is_rejected_as_deferred_later_base_mutation(
             reviewed_head_commit=COMMIT_ONE,
             merge_method="squash",
         )
+
+
+@pytest.mark.parametrize(
+    "rule_type",
+    (
+        "branch_name_pattern",
+        "code_scanning",
+        "commit_author_email_pattern",
+        "commit_message_pattern",
+        "committer_email_pattern",
+        "copilot_code_review",
+        "creation",
+        "file_extension_restriction",
+        "file_path_restriction",
+        "license_compliance_scanning",
+        "max_file_path_length",
+        "max_file_size",
+        "pull_request",
+        "required_deployments",
+        "required_linear_history",
+        "required_signatures",
+        "tag_name_pattern",
+        "update",
+        "workflows",
+    ),
+)
+def test_effective_ruleset_rejects_each_known_incompatible_rule_family(rule_type: str) -> None:
+    """Every known rule that can alter or reject the constructed merge is explicit."""
+
+    runner = _GhRunner(protection_kind="ruleset", required_check_name_list=["test"])
+    runner.ruleset_additional_rule_type_list = [rule_type]
+
+    with pytest.raises(GitHubContractError, match=f"incompatible.*{rule_type}"):
+        GitHubPullRequestBoundary(runner).reviewed_inspect(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="squash",
+        )
+
+
+def test_effective_ruleset_rejects_unknown_rule_type_fail_closed() -> None:
+    """An unimplemented provider rule cannot become an implicit allow."""
+
+    runner = _GhRunner(protection_kind="ruleset", required_check_name_list=["test"])
+    runner.ruleset_additional_rule_type_list = ["future_repository_rule"]
+
+    with pytest.raises(GitHubContractError, match="unknown rule type"):
+        GitHubPullRequestBoundary(runner).reviewed_inspect(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="squash",
+        )
+
+
+def test_effective_ruleset_rejects_unknown_compatible_rule_parameter_fail_closed() -> None:
+    """A future status-check parameter cannot silently change an allowed rule."""
+
+    runner = _GhRunner(protection_kind="ruleset", required_check_name_list=["test"])
+    runner.ruleset_required_check_extra_parameter_by_name_map = {"future_merge_gate": True}
+
+    with pytest.raises(GitHubContractError, match="required-status-check rule has another shape"):
+        GitHubPullRequestBoundary(runner).reviewed_inspect(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="squash",
+        )
+
+
+def test_workflow_configuration_cannot_plan_none_for_incompatible_protection() -> None:
+    """The canonical configuration owner reports conflict instead of action none."""
+
+    script = PLUGIN_ROOT / "skills" / "workflow-configure" / "scripts" / "branch_protection.py"
+    spec = importlib.util.spec_from_file_location("linear_branch_protection_configuration", script)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    runner = _GhRunner()
+    runner.required_signatures = True
+    snapshot = GitHubBranchProtectionBoundary(runner).inspect(
+        repository=RepositoryIdentity("antonov-andrey/example"),
+        base_branch="main",
+    )
+
+    with pytest.raises(GitHubContractError, match="incompatible.*required signatures"):
+        module._plan_payload(snapshot, merge_method="merge")
 
 
 def test_strict_ruleset_api_merge_keeps_exact_head_match() -> None:
@@ -1049,6 +1618,26 @@ def test_strict_ruleset_api_merge_keeps_exact_head_match() -> None:
     merge_command = next(item for item in runner.command_list if item[1:3] == ["pr", "merge"])
     assert "--squash" in merge_command
     assert merge_command[-2:] == ["--match-head-commit", COMMIT_ONE]
+
+
+@pytest.mark.parametrize("protection_kind", ("classic", "ruleset"))
+def test_api_merge_rejects_each_nonstrict_required_check_family(protection_kind: str) -> None:
+    """Classic and ruleset checks must both enforce the reviewed base."""
+
+    runner = _GhRunner(protection_kind=protection_kind, required_check_name_list=["test"])
+    runner.strict_required_status_checks = False
+
+    with pytest.raises(GitHubContractError, match="strict up-to-date"):
+        GitHubPullRequestBoundary(runner).reviewed_inspect(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="squash",
+        )
 
 
 def test_protected_ref_cas_rejects_nonzero_required_check_definitions() -> None:
@@ -1216,6 +1805,83 @@ def test_github_merge_retry_adopts_exact_already_merged_reviewed_identity(tmp_pa
     assert any("cat-file" in item and "-p" in item for item in runner.command_list)
 
 
+@pytest.mark.parametrize(
+    ("protection_kind", "required_check_name_list"),
+    (("none", []), ("classic", ["replacement-check"])),
+)
+def test_atomic_merge_recovery_ignores_current_protection_and_check_definition_drift(
+    tmp_path: Path,
+    protection_kind: str,
+    required_check_name_list: list[str],
+) -> None:
+    """Post-mutation recovery uses immutable result identity, not later gate state."""
+
+    runner = _GhRunner(protection_kind=protection_kind, required_check_name_list=required_check_name_list)
+    runner.state = "MERGED"
+    runner.base_commit = "d" * 40
+    runner.remote_commit_by_ref_map = {"refs/heads/main": "d" * 40}
+    runner.status_rollup_returncode = 1
+    runner.check_returncode = 1
+    runner.pr_title = "Mutable title edited after merge"
+    runner.auto_merge_request = {"enabledAt": "2026-08-07T07:00:00Z"}
+
+    merged = GitHubPullRequestBoundary(runner).merge(
+        repository=RepositoryIdentity("antonov-andrey/example"),
+        number=17,
+        issue_identifier="AND-17",
+        base_branch="main",
+        head_branch="linear/and-17",
+        reviewed_base_commit=COMMIT_BASE,
+        reviewed_head_commit=COMMIT_ONE,
+        merge_method="merge",
+        repository_path=tmp_path,
+    )
+
+    assert merged.state == "MERGED"
+    assert not any(item[1:3] == ["api", "--include"] for item in runner.command_list)
+    assert not any("/rules/branches/" in part for item in runner.command_list for part in item)
+    assert not any(item[1:3] == ["pr", "checks"] for item in runner.command_list)
+    assert not any(item[1:3] == ["pr", "view"] and item[-1] == "statusCheckRollup" for item in runner.command_list)
+
+
+@pytest.mark.parametrize(
+    ("attribute_name", "value", "message"),
+    (
+        ("merge_commit_tree", "a" * 40, "exact reviewed merge identity"),
+        ("merge_base_commit", COMMIT_ONE, "exact reviewed merge identity"),
+        ("merge_head_commit", COMMIT_BASE, "exact reviewed merge identity"),
+        ("merged_by_node_id", "U_mallory", "merged provider identity"),
+    ),
+)
+def test_atomic_merge_recovery_rejects_inexact_immutable_terminal_identity(
+    tmp_path: Path,
+    attribute_name: str,
+    value: str,
+    message: str,
+) -> None:
+    """Tree, ordered parents and terminal provider principal are all exact."""
+
+    runner = _GhRunner()
+    runner.state = "MERGED"
+    runner.remote_commit_by_ref_map = {"refs/heads/main": "d" * 40}
+    setattr(runner, attribute_name, value)
+
+    with pytest.raises(GitHubContractError, match=message):
+        GitHubPullRequestBoundary(runner).merge(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+            repository_path=tmp_path,
+        )
+
+    assert runner.operation_mutation_count == 0
+
+
 def test_atomic_merge_recovery_rejects_merged_pr_without_atomic_head_deletion(tmp_path: Path) -> None:
     """A foreign provider merge cannot masquerade as a recovered two-ref transaction."""
 
@@ -1307,13 +1973,10 @@ def test_github_merge_rejects_head_change_after_independent_review() -> None:
     assert not any(item[1:3] == ["pr", "merge"] for item in runner.command_list)
 
 
-@pytest.mark.parametrize("already_merged", (False, True))
-def test_github_merge_rejects_base_change_after_independent_review(already_merged: bool) -> None:
-    """A changed base forces Rework in both live merge and crash-recovery inspection."""
+def test_github_merge_rejects_open_base_change_after_independent_review() -> None:
+    """A changed base forces Rework while the pull request remains open."""
 
     runner = _GhRunner(base_commit=COMMIT_TWO)
-    if already_merged:
-        runner.state = "MERGED"
     with pytest.raises(GitHubContractError, match="base changed after independent review"):
         GitHubPullRequestBoundary(runner).merge(
             repository=RepositoryIdentity("antonov-andrey/example"),

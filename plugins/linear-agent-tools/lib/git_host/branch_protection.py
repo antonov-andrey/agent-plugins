@@ -3,16 +3,93 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+import json
 import re
 import subprocess
 from urllib.parse import quote
 
 from json_contract import JsonContractError, json_load_strict
 
+from git_host.authentication import GitHubAuthenticationBoundary
 from git_host.command import CommandRunner, command_run
 from git_host.model import BranchProtectionSnapshot, GitHubContractError, RepositoryIdentity, branch_name_require
 
 _HTTP_STATUS_PATTERN = re.compile(r"HTTP/\S+ (?P<status>[1-5][0-9]{2})(?: .*)?")
+_CLASSIC_PROTECTION_FIELD_SET = {
+    "allow_deletions",
+    "allow_force_pushes",
+    "allow_fork_syncing",
+    "block_creations",
+    "enforce_admins",
+    "lock_branch",
+    "required_conversation_resolution",
+    "required_linear_history",
+    "required_pull_request_reviews",
+    "required_signatures",
+    "required_status_checks",
+    "restrictions",
+    "url",
+}
+_CLASSIC_REQUIRED_FIELD_SET = _CLASSIC_PROTECTION_FIELD_SET - {
+    "required_pull_request_reviews",
+    "required_status_checks",
+    "restrictions",
+}
+_CLASSIC_ENABLED_FIELD_ALLOWED_KEY_SET_BY_NAME = {
+    "allow_deletions": {"enabled"},
+    "allow_force_pushes": {"enabled"},
+    "allow_fork_syncing": {"enabled"},
+    "block_creations": {"enabled"},
+    "enforce_admins": {"enabled", "url"},
+    "lock_branch": {"enabled"},
+    "required_conversation_resolution": {"enabled"},
+    "required_linear_history": {"enabled"},
+    "required_signatures": {"enabled", "url"},
+}
+_CLASSIC_REVIEW_FIELD_SET = {
+    "bypass_pull_request_allowances",
+    "dismiss_stale_reviews",
+    "dismissal_restrictions",
+    "require_code_owner_reviews",
+    "require_last_push_approval",
+    "required_approving_review_count",
+    "url",
+}
+_CLASSIC_RESTRICTION_FIELD_SET = {
+    "apps",
+    "apps_url",
+    "teams",
+    "teams_url",
+    "url",
+    "users",
+    "users_url",
+}
+_CLASSIC_STATUS_CHECK_FIELD_SET = {"checks", "contexts", "contexts_url", "strict", "url"}
+_KNOWN_RULESET_RULE_TYPE_SET = {
+    "branch_name_pattern",
+    "code_scanning",
+    "commit_author_email_pattern",
+    "commit_message_pattern",
+    "committer_email_pattern",
+    "copilot_code_review",
+    "creation",
+    "deletion",
+    "file_extension_restriction",
+    "file_path_restriction",
+    "license_compliance_scanning",
+    "max_file_path_length",
+    "max_file_size",
+    "merge_queue",
+    "non_fast_forward",
+    "pull_request",
+    "required_deployments",
+    "required_linear_history",
+    "required_signatures",
+    "required_status_checks",
+    "tag_name_pattern",
+    "update",
+    "workflows",
+}
 
 
 class GitHubBranchProtectionBoundary:
@@ -46,10 +123,11 @@ class GitHubBranchProtectionBoundary:
         if not isinstance(repository, RepositoryIdentity):
             raise GitHubContractError("Branch-protection repository identity is unsupported")
         branch_name_require(base_branch, label="protected base")
-        execution_login = self._execution_login_get()
-        execution_permission = self._execution_permission_get(
+        authentication = GitHubAuthenticationBoundary(self._runner)
+        principal = authentication.principal_get()
+        execution_permission = authentication.repository_permission_get(
             repository=repository,
-            execution_login=execution_login,
+            principal=principal,
         )
         classic_payload = self._classic_protection_get(repository=repository, base_branch=base_branch)
         effective_rule_list = self._effective_rule_list_get(repository=repository, base_branch=base_branch)
@@ -60,18 +138,52 @@ class GitHubBranchProtectionBoundary:
         non_fast_forward_protected = False
         deletion_protected = False
         execution_bypass = False
+        admin_enforcement_enabled = False
+        required_pull_request_gate_enabled = False
+        required_linear_history_enabled = False
+        required_signatures_enabled = False
+        required_conversation_resolution_enabled = False
+        branch_lock_enabled = False
+        push_restrictions_enabled = False
+        force_push_allowed = False
+        deletion_allowed = False
+        creation_blocked = False
+        fork_sync_allowed = False
+        ruleset_rule_type_set: set[str] = set()
 
         if classic_payload is not None:
+            _classic_shape_require(
+                classic_payload,
+                repository=repository,
+                base_branch=base_branch,
+            )
             protection_source_set.add("classic")
             enforce_admins = _enabled_field_get(classic_payload, "enforce_admins")
             allow_force_pushes = _enabled_field_get(classic_payload, "allow_force_pushes")
             allow_deletions = _enabled_field_get(classic_payload, "allow_deletions")
+            admin_enforcement_enabled = enforce_admins
+            required_pull_request_gate_enabled = _classic_review_gate_enabled(classic_payload)
+            required_linear_history_enabled = _enabled_field_get(classic_payload, "required_linear_history")
+            required_signatures_enabled = _enabled_field_get(classic_payload, "required_signatures")
+            required_conversation_resolution_enabled = _enabled_field_get(
+                classic_payload,
+                "required_conversation_resolution",
+            )
+            branch_lock_enabled = _enabled_field_get(classic_payload, "lock_branch")
+            push_restrictions_enabled = _classic_restrictions_enabled(classic_payload)
+            force_push_allowed = allow_force_pushes
+            deletion_allowed = allow_deletions
+            creation_blocked = _enabled_field_get(classic_payload, "block_creations")
+            fork_sync_allowed = _enabled_field_get(classic_payload, "allow_fork_syncing")
             classic_check_name_set, classic_strict = _classic_required_checks_get(classic_payload)
             required_check_name_set.update(classic_check_name_set)
             strict_required_status_checks = strict_required_status_checks or classic_strict
             non_fast_forward_protected = not allow_force_pushes
             deletion_protected = not allow_deletions
-            execution_bypass = execution_permission == "admin" and not enforce_admins
+            # ``enforce_admins`` is the only classic-protection proof that the
+            # authenticated account cannot exercise an administrator or custom
+            # repository-role bypass. Permission text alone cannot prove absence.
+            execution_bypass = not enforce_admins
 
         rule_by_ruleset_id_map: dict[int, list[dict[str, object]]] = {}
         for rule in effective_rule_list:
@@ -81,7 +193,12 @@ class GitHubBranchProtectionBoundary:
             rule_by_ruleset_id_map.setdefault(ruleset_id, []).append(rule)
         for ruleset_id, rule_list in sorted(rule_by_ruleset_id_map.items()):
             ruleset_payload = self._ruleset_get(repository=repository, ruleset_id=ruleset_id)
-            _ruleset_identity_require(ruleset_payload, ruleset_id=ruleset_id, effective_rule_list=rule_list)
+            full_rule_type_set = _ruleset_identity_require(
+                ruleset_payload,
+                ruleset_id=ruleset_id,
+                effective_rule_list=rule_list,
+            )
+            ruleset_rule_type_set.update(full_rule_type_set)
             protection_source_set.add(f"ruleset:{ruleset_id}")
             if _ruleset_bypass_present(ruleset_payload):
                 # The effective-rule endpoint does not expose enough membership and
@@ -90,23 +207,25 @@ class GitHubBranchProtectionBoundary:
                 execution_bypass = True
             for rule in rule_list:
                 rule_type = rule["type"]
+                if rule_type not in _KNOWN_RULESET_RULE_TYPE_SET:
+                    raise GitHubContractError("GitHub effective ruleset contains an unknown rule type")
                 if rule_type == "non_fast_forward":
+                    _parameterless_compatible_rule_require(rule)
                     non_fast_forward_protected = True
                 elif rule_type == "deletion":
+                    _parameterless_compatible_rule_require(rule)
                     deletion_protected = True
                 elif rule_type == "required_status_checks":
                     check_name_set, strict = _ruleset_required_checks_get(rule)
                     required_check_name_set.update(check_name_set)
                     strict_required_status_checks = strict_required_status_checks or strict
-                elif rule_type == "merge_queue":
-                    raise GitHubContractError(
-                        "Deferred GitHub merge-queue protection is incompatible with exact-base merge"
-                    )
 
         return BranchProtectionSnapshot(
             repository=repository,
             base_branch=base_branch,
-            execution_login=execution_login,
+            execution_login=principal.login,
+            execution_user_id=principal.user_id,
+            execution_node_id=principal.node_id,
             execution_permission=execution_permission,
             protection_source_list=sorted(protection_source_set),
             ruleset_id_list=sorted(rule_by_ruleset_id_map),
@@ -115,6 +234,18 @@ class GitHubBranchProtectionBoundary:
             non_fast_forward_protected=non_fast_forward_protected,
             deletion_protected=deletion_protected,
             execution_bypass=execution_bypass,
+            admin_enforcement_enabled=admin_enforcement_enabled,
+            required_pull_request_gate_enabled=required_pull_request_gate_enabled,
+            required_linear_history_enabled=required_linear_history_enabled,
+            required_signatures_enabled=required_signatures_enabled,
+            required_conversation_resolution_enabled=required_conversation_resolution_enabled,
+            branch_lock_enabled=branch_lock_enabled,
+            push_restrictions_enabled=push_restrictions_enabled,
+            force_push_allowed=force_push_allowed,
+            deletion_allowed=deletion_allowed,
+            creation_blocked=creation_blocked,
+            fork_sync_allowed=fork_sync_allowed,
+            ruleset_rule_type_list=sorted(ruleset_rule_type_set),
         )
 
     def configure_for_protected_ref_cas(
@@ -176,38 +307,6 @@ class GitHubBranchProtectionBoundary:
         after = self.inspect(repository=repository, base_branch=base_branch)
         after.merge_mechanism_require("merge")
         return after
-
-    def _execution_login_get(self) -> str:
-        """Read the exact authenticated GitHub login."""
-
-        payload = self._json_get(("api", "user"), label="GitHub executing identity")
-        if not isinstance(payload, dict) or not isinstance(payload.get("login"), str) or not payload["login"]:
-            raise GitHubContractError("GitHub executing identity has another shape")
-        if any(character in payload["login"] for character in ("\x00", "\n", "\r", "/")):
-            raise GitHubContractError("GitHub executing identity has another shape")
-        return payload["login"]
-
-    def _execution_permission_get(
-        self,
-        *,
-        repository: RepositoryIdentity,
-        execution_login: str,
-    ) -> str:
-        """Read exact repository permission for the executing login."""
-
-        payload = self._json_get(
-            ("api", f"repos/{repository.value}/collaborators/{quote(execution_login, safe='')}/permission"),
-            label="GitHub executing repository permission",
-        )
-        if (
-            not isinstance(payload, dict)
-            or not isinstance(payload.get("permission"), str)
-            or not isinstance(payload.get("user"), dict)
-            or not isinstance(payload["user"].get("login"), str)
-            or payload["user"]["login"].casefold() != execution_login.casefold()
-        ):
-            raise GitHubContractError("GitHub executing repository permission has another shape")
-        return payload["permission"]
 
     def _classic_protection_get(
         self,
@@ -320,13 +419,103 @@ def _included_json_get(completed_process: subprocess.CompletedProcess[str]) -> t
     return int(match.group("status")), payload
 
 
+def _classic_shape_require(
+    payload: dict[str, object],
+    *,
+    repository: RepositoryIdentity,
+    base_branch: str,
+) -> None:
+    """Require the complete known classic protection surface."""
+
+    expected_url = f"https://api.github.com/repos/{repository.value}/branches/{quote(base_branch, safe='')}/protection"
+    if (
+        not _CLASSIC_REQUIRED_FIELD_SET <= set(payload) <= _CLASSIC_PROTECTION_FIELD_SET
+        or payload["url"] != expected_url
+    ):
+        raise GitHubContractError("Classic branch-protection response has unknown or missing fields")
+
+
 def _enabled_field_get(payload: dict[str, object], field_name: str) -> bool:
     """Read one classic protection enabled object."""
 
     field = payload.get(field_name)
-    if not isinstance(field, dict) or not isinstance(field.get("enabled"), bool):
+    allowed_key_set = _CLASSIC_ENABLED_FIELD_ALLOWED_KEY_SET_BY_NAME.get(field_name)
+    if (
+        allowed_key_set is None
+        or not isinstance(field, dict)
+        or not {"enabled"} <= set(field) <= allowed_key_set
+        or not isinstance(field.get("enabled"), bool)
+        or ("url" in field and (not isinstance(field["url"], str) or not field["url"]))
+    ):
         raise GitHubContractError(f"Classic branch-protection {field_name} has another shape")
     return field["enabled"]
+
+
+def _classic_review_gate_enabled(payload: dict[str, object]) -> bool:
+    """Validate and report the complete classic pull-request gate family."""
+
+    field = payload.get("required_pull_request_reviews")
+    if field is None:
+        return False
+    if (
+        not isinstance(field, dict)
+        or not {"url"} <= set(field) <= _CLASSIC_REVIEW_FIELD_SET
+        or not isinstance(field["url"], str)
+        or not field["url"]
+    ):
+        raise GitHubContractError("Classic branch-protection required_pull_request_reviews has another shape")
+    for name in ("dismiss_stale_reviews", "require_code_owner_reviews", "require_last_push_approval"):
+        if name in field and not isinstance(field[name], bool):
+            raise GitHubContractError("Classic branch-protection required_pull_request_reviews has another shape")
+    count = field.get("required_approving_review_count")
+    if count is not None and (isinstance(count, bool) or not isinstance(count, int) or count < 0):
+        raise GitHubContractError("Classic branch-protection required_pull_request_reviews has another shape")
+    for name in ("dismissal_restrictions", "bypass_pull_request_allowances"):
+        if name in field:
+            _classic_actor_collection_require(field[name], label=name)
+    return True
+
+
+def _classic_restrictions_enabled(payload: dict[str, object]) -> bool:
+    """Validate and report the complete classic push-restriction family."""
+
+    field = payload.get("restrictions")
+    if field is None:
+        return False
+    if not isinstance(field, dict) or set(field) != _CLASSIC_RESTRICTION_FIELD_SET:
+        raise GitHubContractError("Classic branch-protection restrictions has another shape")
+    for name in ("url", "users_url", "teams_url", "apps_url"):
+        if not isinstance(field[name], str) or not field[name]:
+            raise GitHubContractError("Classic branch-protection restrictions has another shape")
+    for name in ("users", "teams", "apps"):
+        if not isinstance(field[name], list) or any(not isinstance(item, dict) for item in field[name]):
+            raise GitHubContractError("Classic branch-protection restrictions has another shape")
+    return True
+
+
+def _classic_actor_collection_require(value: object, *, label: str) -> None:
+    """Validate one nested classic review bypass or dismissal collection."""
+
+    if not isinstance(value, dict):
+        raise GitHubContractError(f"Classic branch-protection {label} has another shape")
+    if label == "dismissal_restrictions":
+        required_key_set = {"url", "users_url", "teams_url", "users", "teams"}
+        allowed_key_set = required_key_set | {"apps"}
+        url_name_list = ("url", "users_url", "teams_url")
+    else:
+        required_key_set = {"users", "teams"}
+        allowed_key_set = required_key_set | {"apps"}
+        url_name_list = ()
+    if not required_key_set <= set(value) <= allowed_key_set:
+        raise GitHubContractError(f"Classic branch-protection {label} has another shape")
+    for name in url_name_list:
+        if not isinstance(value[name], str) or not value[name]:
+            raise GitHubContractError(f"Classic branch-protection {label} has another shape")
+    for name in ("users", "teams", "apps"):
+        if name in value and (
+            not isinstance(value[name], list) or any(not isinstance(item, dict) for item in value[name])
+        ):
+            raise GitHubContractError(f"Classic branch-protection {label} has another shape")
 
 
 def _classic_required_checks_get(payload: dict[str, object]) -> tuple[set[str], bool]:
@@ -337,9 +526,14 @@ def _classic_required_checks_get(payload: dict[str, object]) -> tuple[set[str], 
         return set(), False
     if (
         not isinstance(value, dict)
+        or set(value) != _CLASSIC_STATUS_CHECK_FIELD_SET
         or not isinstance(value.get("strict"), bool)
         or not isinstance(value.get("contexts"), list)
         or not isinstance(value.get("checks"), list)
+        or not isinstance(value.get("url"), str)
+        or not value["url"]
+        or not isinstance(value.get("contexts_url"), str)
+        or not value["contexts_url"]
     ):
         raise GitHubContractError("Classic required-status-check protection has another shape")
     context_name_set: set[str] = set()
@@ -347,7 +541,7 @@ def _classic_required_checks_get(payload: dict[str, object]) -> tuple[set[str], 
         _unique_check_name_add(context_name_set, context)
     check_name_set: set[str] = set()
     for check in value["checks"]:
-        if not isinstance(check, dict) or set(check) < {"context", "app_id"}:
+        if not isinstance(check, dict) or set(check) != {"context", "app_id"}:
             raise GitHubContractError("Classic required-status-check definition has another shape")
         app_id = check["app_id"]
         if app_id is not None and (isinstance(app_id, bool) or not isinstance(app_id, int) or app_id < 1):
@@ -364,7 +558,7 @@ def _ruleset_identity_require(
     *,
     ruleset_id: int,
     effective_rule_list: list[dict[str, object]],
-) -> None:
+) -> set[str]:
     """Bind one full active ruleset to the effective-rule source identity."""
 
     first_rule = effective_rule_list[0]
@@ -385,12 +579,49 @@ def _ruleset_identity_require(
     ):
         raise GitHubContractError("GitHub effective rules disagree on ruleset source")
     full_rule_type_list: list[str] = []
+    full_rule_definition_list: list[str] = []
     for rule in payload["rules"]:
         if not isinstance(rule, dict) or not isinstance(rule.get("type"), str) or not rule["type"]:
             raise GitHubContractError("GitHub full ruleset rule has another shape")
+        if rule["type"] not in _KNOWN_RULESET_RULE_TYPE_SET:
+            raise GitHubContractError("GitHub full ruleset contains an unknown rule type")
         full_rule_type_list.append(rule["type"])
-    if any(rule["type"] not in full_rule_type_list for rule in effective_rule_list):
+        full_rule_definition_list.append(_rule_definition_json(rule))
+    if len(full_rule_type_list) != len(set(full_rule_type_list)):
+        raise GitHubContractError("GitHub full ruleset repeats one rule type")
+    effective_rule_definition_list = [_effective_rule_definition_json(rule) for rule in effective_rule_list]
+    if sorted(full_rule_definition_list) != sorted(effective_rule_definition_list):
         raise GitHubContractError("GitHub effective rules differ from their full ruleset")
+    return set(full_rule_type_list)
+
+
+def _rule_definition_json(rule: dict[str, object]) -> str:
+    """Return one deterministic full ruleset rule definition."""
+
+    return json.dumps(rule, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+
+
+def _effective_rule_definition_json(rule: dict[str, object]) -> str:
+    """Strip only effective-source metadata from one exact rule definition."""
+
+    return _rule_definition_json(_effective_rule_definition_get(rule))
+
+
+def _effective_rule_definition_get(rule: dict[str, object]) -> dict[str, object]:
+    """Return one rule without only the known effective-source metadata."""
+
+    return {
+        name: value
+        for name, value in rule.items()
+        if name not in {"ruleset_id", "ruleset_source", "ruleset_source_type"}
+    }
+
+
+def _parameterless_compatible_rule_require(rule: dict[str, object]) -> None:
+    """Require an exact parameterless shape for an allowed ref-safety rule."""
+
+    if set(_effective_rule_definition_get(rule)) != {"type"}:
+        raise GitHubContractError("Compatible GitHub ruleset rule has another shape")
 
 
 def _ruleset_bypass_present(payload: dict[str, object]) -> bool:
@@ -402,7 +633,7 @@ def _ruleset_bypass_present(payload: dict[str, object]) -> bool:
     for actor in actor_list:
         if (
             not isinstance(actor, dict)
-            or set(actor) < {"actor_id", "actor_type", "bypass_mode"}
+            or set(actor) != {"actor_id", "actor_type", "bypass_mode"}
             or actor["actor_type"]
             not in {"Integration", "OrganizationAdmin", "RepositoryRole", "Team", "DeployKey", "User"}
             or actor["bypass_mode"] not in {"always", "pull_request", "exempt"}
@@ -418,16 +649,22 @@ def _ruleset_bypass_present(payload: dict[str, object]) -> bool:
 def _ruleset_required_checks_get(rule: dict[str, object]) -> tuple[set[str], bool]:
     """Read exact required-check definitions from one effective ruleset rule."""
 
-    parameters = rule.get("parameters")
+    definition = _effective_rule_definition_get(rule)
+    parameters = definition.get("parameters")
     if (
-        not isinstance(parameters, dict)
+        set(definition) != {"type", "parameters"}
+        or not isinstance(parameters, dict)
+        or not {"required_status_checks", "strict_required_status_checks_policy"}
+        <= set(parameters)
+        <= {"do_not_enforce_on_create", "required_status_checks", "strict_required_status_checks_policy"}
         or not isinstance(parameters.get("strict_required_status_checks_policy"), bool)
         or not isinstance(parameters.get("required_status_checks"), list)
+        or ("do_not_enforce_on_create" in parameters and not isinstance(parameters["do_not_enforce_on_create"], bool))
     ):
         raise GitHubContractError("Ruleset required-status-check rule has another shape")
     name_set: set[str] = set()
     for check in parameters["required_status_checks"]:
-        if not isinstance(check, dict) or set(check) < {"context", "integration_id"}:
+        if not isinstance(check, dict) or set(check) != {"context", "integration_id"}:
             raise GitHubContractError("Ruleset required-status-check definition has another shape")
         integration_id = check["integration_id"]
         if integration_id is not None and (

@@ -55,10 +55,11 @@ def main(argv: list[str] | None = None) -> int:
     boundary = GitHubPullRequestBoundary()
     try:
         repository = RepositoryIdentity(args.repository)
+        protection = None
         if args.command == "merge":
             if args.merge_method == "merge" and args.repository_path is None:
                 raise GitHubContractError("Atomic merge requires --repository-path")
-            boundary.merge(
+            snapshot = boundary.merge(
                 repository=repository,
                 number=args.number,
                 issue_identifier=args.issue_identifier,
@@ -69,24 +70,30 @@ def main(argv: list[str] | None = None) -> int:
                 merge_method=args.merge_method,
                 repository_path=args.repository_path,
             )
-        snapshot, protection = boundary.reviewed_inspect(
-            repository=repository,
-            number=args.number,
-            issue_identifier=args.issue_identifier,
-            base_branch=args.base_branch,
-            head_branch=args.head_branch,
-            reviewed_base_commit=args.reviewed_base_commit,
-            reviewed_head_commit=args.reviewed_head_commit,
-            merge_method=args.merge_method,
-        )
+        else:
+            inspection = boundary.reviewed_inspect(
+                repository=repository,
+                number=args.number,
+                issue_identifier=args.issue_identifier,
+                base_branch=args.base_branch,
+                head_branch=args.head_branch,
+                reviewed_base_commit=args.reviewed_base_commit,
+                reviewed_head_commit=args.reviewed_head_commit,
+                merge_method=args.merge_method,
+            )
+            snapshot = inspection.pull_request
+            protection = inspection.branch_protection
     except GitHubContractError as error:
         print(str(error), file=sys.stderr)
         return 2
     payload = asdict(snapshot)
     payload["repository"] = snapshot.repository.value
     payload["merged_at"] = snapshot.merged_at.isoformat().replace("+00:00", "Z") if snapshot.merged_at else ""
-    payload["branch_protection"] = asdict(protection)
-    payload["branch_protection"]["repository"] = protection.repository.value
+    if protection is None:
+        payload["branch_protection"] = None
+    else:
+        payload["branch_protection"] = asdict(protection)
+        payload["branch_protection"]["repository"] = protection.repository.value
     print(json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True))
     return 0
 

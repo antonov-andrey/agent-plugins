@@ -10,11 +10,13 @@ import subprocess
 from json_contract import JsonContractError, json_load_strict
 
 from git_host.atomic_merge import GitHubAtomicMergeBoundary
+from git_host.authentication import GitHubAuthenticationBoundary, GitHubPrincipal
 from git_host.branch_protection import GitHubBranchProtectionBoundary
 from git_host.command import CommandRunner, command_run
 from git_host.model import (
     BranchProtectionSnapshot,
     GitHubContractError,
+    PullRequestMergeInspection,
     PullRequestSnapshot,
     RepositoryIdentity,
     RequiredCheck,
@@ -198,7 +200,8 @@ class GitHubPullRequestBoundary:
                 "--json",
                 (
                     "number,url,title,state,isDraft,autoMergeRequest,baseRefName,baseRefOid,headRefName,headRefOid,"
-                    "headRepository,headRepositoryOwner,isCrossRepository,mergeStateStatus,mergedAt,mergeCommit"
+                    "headRepository,headRepositoryOwner,isCrossRepository,mergeStateStatus,mergedAt,mergeCommit,"
+                    "mergedBy"
                 ),
             )
         )
@@ -227,7 +230,7 @@ class GitHubPullRequestBoundary:
         reviewed_base_commit: str,
         reviewed_head_commit: str,
         merge_method: str,
-    ) -> tuple[PullRequestSnapshot, BranchProtectionSnapshot]:
+    ) -> PullRequestMergeInspection:
         """Read exact reviewed PR, effective protection and required check results.
 
         Args:
@@ -241,12 +244,23 @@ class GitHubPullRequestBoundary:
             merge_method: Declared repository merge strategy.
 
         Returns:
-            Current PR and executing-identity-bound protection snapshots.
+            Terminal PR alone, or open PR plus executing-identity-bound protection.
         """
 
         snapshot = self.inspect(repository=repository, number=number)
-        snapshot.integration_identity_require(issue_identifier)
         snapshot.target_require(base_branch=base_branch, head_branch=head_branch)
+        snapshot.task_branch_identity_require(issue_identifier)
+        if snapshot.state == "MERGED":
+            snapshot.merged_result_require(
+                reviewed_base_commit=reviewed_base_commit,
+                reviewed_head_commit=reviewed_head_commit,
+            )
+            return PullRequestMergeInspection(pull_request=snapshot, branch_protection=None)
+        snapshot.integration_identity_require(issue_identifier)
+        snapshot.reviewed_open_identity_require(
+            reviewed_base_commit=reviewed_base_commit,
+            reviewed_head_commit=reviewed_head_commit,
+        )
         protection = self._branch_protection.inspect(repository=repository, base_branch=base_branch)
         protection.merge_mechanism_require(merge_method)
         required_check_list = self._required_check_list_get(
@@ -260,17 +274,11 @@ class GitHubPullRequestBoundary:
             required_check_list=required_check_list,
             required_checks_verified=True,
         )
-        if snapshot.state == "MERGED":
-            snapshot.merged_result_require(
-                reviewed_base_commit=reviewed_base_commit,
-                reviewed_head_commit=reviewed_head_commit,
-            )
-        else:
-            snapshot.merge_preconditions_require(
-                reviewed_base_commit=reviewed_base_commit,
-                reviewed_head_commit=reviewed_head_commit,
-            )
-        return snapshot, protection
+        snapshot.merge_preconditions_require(
+            reviewed_base_commit=reviewed_base_commit,
+            reviewed_head_commit=reviewed_head_commit,
+        )
+        return PullRequestMergeInspection(pull_request=snapshot, branch_protection=protection)
 
     def merge(
         self,
@@ -302,7 +310,7 @@ class GitHubPullRequestBoundary:
             Merged PR snapshot.
         """
 
-        before, protection = self.reviewed_inspect(
+        inspection = self.reviewed_inspect(
             repository=repository,
             number=number,
             issue_identifier=issue_identifier,
@@ -312,6 +320,7 @@ class GitHubPullRequestBoundary:
             reviewed_head_commit=reviewed_head_commit,
             merge_method=merge_method,
         )
+        before = inspection.pull_request
         if before.state == "MERGED":
             if merge_method == "merge":
                 if repository_path is None:
@@ -320,8 +329,13 @@ class GitHubPullRequestBoundary:
                     repository=repository,
                     repository_path=repository_path,
                     snapshot=before,
+                    reviewed_base_commit=reviewed_base_commit,
+                    reviewed_head_commit=reviewed_head_commit,
                 )
             return before
+        protection = inspection.branch_protection
+        if protection is None:
+            raise GitHubContractError("Open pull-request merge omitted applicable branch protection")
         expected_merge_commit = ""
         if merge_method == "merge":
             if repository_path is None:
@@ -331,8 +345,17 @@ class GitHubPullRequestBoundary:
                 repository_path=repository_path,
                 snapshot=before,
                 execution_login=protection.execution_login,
+                execution_user_id=protection.execution_user_id,
+                execution_node_id=protection.execution_node_id,
             )
         else:
+            GitHubAuthenticationBoundary(self._runner).principal_require(
+                GitHubPrincipal(
+                    login=protection.execution_login,
+                    user_id=protection.execution_user_id,
+                    node_id=protection.execution_node_id,
+                )
+            )
             self._checked(
                 (
                     "pr",
@@ -345,24 +368,18 @@ class GitHubPullRequestBoundary:
                     reviewed_head_commit,
                 )
             )
-        if expected_merge_commit:
-            after_identity = self.inspect(repository=repository, number=number)
-            after_identity.integration_identity_require(issue_identifier)
-            after_identity.target_require(base_branch=base_branch, head_branch=head_branch)
-            if after_identity.state != "MERGED":
-                raise GitHubContractError(
-                    "Atomic Git transaction completed but GitHub merge readback is not terminal; retry exact recovery"
-                )
-        after, _after_protection = self.reviewed_inspect(
-            repository=repository,
-            number=number,
-            issue_identifier=issue_identifier,
-            base_branch=base_branch,
-            head_branch=head_branch,
+        after = self.inspect(repository=repository, number=number)
+        after.target_require(base_branch=base_branch, head_branch=head_branch)
+        after.task_branch_identity_require(issue_identifier)
+        if expected_merge_commit and after.state != "MERGED":
+            raise GitHubContractError(
+                "Atomic Git transaction completed but GitHub merge readback is not terminal; retry exact recovery"
+            )
+        after.merged_result_require(
             reviewed_base_commit=reviewed_base_commit,
             reviewed_head_commit=reviewed_head_commit,
-            merge_method=merge_method,
         )
+        after.merged_by_require(login=protection.execution_login, node_id=protection.execution_node_id)
         if expected_merge_commit and after.merge_commit != expected_merge_commit:
             raise GitHubContractError("GitHub merged result differs from the atomic Git transaction")
         return after

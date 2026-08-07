@@ -47,6 +47,7 @@ def _snapshot_payload(snapshot: BranchProtectionSnapshot) -> dict[str, object]:
 def _plan_payload(snapshot: BranchProtectionSnapshot, *, merge_method: str) -> dict[str, object]:
     """Return the only allowed absent-or-ready configuration action."""
 
+    snapshot.mutation_authority_require()
     if snapshot.protection_source_list:
         snapshot.merge_mechanism_require(merge_method)
         action = "none"

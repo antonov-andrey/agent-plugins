@@ -48,6 +48,7 @@ from linear_boundary.transport import (
     LinearGraphQLTransport,
     LinearResponseError,
     LinearRetryPolicy,
+    LinearTransportError,
 )
 
 WORKSPACE_ID = "11111111-1111-4111-8111-111111111111"
@@ -243,6 +244,61 @@ def _status_node(item: StatusDefinition, index: int) -> dict[str, object]:
         "description": item.description,
         "position": item.position,
     }
+
+
+def _exact_status_node(item: StatusDefinition) -> dict[str, object]:
+    """Render one status with its already approved external identity."""
+
+    return {
+        "id": item.id,
+        "name": item.name,
+        "type": item.category,
+        "color": item.color,
+        "description": item.description,
+        "position": item.position,
+    }
+
+
+def _workflow_status_update_response(item: StatusDefinition) -> dict[str, object]:
+    """Return one full successful in-place status mutation response."""
+
+    return {
+        "workflowStateUpdate": {
+            "success": True,
+            "workflowState": _exact_status_node(item),
+        }
+    }
+
+
+def _legacy_issue_status_list_get() -> list[StatusDefinition]:
+    """Return the exact pre-migration Review and Merging definitions."""
+
+    return [
+        (
+            ISSUE_STATUS_LEGACY_REVIEW
+            if item.name == "Review"
+            else ISSUE_STATUS_LEGACY_MERGING if item.name == "Merging" else item
+        )
+        for item in ISSUE_STATUS_DESIRED
+    ]
+
+
+def _legacy_status_approved_plan_get() -> ConfigurationPlan:
+    """Build the deterministic approved in-place lifecycle migration plan."""
+
+    transport = _ScriptedTransport(
+        [
+            _workflow_response(_legacy_issue_status_list_get()),
+            _git_status_automation_response([]),
+            _project_status_response(PROJECT_STATUS_DESIRED),
+        ]
+    )
+    return LinearWorkflowConfigurationGraphQL(transport, WorkflowConfigurationReconciler()).plan(
+        expected_workspace_id=WORKSPACE_ID,
+        expected_viewer_id=VIEWER_ID,
+        expected_team_id=TEAM_ID,
+        label_list=list(_existing_label(item, index) for index, item in enumerate(LABEL_DESIRED, 1)),
+    )
 
 
 def _workflow_response(
@@ -1517,18 +1573,8 @@ def test_graphql_configuration_updates_legacy_lifecycle_in_place_and_reads_back_
             _workflow_response(legacy_issue_status_list),
             _git_status_automation_response([]),
             _project_status_response(PROJECT_STATUS_DESIRED),
-            {
-                "workflowStateUpdate": {
-                    "success": True,
-                    "workflowState": {"id": review_update.id},
-                }
-            },
-            {
-                "workflowStateUpdate": {
-                    "success": True,
-                    "workflowState": {"id": merging_update.id},
-                }
-            },
+            _workflow_status_update_response(review_update),
+            _workflow_status_update_response(merging_update),
             _workflow_response(ISSUE_STATUS_DESIRED),
             _git_status_automation_response([]),
             _project_status_response(PROJECT_STATUS_DESIRED),
@@ -1555,6 +1601,107 @@ def test_graphql_configuration_updates_legacy_lifecycle_in_place_and_reads_back_
         "Independently reviewed pull request heads are being merged"
     )
     assert not any(item["operation_name"] == "LinearAgentWorkflowStateCreate" for item in transport.call_list)
+
+
+@pytest.mark.parametrize(
+    ("field_name", "replacement", "remove_field", "message"),
+    (
+        ("position", None, True, "response has another shape"),
+        ("id", "90000000-0000-4000-8000-000000000001", False, "full approved definition"),
+        ("name", "Human Review", False, "full approved definition"),
+        ("type", "completed", False, "full approved definition"),
+        ("color", "#FFFFFF", False, "full approved definition"),
+        ("description", "Waiting for human approval", False, "full approved definition"),
+        ("position", 999.0, False, "full approved definition"),
+    ),
+)
+def test_graphql_status_migration_rejects_partial_or_altered_mutation_response(
+    field_name: str,
+    replacement: object,
+    remove_field: bool,
+    message: str,
+) -> None:
+    """Mutation success is valid only with the complete approved status definition."""
+
+    approved = _legacy_status_approved_plan_get()
+    review_update = approved.issue_status_update_list[0]
+    response_node = _exact_status_node(review_update)
+    if remove_field:
+        del response_node[field_name]
+    else:
+        response_node[field_name] = replacement
+    transport = _ScriptedTransport(
+        [
+            _workflow_response(_legacy_issue_status_list_get()),
+            _git_status_automation_response([]),
+            _project_status_response(PROJECT_STATUS_DESIRED),
+            {"workflowStateUpdate": {"success": True, "workflowState": response_node}},
+        ]
+    )
+
+    with pytest.raises(LinearTransportError, match=message):
+        LinearWorkflowConfigurationGraphQL(
+            transport,
+            WorkflowConfigurationReconciler(),
+        ).approved_configuration_apply(
+            expected_workspace_id=WORKSPACE_ID,
+            expected_viewer_id=VIEWER_ID,
+            expected_team_id=TEAM_ID,
+            approved_plan=approved,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field_name", "replacement"),
+    (
+        ("id", "90000000-0000-4000-8000-000000000002"),
+        ("name", "Human Review"),
+        ("type", "completed"),
+        ("color", "#FFFFFF"),
+        ("description", "Waiting for human approval"),
+        ("position", 999.0),
+    ),
+)
+def test_graphql_status_migration_rejects_altered_final_readback(
+    field_name: str,
+    replacement: object,
+) -> None:
+    """Final readback preserves the legacy ID and every approved definition field."""
+
+    approved = _legacy_status_approved_plan_get()
+    review_update, merging_update = approved.issue_status_update_list
+    final_workflow_response = _workflow_response(ISSUE_STATUS_DESIRED)
+    team = final_workflow_response["team"]
+    assert isinstance(team, dict)
+    states = team["states"]
+    assert isinstance(states, dict)
+    node_list = states["nodes"]
+    assert isinstance(node_list, list)
+    review_node = next(item for item in node_list if isinstance(item, dict) and item.get("name") == "Review")
+    review_node[field_name] = replacement
+    transport = _ScriptedTransport(
+        [
+            _workflow_response(_legacy_issue_status_list_get()),
+            _git_status_automation_response([]),
+            _project_status_response(PROJECT_STATUS_DESIRED),
+            _workflow_status_update_response(review_update),
+            _workflow_status_update_response(merging_update),
+            final_workflow_response,
+            _git_status_automation_response([]),
+            _project_status_response(PROJECT_STATUS_DESIRED),
+        ]
+    )
+
+    with pytest.raises(LinearContractError, match="preserved approved identity"):
+        LinearWorkflowConfigurationGraphQL(
+            transport,
+            WorkflowConfigurationReconciler(),
+        ).approved_configuration_apply(
+            expected_workspace_id=WORKSPACE_ID,
+            expected_viewer_id=VIEWER_ID,
+            expected_team_id=TEAM_ID,
+            approved_plan=approved,
+        )
 
 
 def test_graphql_configuration_deletes_every_exact_git_status_automation_before_readback() -> None:

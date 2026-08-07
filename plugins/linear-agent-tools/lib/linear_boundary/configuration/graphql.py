@@ -364,8 +364,12 @@ class LinearWorkflowConfigurationGraphQL:
         current_graphql_plan.subset_require(approved_graphql_plan)
         for automation in current_plan.git_status_automation_delete_list:
             self._delete_once(automation.id)
+        approved_issue_status_update_by_id_map = {item.id: item for item in approved_plan.issue_status_update_list}
         for status in current_plan.issue_status_update_list:
-            self._workflow_state_update_once(status)
+            approved_status = approved_issue_status_update_by_id_map.get(status.id)
+            if approved_status != status:
+                raise LinearContractError("Current status migration differs from the exact approved definition")
+            self._workflow_state_update_once(approved_status)
         approved_issue_status_by_name_map = {item.name: item for item in approved_plan.issue_status_create_list}
         for status in current_plan.issue_status_create_list:
             approved_status = approved_issue_status_by_name_map[status.name]
@@ -407,6 +411,10 @@ class LinearWorkflowConfigurationGraphQL:
             expected_workspace_id=expected_workspace_id,
             expected_viewer_id=expected_viewer_id,
             expected_team_id=expected_team_id,
+        )
+        _status_update_readback_require(
+            approved_status_list=approved_plan.issue_status_update_list,
+            current_status_list=current.issue_status_list,
         )
         readback = self._reconciler.plan_get(
             WorkflowConfigurationSnapshot(
@@ -463,9 +471,15 @@ class LinearWorkflowConfigurationGraphQL:
             repeat_safe=False,
         )
         result = _object_get(data, "workflowStateUpdate")
+        if set(result) != {"success", "workflowState"}:
+            raise LinearTransportError("Linear workflow status update response has another shape")
         workflow_state = _object_get(result, "workflowState")
-        if result.get("success") is not True or workflow_state.get("id") != status.id:
-            raise LinearTransportError("Linear workflow status update did not preserve the approved identity")
+        try:
+            returned_status = StatusDefinition.from_graphql_node(workflow_state)
+        except LinearContractError as error:
+            raise LinearTransportError("Linear workflow status update response has another shape") from error
+        if result["success"] is not True or returned_status != status:
+            raise LinearTransportError("Linear workflow status update differs from the full approved definition")
 
     def _create_once(
         self,
@@ -510,6 +524,24 @@ def _object_get(payload: dict[str, object], name: str) -> dict[str, object]:
     if not isinstance(value, dict):
         raise LinearContractError(f"Linear field {name} must be an object")
     return value
+
+
+def _status_update_readback_require(
+    *,
+    approved_status_list: list[StatusDefinition],
+    current_status_list: list[StatusDefinition],
+) -> None:
+    """Require every in-place migration at its preserved ID and exact definition."""
+
+    current_status_list_by_id_map: dict[str, list[StatusDefinition]] = {}
+    for status in current_status_list:
+        current_status_list_by_id_map.setdefault(status.id, []).append(status)
+    for approved_status in approved_status_list:
+        matching_status_list = current_status_list_by_id_map.get(approved_status.id, [])
+        if matching_status_list != [approved_status]:
+            raise LinearContractError(
+                f"Linear workflow status {approved_status.name} read-back differs from its preserved approved identity"
+            )
 
 
 def _text_get(payload: dict[str, object], name: str) -> str:
