@@ -5,7 +5,6 @@ from __future__ import annotations
 from base64 import b64encode
 from collections.abc import Mapping, Sequence
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -23,8 +22,8 @@ if str(LIBRARY_ROOT) not in sys.path:
     sys.path.insert(0, str(LIBRARY_ROOT))
 
 from git_host.authentication import GitHubAuthenticationBoundary
-from git_host.command import command_run
-from git_host.model import GitHubContractError
+from git_host.command import CommandRunner, command_closed_run, command_run
+from git_host.transport_runtime import GitTransportRuntime, git_transport_runtime_get
 
 APPROVED_USERNAME = "approved-principal"
 APPROVED_PASSWORD = "approved-invocation-helper-password"
@@ -42,18 +41,18 @@ class AuthenticatedGitHttpBackendServer(ThreadingHTTPServer):
         server_address: tuple[str, int],
         *,
         project_root: Path,
-        git_executable: Path,
+        git_runtime: GitTransportRuntime,
     ) -> None:
         """Bind the test backend and its exact accepted principal.
 
         Args:
             server_address: Exact loopback host and ephemeral port.
             project_root: Parent containing the served bare repository.
-            git_executable: Real behaviorally supported Git executable.
+            git_runtime: Exact provider-owned Git transport runtime.
         """
 
         self.project_root = project_root
-        self.git_executable = git_executable
+        self.git_runtime = git_runtime
         credential = b64encode(f"{APPROVED_USERNAME}:{APPROVED_PASSWORD}".encode("utf-8")).decode("ascii")
         self.expected_authorization = f"Basic {credential}"
         self.request_list_by_service: dict[str, list[tuple[str, str | None]]] = {
@@ -127,7 +126,7 @@ class AuthenticatedGitHttpBackendRequestHandler(BaseHTTPRequestHandler):
             "SERVER_PROTOCOL": self.request_version,
         }
         completed_process = subprocess.run(
-            [str(server.git_executable), "http-backend"],
+            server.git_runtime.command_argument_list_get(["http-backend"]),
             check=False,
             capture_output=True,
             env=environment_by_name_map,
@@ -227,7 +226,7 @@ def _closed_test_environment_get() -> dict[str, str]:
 
 
 def _standard_home_overlay_git_run(
-    git_executable: Path,
+    git_runtime: GitTransportRuntime,
     argument_list: Sequence[str],
     *,
     standard_home_netrc_path: Path,
@@ -236,7 +235,7 @@ def _standard_home_overlay_git_run(
     """Run Git with only hostile netrc bytes overlaid on the actual standard home.
 
     Args:
-        git_executable: Exact Git executable under test.
+        git_runtime: Exact provider-owned Git transport runtime under test.
         argument_list: Git arguments after the executable.
         standard_home_netrc_path: Fixture mounted at the standard ``.netrc`` path.
         environment_by_name_map: Optional exact environment from the production boundary.
@@ -260,12 +259,12 @@ def _standard_home_overlay_git_run(
         (upper / ".netrc").chmod(0o600)
         assert list(upper.iterdir()) == [upper / ".netrc"]
         namespace_script = (
-            "upper=$1; work=$2; merged=$3; git_executable=$4; shift 4; "
+            "upper=$1; work=$2; merged=$3; git_executable=$4; git_exec_path=$5; shift 5; "
             'mount -t overlay overlay -o "lowerdir=/home/andrey,upperdir=$upper,workdir=$work" "$merged" '
             "|| exit 125; "
             'mount --bind "$merged" /home/andrey || exit 125; '
             "test -e /home/andrey/.codex || exit 125; "
-            'exec "$git_executable" "$@"'
+            'exec "$git_executable" "--exec-path=$git_exec_path" "$@"'
         )
         return subprocess.run(
             [
@@ -281,7 +280,8 @@ def _standard_home_overlay_git_run(
                 str(upper),
                 str(work),
                 str(merged),
-                str(git_executable),
+                str(git_runtime.executable),
+                str(git_runtime.exec_path),
                 *argument_list,
             ],
             check=False,
@@ -291,32 +291,38 @@ def _standard_home_overlay_git_run(
         )
 
 
-def _behaviorally_supported_git_get(standard_home_netrc_path: Path) -> Path:
-    """Return a real Git executable only after the production behavior probe passes.
+def _production_git_runtime_get(standard_home_netrc_path: Path) -> GitTransportRuntime:
+    """Return the exact installed runtime after proving the host isolation primitive.
 
     Args:
         standard_home_netrc_path: Hostile fixture mounted at the standard ``.netrc`` path.
 
     Returns:
-        Behaviorally supported Git executable.
+        Exact provider-owned Git transport runtime.
     """
 
-    configured_git_executable = os.environ.get("LINEAR_AGENT_TEST_PROACTIVE_AUTH_GIT")
-    git_executable = Path(configured_git_executable or "/usr/bin/git")
-    if not git_executable.is_absolute() or not git_executable.is_file():
-        pytest.fail("LINEAR_AGENT_TEST_PROACTIVE_AUTH_GIT must name one absolute executable file")
+    git_runtime = git_transport_runtime_get()
     if not Path("/usr/bin/unshare").is_file():
-        pytest.skip("real transport test requires the unshare isolation primitive")
+        pytest.fail("real transport test requires the unshare isolation primitive")
     version_process = _standard_home_overlay_git_run(
-        git_executable,
+        git_runtime,
         ["--version"],
         standard_home_netrc_path=standard_home_netrc_path,
     )
     if version_process.returncode != 0 and (
         version_process.returncode == 125 or "Operation not permitted" in version_process.stderr
     ):
-        pytest.skip("real transport test requires an unprivileged user and mount namespace with overlayfs")
+        pytest.fail("real transport test requires an unprivileged user and mount namespace with overlayfs")
     assert version_process.returncode == 0, version_process.stderr
+    assert version_process.stdout == "git version 2.54.0\n"
+    return git_runtime
+
+
+def _standard_home_overlay_runner_get(
+    git_runtime: GitTransportRuntime,
+    standard_home_netrc_path: Path,
+) -> CommandRunner:
+    """Return one runner that applies the literal hostile standard-home overlay."""
 
     def runner(
         argument_list: Sequence[str],
@@ -338,23 +344,30 @@ def _behaviorally_supported_git_get(standard_home_netrc_path: Path) -> Path:
         assert argument_list[0] == "git"
         assert input_text is None
         return _standard_home_overlay_git_run(
-            git_executable,
+            git_runtime,
             argument_list[1:],
             standard_home_netrc_path=standard_home_netrc_path,
             environment_by_name_map=environment_by_name_map,
         )
 
-    try:
-        GitHubAuthenticationBoundary(runner).git_http_proactive_authentication_require()
-    except GitHubContractError as error:
-        if configured_git_executable is not None:
-            pytest.fail(f"configured real transport Git failed the production behavior probe: {error}")
-        pytest.skip("real transport test requires Git with behaviorally supported http.proactiveAuth=basic")
-    return git_executable
+    return runner
+
+
+def _authenticated_git_run(
+    git_runtime: GitTransportRuntime,
+    argument_list: Sequence[str],
+    *,
+    standard_home_netrc_path: Path,
+) -> subprocess.CompletedProcess[str]:
+    """Run one network command immediately after the exact production probe."""
+
+    runner = _standard_home_overlay_runner_get(git_runtime, standard_home_netrc_path)
+    GitHubAuthenticationBoundary(runner).git_http_proactive_authentication_require()
+    return command_closed_run(runner, ["git", *argument_list])
 
 
 def _git_checked(
-    git_executable: Path,
+    git_runtime: GitTransportRuntime,
     argument_list: Sequence[str],
     *,
     home: Path,
@@ -362,7 +375,7 @@ def _git_checked(
     """Run one successful fixture Git command outside the authentication boundary.
 
     Args:
-        git_executable: Exact Git executable used by the HTTP client and backend.
+        git_runtime: Exact Git runtime used by the HTTP client and backend.
         argument_list: Arguments after the executable.
         home: Isolated fixture-only home.
 
@@ -373,19 +386,19 @@ def _git_checked(
     environment = _closed_test_environment_get()
     environment["HOME"] = str(home)
     completed_process = command_run(
-        [str(git_executable), *argument_list],
+        git_runtime.command_argument_list_get(list(argument_list)),
         environment_by_name_map=environment,
     )
     assert completed_process.returncode == 0, completed_process.stderr
     return completed_process.stdout.strip()
 
 
-def _repository_create(root: Path, git_executable: Path) -> tuple[Path, str, str]:
+def _repository_create(root: Path, git_runtime: GitTransportRuntime) -> tuple[Path, str, str]:
     """Create one bare repository with exact base and reviewed-head refs.
 
     Args:
         root: Empty test root.
-        git_executable: Exact real Git executable.
+        git_runtime: Exact real Git runtime.
 
     Returns:
         Bare repository path, base commit and reviewed-head commit.
@@ -399,11 +412,11 @@ def _repository_create(root: Path, git_executable: Path) -> tuple[Path, str, str
     home.mkdir()
     source.mkdir()
     project_root.mkdir()
-    _git_checked(git_executable, ["init", "--initial-branch=main", str(source)], home=home)
+    _git_checked(git_runtime, ["init", "--initial-branch=main", str(source)], home=home)
     (source / "base.txt").write_text("base\n", encoding="utf-8")
-    _git_checked(git_executable, ["-C", str(source), "add", "base.txt"], home=home)
+    _git_checked(git_runtime, ["-C", str(source), "add", "base.txt"], home=home)
     _git_checked(
-        git_executable,
+        git_runtime,
         [
             "-C",
             str(source),
@@ -417,12 +430,12 @@ def _repository_create(root: Path, git_executable: Path) -> tuple[Path, str, str
         ],
         home=home,
     )
-    base_commit = _git_checked(git_executable, ["-C", str(source), "rev-parse", "HEAD"], home=home)
-    _git_checked(git_executable, ["-C", str(source), "checkout", "-b", "linear/and-17"], home=home)
+    base_commit = _git_checked(git_runtime, ["-C", str(source), "rev-parse", "HEAD"], home=home)
+    _git_checked(git_runtime, ["-C", str(source), "checkout", "-b", "linear/and-17"], home=home)
     (source / "head.txt").write_text("head\n", encoding="utf-8")
-    _git_checked(git_executable, ["-C", str(source), "add", "head.txt"], home=home)
+    _git_checked(git_runtime, ["-C", str(source), "add", "head.txt"], home=home)
     _git_checked(
-        git_executable,
+        git_runtime,
         [
             "-C",
             str(source),
@@ -436,9 +449,9 @@ def _repository_create(root: Path, git_executable: Path) -> tuple[Path, str, str
         ],
         home=home,
     )
-    head_commit = _git_checked(git_executable, ["-C", str(source), "rev-parse", "HEAD"], home=home)
-    _git_checked(git_executable, ["clone", "--bare", str(source), str(remote)], home=home)
-    _git_checked(git_executable, [f"--git-dir={remote}", "config", "http.receivepack", "true"], home=home)
+    head_commit = _git_checked(git_runtime, ["-C", str(source), "rev-parse", "HEAD"], home=home)
+    _git_checked(git_runtime, ["clone", "--bare", str(source), str(remote)], home=home)
+    _git_checked(git_runtime, [f"--git-dir={remote}", "config", "http.receivepack", "true"], home=home)
     return remote, base_commit, head_commit
 
 
@@ -491,16 +504,16 @@ def test_real_http_git_helper_precedes_foreign_standard_home_netrc_and_wrong_pri
         encoding="utf-8",
     )
     netrc_path.chmod(0o600)
-    git_executable = _behaviorally_supported_git_get(netrc_path)
-    remote, base_commit, head_commit = _repository_create(tmp_path / "repository", git_executable)
+    git_runtime = _production_git_runtime_get(netrc_path)
+    remote, base_commit, head_commit = _repository_create(tmp_path / "repository", git_runtime)
     client = tmp_path / "client.git"
     fixture_home = tmp_path / "client-fixture-home"
     fixture_home.mkdir()
-    _git_checked(git_executable, ["init", "--bare", str(client)], home=fixture_home)
+    _git_checked(git_runtime, ["init", "--bare", str(client)], home=fixture_home)
     server = AuthenticatedGitHttpBackendServer(
         ("127.0.0.1", 0),
         project_root=remote.parent,
-        git_executable=git_executable,
+        git_runtime=git_runtime,
     )
     server_thread = Thread(target=server.serve_forever, name="authenticated-git-http-backend", daemon=True)
     server_thread.start()
@@ -508,7 +521,7 @@ def test_real_http_git_helper_precedes_foreign_standard_home_netrc_and_wrong_pri
     approved_config = _network_config_argument_list(APPROVED_USERNAME, APPROVED_PASSWORD)
     try:
         control_process = _standard_home_overlay_git_run(
-            git_executable,
+            git_runtime,
             [
                 f"--git-dir={client}",
                 *_network_config_argument_list(
@@ -532,8 +545,8 @@ def test_real_http_git_helper_precedes_foreign_standard_home_netrc_and_wrong_pri
         assert control_process.returncode == 0, control_process.stderr
         server.request_list_by_service["git-upload-pack"].clear()
 
-        fetch_process = _standard_home_overlay_git_run(
-            git_executable,
+        fetch_process = _authenticated_git_run(
+            git_runtime,
             [
                 f"--git-dir={client}",
                 *approved_config,
@@ -555,8 +568,8 @@ def test_real_http_git_helper_precedes_foreign_standard_home_netrc_and_wrong_pri
             for _method, authorization in server.request_list_by_service["git-upload-pack"]
         )
 
-        approved_push_process = _standard_home_overlay_git_run(
-            git_executable,
+        approved_push_process = _authenticated_git_run(
+            git_runtime,
             [
                 f"--git-dir={client}",
                 *approved_config,
@@ -578,7 +591,7 @@ def test_real_http_git_helper_precedes_foreign_standard_home_netrc_and_wrong_pri
         )
         assert (
             _git_checked(
-                git_executable,
+                git_runtime,
                 [f"--git-dir={remote}", "rev-parse", "refs/heads/main"],
                 home=fixture_home,
             )
@@ -586,7 +599,7 @@ def test_real_http_git_helper_precedes_foreign_standard_home_netrc_and_wrong_pri
         )
         assert (
             _git_checked(
-                git_executable,
+                git_runtime,
                 [f"--git-dir={remote}", "rev-parse", "refs/heads/linear/and-17"],
                 home=fixture_home,
             )
@@ -594,7 +607,7 @@ def test_real_http_git_helper_precedes_foreign_standard_home_netrc_and_wrong_pri
         )
         assert (
             _git_checked(
-                git_executable,
+                git_runtime,
                 [
                     f"--git-dir={remote}",
                     "for-each-ref",
@@ -606,11 +619,35 @@ def test_real_http_git_helper_precedes_foreign_standard_home_netrc_and_wrong_pri
             == head_commit
         )
 
+        server.request_list_by_service["git-upload-pack"].clear()
+        ref_readback_process = _authenticated_git_run(
+            git_runtime,
+            [
+                f"--git-dir={client}",
+                *approved_config,
+                "ls-remote",
+                "--refs",
+                remote_url,
+                "refs/heads/main",
+                "refs/heads/linear/and-17",
+            ],
+            standard_home_netrc_path=netrc_path,
+        )
+        assert ref_readback_process.returncode == 0, ref_readback_process.stderr
+        assert server.request_list_by_service["git-upload-pack"][0] == (
+            "GET",
+            server.expected_authorization,
+        )
+        assert ref_readback_process.stdout.splitlines() == [
+            f"{head_commit}\trefs/heads/linear/and-17",
+            f"{base_commit}\trefs/heads/main",
+        ]
+
         prior_backend_receive_count = server.backend_request_count_by_service["git-receive-pack"]
         server.request_list_by_service["git-receive-pack"].clear()
         wrong_config = _network_config_argument_list("wrong-principal", "wrong-principal-password")
-        rejected_push_process = _standard_home_overlay_git_run(
-            git_executable,
+        rejected_push_process = _authenticated_git_run(
+            git_runtime,
             [
                 f"--git-dir={client}",
                 *wrong_config,
@@ -638,7 +675,7 @@ def test_real_http_git_helper_precedes_foreign_standard_home_netrc_and_wrong_pri
         assert server.backend_request_count_by_service["git-receive-pack"] == prior_backend_receive_count
         assert (
             _git_checked(
-                git_executable,
+                git_runtime,
                 [f"--git-dir={remote}", "rev-parse", "refs/heads/main"],
                 home=fixture_home,
             )
@@ -646,7 +683,7 @@ def test_real_http_git_helper_precedes_foreign_standard_home_netrc_and_wrong_pri
         )
         assert (
             _git_checked(
-                git_executable,
+                git_runtime,
                 [f"--git-dir={remote}", "rev-parse", "refs/heads/linear/and-17"],
                 home=fixture_home,
             )

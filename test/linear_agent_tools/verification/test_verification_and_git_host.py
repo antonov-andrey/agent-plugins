@@ -22,12 +22,14 @@ LIBRARY_ROOT = PLUGIN_ROOT / "lib"
 if str(LIBRARY_ROOT) not in sys.path:
     sys.path.insert(0, str(LIBRARY_ROOT))
 
+import git_host.command as git_host_command
 from git_host.atomic_merge import GitHubAtomicMergeBoundary
 from git_host.authentication import GitHubPrincipal, git_credential_config_argument_list_get
 from git_host.branch_protection import GitHubBranchProtectionBoundary
 from git_host.command import command_closed_run, command_run
 from git_host.model import GitHubContractError, RepositoryIdentity
 from git_host.pull_request import GitHubPullRequestBoundary
+from git_host.transport_runtime import GitTransportRuntime
 from verification._validation import EvidenceContractError, evidence_url_validate, instant_parse
 from verification.baseline import LocalPhaseBaseline, TaskWorkspaceBaseline
 from verification.comment import (
@@ -1288,6 +1290,55 @@ def _real_git_environment(home: Path) -> dict[str, str]:
         "LC_ALL": "C.UTF-8",
         "PATH": "/usr/bin:/bin",
     }
+
+
+def test_command_run_resolves_semantic_git_to_the_owned_absolute_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The closed path cannot select an older host Git for a semantic Git command."""
+
+    runtime = GitTransportRuntime(
+        root=tmp_path / "runtime",
+        executable=tmp_path / "runtime" / "usr" / "bin" / "git",
+        exec_path=tmp_path / "runtime" / "usr" / "lib" / "git-core",
+    )
+    captured_argument_list: list[str] = []
+
+    def fake_run(
+        argument_list: Sequence[str],
+        *,
+        check: bool,
+        capture_output: bool,
+        text: bool,
+        env: Mapping[str, str],
+        input: str | None,
+    ) -> subprocess.CompletedProcess[str]:
+        """Capture the final direct argument vector without executing it."""
+
+        assert check is False
+        assert capture_output is True
+        assert text is True
+        assert env["PATH"] == "/usr/bin:/bin"
+        assert input is None
+        captured_argument_list.extend(argument_list)
+        return subprocess.CompletedProcess(argument_list, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(git_host_command, "git_transport_runtime_get", lambda: runtime)
+    monkeypatch.setattr(git_host_command.subprocess, "run", fake_run)
+
+    completed_process = git_host_command.command_run(
+        ["git", "ls-remote", "https://github.com/antonov-andrey/example.git"],
+        environment_by_name_map={"PATH": "/usr/bin:/bin"},
+    )
+
+    assert completed_process.returncode == 0
+    assert captured_argument_list == [
+        str(runtime.executable),
+        f"--exec-path={runtime.exec_path}",
+        "ls-remote",
+        "https://github.com/antonov-andrey/example.git",
+    ]
 
 
 def _real_git_checked(argument_list: list[str], *, home: Path, input_text: str | None = None) -> str:

@@ -9,6 +9,7 @@ import subprocess
 from typing import Protocol
 
 from git_host.model import GitHubContractError
+from git_host.transport_runtime import git_transport_runtime_get
 
 _STANDARD_EXECUTABLE_PATH = "/usr/bin:/bin"
 _IGNORED_ENVIRONMENT_NAME_SET = {"GH_PAGER", "GIT_PAGER"}
@@ -67,8 +68,12 @@ def command_run(
         Completed command without raising on provider rejection.
     """
 
+    resolved_argument_list = list(argument_list)
+    if resolved_argument_list and resolved_argument_list[0] == "git":
+        runtime = git_transport_runtime_get()
+        resolved_argument_list = runtime.command_argument_list_get(resolved_argument_list[1:])
     return subprocess.run(
-        argument_list,
+        resolved_argument_list,
         check=False,
         capture_output=True,
         text=True,
