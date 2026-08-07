@@ -634,13 +634,18 @@ def test_unowned_collision_and_concurrent_issue_lock_fail_closed(
                 pass
 
 
-def test_attempt_guard_holds_issue_ownership_for_its_process_lifetime(
+def test_attempt_guard_is_canonical_across_cwds_and_prevents_overlapping_mutation(
     tmp_path: Path,
 ) -> None:
-    """A second agent attempt is rejected until the first guard process exits."""
+    """One explicit workspace and issue map to one lock across process CWDs."""
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    first_cwd = tmp_path / "first-cwd"
+    second_cwd = tmp_path / "second-cwd"
+    first_cwd.mkdir()
+    second_cwd.mkdir()
+    mutation_log = tmp_path / "mutation.log"
     script = LIBRARY_ROOT / "task_workspace" / "tool" / "attempt.py"
     environment = {
         **os.environ,
@@ -652,28 +657,60 @@ def test_attempt_guard_holds_issue_ownership_for_its_process_lifetime(
         stderr=subprocess.PIPE,
         text=True,
         env=environment,
+        cwd=first_cwd,
     )
     try:
         assert first.stdout is not None
         assert '"status":"held"' in first.stdout.readline()
-        second = subprocess.run(
+        mutation_log.write_text("first-attempt\n", encoding="utf-8")
+        second = subprocess.Popen(
             [sys.executable, str(script), "hold", "--issue-identifier", "AND-104"],
-            check=False,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=5,
             env=environment,
+            cwd=second_cwd,
         )
+        assert second.stdout is not None
+        second_stdout = second.stdout.readline()
+        if '"status":"held"' in second_stdout:
+            mutation_log.write_text(
+                mutation_log.read_text(encoding="utf-8") + "second-attempt\n",
+                encoding="utf-8",
+            )
+            second.terminate()
+        second.wait()
         assert second.returncode == 2
-        assert "Another local session" in second.stderr
+        assert second.stderr is not None
+        assert "Another local session" in second.stderr.read()
+        assert mutation_log.read_text(encoding="utf-8") == "first-attempt\n"
         with IssueWorkspaceLock(WorkspaceConfig(workspace.resolve()), "AND-104"):
             pass
     finally:
         first.terminate()
-        first.wait(timeout=5)
+        first.wait()
 
     with IssueAttemptLock(WorkspaceConfig(workspace.resolve()), "AND-104"):
         pass
+
+
+@pytest.mark.parametrize("git_marker_kind", ("directory", "file"))
+def test_workspace_root_rejects_repository_and_linked_worktree_namespaces(
+    tmp_path: Path,
+    git_marker_kind: str,
+) -> None:
+    """A repository root cannot split the canonical multi-repository guard."""
+
+    workspace = tmp_path / git_marker_kind
+    workspace.mkdir()
+    git_marker = workspace / ".git"
+    if git_marker_kind == "directory":
+        git_marker.mkdir()
+    else:
+        git_marker.write_text("gitdir: ../private/worktree\n", encoding="utf-8")
+
+    with pytest.raises(TaskWorkspaceError, match="contain canonical checkouts"):
+        WorkspaceConfig.from_environment({"LINEAR_AGENT_WORKSPACE_ROOT": str(workspace.resolve())})
 
 
 def test_workspace_and_lock_path_identities_reject_equivalent_spellings(tmp_path: Path) -> None:

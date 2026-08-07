@@ -79,7 +79,7 @@ class WorkspaceConfig:
     root: Path
 
     def __post_init__(self) -> None:
-        """Validate one existing absolute directory without searching ancestors."""
+        """Validate one checkout-container root without searching ancestors."""
 
         _absolute_path_text_validate(str(self.root), label="LINEAR_AGENT_WORKSPACE_ROOT")
         try:
@@ -88,6 +88,10 @@ class WorkspaceConfig:
             raise TaskWorkspaceError("LINEAR_AGENT_WORKSPACE_ROOT is unavailable") from error
         if not resolved.is_dir() or resolved != self.root:
             raise TaskWorkspaceError("LINEAR_AGENT_WORKSPACE_ROOT must be a normalized existing directory")
+        if os.path.lexists(self.root / ".git"):
+            raise TaskWorkspaceError(
+                "LINEAR_AGENT_WORKSPACE_ROOT must contain canonical checkouts, not be a Git repository or worktree"
+            )
 
     @classmethod
     def from_environment(cls, environment: dict[str, str] | None = None) -> "WorkspaceConfig":
