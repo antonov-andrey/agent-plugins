@@ -34,7 +34,12 @@ from verification.comment import (
     LOCAL_PHASE_BASELINE_COMMENT_CODEC,
     TASK_WORKSPACE_BASELINE_COMMENT_CODEC,
 )
-from verification.handoff import CodexUsage, TaskHandoff
+from verification.handoff import (
+    CodexUsage,
+    TaskHandoff,
+    TaskHandoffCheckResult,
+    TaskHandoffPullRequestCandidate,
+)
 
 COMMIT_ONE = "a" * 40
 COMMIT_TWO = "b" * 40
@@ -62,49 +67,98 @@ def _ordinary_task_repository_create(tmp_path: Path) -> None:
     )
 
 
-def _handoff(**replacement_by_name: object) -> TaskHandoff:
-    """Return one complete deterministic implementation handoff."""
+def _check_result(**replacement_by_name: object) -> TaskHandoffCheckResult:
+    """Return one direct deterministic check result."""
 
     field_by_name: dict[str, object] = {
-        "handoff_id": "11111111-1111-4111-8111-111111111111",
-        "issue_identifier": "AND-17",
-        "operation": "implementation",
-        "role_label": "task:implementation",
-        "delivery_kind": "code",
-        "started_at": datetime(2026, 8, 4, 12, 0, tzinfo=timezone.utc),
-        "completed_at": datetime(2026, 8, 4, 12, 30, tzinfo=timezone.utc),
-        "outcome": "review-ready",
+        "name": "python -m pytest test/linear_agent_tools -q",
+        "result": "436 passed",
+        "evidence_url": ISSUE_EVIDENCE_URL,
+    }
+    field_by_name.update(replacement_by_name)
+    return TaskHandoffCheckResult(**field_by_name)  # type: ignore[arg-type]
+
+
+def _handoff(**replacement_by_name: object) -> TaskHandoff:
+    """Return one final minimal implementation handoff."""
+
+    field_by_name: dict[str, object] = {
         "summary": "Implemented the bounded provider owner and stopped at independent Review.",
-        "attempt_cleanup_complete": True,
-        "commit_by_repository_map": {"antonov-andrey/example": COMMIT_ONE},
-        "local_phase_baseline_evidence_url": "",
-        "pull_request_base_branch_by_url_map": {PULL_REQUEST_URL: "main"},
-        "pull_request_base_commit_by_url_map": {PULL_REQUEST_URL: COMMIT_BASE},
-        "pull_request_head_by_url_map": {PULL_REQUEST_URL: COMMIT_ONE},
-        "verification_summary_list": [
-            "pytest -q passed for unchanged source, command, environment, and semantic owner contract"
-        ],
-        "evidence_url_list": sorted([ISSUE_EVIDENCE_URL, PULL_REQUEST_URL]),
+        "pull_request_candidate_list": [_pull_request_candidate()],
+        "check_result_list": [_check_result()],
         "codex_usage": CodexUsage(input_tokens=5, reasoning_output_tokens=11),
     }
     field_by_name.update(replacement_by_name)
     return TaskHandoff(**field_by_name)  # type: ignore[arg-type]
 
 
+def _pull_request_candidate(**replacement_by_name: object) -> TaskHandoffPullRequestCandidate:
+    """Return one exact deterministic PR candidate."""
+
+    field_by_name: dict[str, object] = {
+        "url": PULL_REQUEST_URL,
+        "base_branch": "main",
+        "base_commit": COMMIT_BASE,
+        "head_commit": COMMIT_ONE,
+        "merged_commit": None,
+    }
+    field_by_name.update(replacement_by_name)
+    return TaskHandoffPullRequestCandidate(**field_by_name)  # type: ignore[arg-type]
+
+
 def test_semantic_handoff_round_trips_direct_state_and_exact_usage() -> None:
-    """The provider comment carries current state without a derived approval identity."""
+    """The provider comment starts with summary and carries only consumed state."""
 
     handoff = _handoff()
     rendered = HANDOFF_COMMENT_CODEC.render(handoff.payload())
     parsed_payload = HANDOFF_COMMENT_CODEC.payload_parse(rendered)
 
     assert TaskHandoff.from_payload(parsed_payload) == handoff
-    assert parsed_payload["pull_request_base_branch_by_url_map"] == {PULL_REQUEST_URL: "main"}
-    assert parsed_payload["pull_request_base_commit_by_url_map"] == {PULL_REQUEST_URL: COMMIT_BASE}
-    assert parsed_payload["pull_request_head_by_url_map"] == {PULL_REQUEST_URL: COMMIT_ONE}
+    assert rendered.startswith('<!-- linear-agent-tools-handoff -->\n```json\n{\n  "summary":')
+    assert parsed_payload["pull_request_candidate_list"] == [
+        {
+            "url": PULL_REQUEST_URL,
+            "base_branch": "main",
+            "base_commit": COMMIT_BASE,
+            "head_commit": COMMIT_ONE,
+        }
+    ]
+    assert parsed_payload["check_result_list"] == [
+        {
+            "name": "python -m pytest test/linear_agent_tools -q",
+            "result": "436 passed",
+            "evidence_url": ISSUE_EVIDENCE_URL,
+        }
+    ]
     assert parsed_payload["codex_usage"] == {"input_tokens": 5, "reasoning_output_tokens": 11}
-    assert "fingerprint" not in rendered
-    assert "receipt" not in rendered
+    assert set(parsed_payload) == {
+        "summary",
+        "pull_request_candidate_list",
+        "check_result_list",
+        "codex_usage",
+    }
+    for removed_name in (
+        "handoff_id",
+        "issue_identifier",
+        "operation",
+        "role_label",
+        "delivery_kind",
+        "started_at",
+        "completed_at",
+        "outcome",
+        "attempt_cleanup_complete",
+        "commit_by_repository_map",
+        "pull_request_base_branch_by_url_map",
+        "pull_request_base_commit_by_url_map",
+        "pull_request_head_by_url_map",
+        "verification_summary_list",
+        "evidence_url_list",
+        "local_phase_baseline_evidence_url",
+        "schema_version",
+        "fingerprint",
+        "receipt",
+    ):
+        assert removed_name not in rendered
 
 
 @pytest.mark.parametrize(
@@ -171,108 +225,93 @@ def test_handoff_omits_usage_only_when_no_counter_is_exposed() -> None:
         CodexUsage()
 
 
-def test_review_handoff_binds_current_pr_identity_without_claiming_product_changes() -> None:
-    """An independent reviewer records direct base and head state but no changed commits."""
+def test_review_handoff_binds_current_composite_pr_candidate() -> None:
+    """An independent reviewer compares one composite candidate with fresh state."""
 
     review = _handoff(
-        operation="review",
-        outcome="review-passed",
         summary="Independent full-scope review found zero findings.",
-        commit_by_repository_map={},
     )
 
     assert TaskHandoff.from_payload(review.payload()) == review
     review.current_pull_request_identity_require(
-        base_branch_by_url_map={PULL_REQUEST_URL: "main"},
-        base_commit_by_url_map={PULL_REQUEST_URL: COMMIT_BASE},
-        head_commit_by_url_map={PULL_REQUEST_URL: COMMIT_ONE},
+        current_pull_request_candidate_list=[_pull_request_candidate()],
     )
     with pytest.raises(EvidenceContractError, match="identity changed"):
         review.current_pull_request_identity_require(
-            base_branch_by_url_map={PULL_REQUEST_URL: "main"},
-            base_commit_by_url_map={PULL_REQUEST_URL: COMMIT_TWO},
-            head_commit_by_url_map={PULL_REQUEST_URL: COMMIT_ONE},
+            current_pull_request_candidate_list=[_pull_request_candidate(base_commit=COMMIT_TWO)],
         )
-    with pytest.raises(EvidenceContractError, match="Review handoff cannot report changed"):
-        replace(review, commit_by_repository_map={"antonov-andrey/example": COMMIT_ONE})
 
 
-def test_noncode_handoff_requires_direct_evidence_but_rejects_product_state() -> None:
-    """Acceptance evidence has semantic proof without fake commits or pull requests."""
+def test_noncode_handoff_omits_inapplicable_pr_state_and_links_direct_result() -> None:
+    """Acceptance carries its baseline link without fake code-delivery state."""
 
     acceptance = _handoff(
-        operation="acceptance",
-        role_label="task:acceptance",
-        delivery_kind="evidence",
-        outcome="final-boundary",
         summary="Whole deployed outcome passed and awaits the final human decision.",
-        commit_by_repository_map={},
-        local_phase_baseline_evidence_url=BASELINE_EVIDENCE_URL,
-        pull_request_base_branch_by_url_map={},
-        pull_request_base_commit_by_url_map={},
-        pull_request_head_by_url_map={},
-        evidence_url_list=sorted([BASELINE_EVIDENCE_URL, ISSUE_EVIDENCE_URL]),
+        pull_request_candidate_list=None,
+        check_result_list=[
+            _check_result(
+                name="Local phase baseline",
+                result="Published and read back",
+                evidence_url=BASELINE_EVIDENCE_URL,
+            )
+        ],
         codex_usage=None,
     )
 
-    assert TaskHandoff.from_payload(acceptance.payload()) == acceptance
-    with pytest.raises(EvidenceContractError, match="Non-code handoff"):
-        replace(acceptance, commit_by_repository_map={"antonov-andrey/example": COMMIT_ONE})
-    with pytest.raises(EvidenceContractError, match="semantic verification and direct evidence"):
-        replace(acceptance, verification_summary_list=[])
-    with pytest.raises(EvidenceContractError, match="evidence URL"):
-        replace(acceptance, local_phase_baseline_evidence_url="")
-    with pytest.raises(EvidenceContractError, match="include its local phase baseline"):
-        replace(acceptance, evidence_url_list=[ISSUE_EVIDENCE_URL])
+    payload = acceptance.payload()
+    assert TaskHandoff.from_payload(payload) == acceptance
+    assert "pull_request_candidate_list" not in payload
+    assert payload["check_result_list"] == [
+        {
+            "name": "Local phase baseline",
+            "result": "Published and read back",
+            "evidence_url": BASELINE_EVIDENCE_URL,
+        }
+    ]
 
 
 @pytest.mark.parametrize(
-    ("operation", "role_label", "delivery_kind", "outcome"),
+    "field_name",
     (
-        ("review", "task:implementation", "code", "review-passed"),
-        ("review", "task:implementation", "code", "review-findings"),
-        ("review", "task:implementation", "code", "failed"),
-        ("review", "task:implementation", "code", "canceled"),
-        ("review", "task:implementation", "code", "interrupted"),
-        ("acceptance", "task:acceptance", "evidence", "final-boundary"),
-        ("acceptance", "task:acceptance", "evidence", "remediation-required"),
-        ("acceptance", "task:acceptance", "evidence", "failed"),
-        ("acceptance", "task:acceptance", "evidence", "canceled"),
-        ("acceptance", "task:acceptance", "evidence", "interrupted"),
-        ("merge", "task:implementation", "code", "merged"),
-        ("merge", "task:implementation", "code", "rework-required"),
-        ("merge", "task:implementation", "code", "failed"),
-        ("merge", "task:implementation", "code", "canceled"),
-        ("merge", "task:implementation", "code", "interrupted"),
+        "handoff_id",
+        "issue_identifier",
+        "operation",
+        "role_label",
+        "delivery_kind",
+        "started_at",
+        "completed_at",
+        "outcome",
+        "attempt_cleanup_complete",
+        "commit_by_repository_map",
+        "pull_request_base_branch_by_url_map",
+        "pull_request_base_commit_by_url_map",
+        "pull_request_head_by_url_map",
+        "verification_summary_list",
+        "evidence_url_list",
+        "local_phase_baseline_evidence_url",
+        "schema_version",
     ),
 )
-def test_review_accept_merge_handoffs_require_cleanup_for_every_outcome(
-    operation: str,
-    role_label: str,
-    delivery_kind: str,
-    outcome: str,
-) -> None:
-    """No review, acceptance or merge handoff may be rendered before nested cleanup."""
+def test_handoff_rejects_every_removed_broad_field(field_name: str) -> None:
+    """No legacy metadata or compatibility field crosses the final boundary."""
 
-    with pytest.raises(EvidenceContractError, match="nested attempt-resource cleanup"):
-        _handoff(
-            operation=operation,
-            role_label=role_label,
-            delivery_kind=delivery_kind,
-            outcome=outcome,
-            attempt_cleanup_complete=False,
-        )
+    payload = _handoff().payload()
+    payload[field_name] = True
+
+    with pytest.raises(EvidenceContractError, match="another shape"):
+        TaskHandoff.from_payload(payload)
 
 
 @pytest.mark.parametrize(
     ("field_name", "value", "message"),
     (
-        ("operation", [], "operation and task role"),
-        ("role_label", {}, "operation and task role"),
-        ("delivery_kind", [], "role and delivery kind"),
-        ("outcome", {}, "operation and outcome"),
-        ("verification_summary_list", [{}], "verification summaries"),
-        ("evidence_url_list", [{}], "evidence URLs"),
+        ("summary", [], "summary"),
+        ("pull_request_candidate_list", {}, "candidates must be a list"),
+        ("pull_request_candidate_list", None, "candidates must be a list"),
+        ("pull_request_candidate_list", [{}], "candidate has another shape"),
+        ("check_result_list", {}, "check results must be a list"),
+        ("check_result_list", None, "check results must be a list"),
+        ("check_result_list", [{}], "check result has another shape"),
     ),
 )
 def test_handoff_rejects_malformed_external_field_types(
@@ -289,32 +328,79 @@ def test_handoff_rejects_malformed_external_field_types(
         TaskHandoff.from_payload(payload)
 
 
-def test_implementation_handoff_binds_each_pr_head_to_its_current_repository_commit() -> None:
-    """Implementation cannot publish unrelated or stale repository and PR identities."""
+def test_handoff_rejects_empty_or_repeated_outcome_collections() -> None:
+    """Outcome collections are omitted when absent and nonempty when present."""
 
-    with pytest.raises(EvidenceContractError, match="repository is absent"):
-        _handoff(commit_by_repository_map={"antonov-andrey/other": COMMIT_ONE})
-    with pytest.raises(EvidenceContractError, match="differs from current commit"):
-        _handoff(commit_by_repository_map={"antonov-andrey/example": COMMIT_TWO})
-    with pytest.raises(EvidenceContractError, match="repeats one pull-request repository"):
-        pull_request_url_list = [
-            PULL_REQUEST_URL,
-            "https://github.com/antonov-andrey/example/pull/18",
-        ]
+    with pytest.raises(EvidenceContractError, match="nonempty typed list"):
+        _handoff(pull_request_candidate_list=[])
+    with pytest.raises(EvidenceContractError, match="nonempty duplicate-free typed list"):
+        _handoff(check_result_list=[])
+    with pytest.raises(EvidenceContractError, match="duplicate-free typed list"):
+        _handoff(check_result_list=[_check_result(), _check_result()])
+    with pytest.raises(EvidenceContractError, match="duplicate-free typed list"):
+        _handoff(check_result_list=[_check_result(), _check_result(result="195 passed")])
+    with pytest.raises(EvidenceContractError, match="repeats one pull-request candidate repository"):
         _handoff(
-            pull_request_base_branch_by_url_map={url: "main" for url in pull_request_url_list},
-            pull_request_base_commit_by_url_map={url: COMMIT_BASE for url in pull_request_url_list},
-            pull_request_head_by_url_map={url: COMMIT_ONE for url in pull_request_url_list},
+            pull_request_candidate_list=[
+                _pull_request_candidate(),
+                _pull_request_candidate(url="https://github.com/antonov-andrey/example/pull/18"),
+            ]
         )
 
 
-def test_handoff_requires_one_aligned_complete_pr_review_identity() -> None:
-    """Base branch, exact base commit and head are one closed reviewed PR identity."""
+def test_handoff_omits_every_unavailable_optional_value() -> None:
+    """A failed or interrupted attempt can report only its concise summary."""
 
-    with pytest.raises(EvidenceContractError, match="must align"):
-        _handoff(pull_request_base_commit_by_url_map={})
+    handoff = TaskHandoff(summary="The provider operation failed before direct evidence became available.")
+
+    assert handoff.payload() == {"summary": "The provider operation failed before direct evidence became available."}
+    assert TaskHandoff.from_payload(handoff.payload()) == handoff
+
+
+def test_handoff_rejects_null_placeholders_for_nested_optional_values() -> None:
+    """Present candidate and result fields carry values instead of null placeholders."""
+
+    payload = _handoff().payload()
+    payload["pull_request_candidate_list"][0]["merged_commit"] = None  # type: ignore[index]
+    with pytest.raises(EvidenceContractError, match="omit an unavailable merged commit"):
+        TaskHandoff.from_payload(payload)
+
+    payload = _handoff().payload()
+    payload["check_result_list"][0]["evidence_url"] = None  # type: ignore[index]
+    with pytest.raises(EvidenceContractError, match="omit an unavailable evidence URL"):
+        TaskHandoff.from_payload(payload)
+
+
+def test_handoff_keeps_merged_commit_on_its_exact_pr_candidate() -> None:
+    """A merge result extends its composite candidate without another commit map."""
+
+    merged = _handoff(
+        summary="Merged the independently reviewed candidate.",
+        pull_request_candidate_list=[_pull_request_candidate(merged_commit=COMMIT_TWO)],
+    )
+
+    assert merged.payload()["pull_request_candidate_list"] == [
+        {
+            "url": PULL_REQUEST_URL,
+            "base_branch": "main",
+            "base_commit": COMMIT_BASE,
+            "head_commit": COMMIT_ONE,
+            "merged_commit": COMMIT_TWO,
+        }
+    ]
+    with pytest.raises(EvidenceContractError, match="merged commit"):
+        _pull_request_candidate(merged_commit="main")
+    with pytest.raises(EvidenceContractError, match="merged commit"):
+        _pull_request_candidate(merged_commit=True)
+
+
+def test_handoff_requires_one_complete_composite_pr_review_identity() -> None:
+    """Base branch, exact base commit and head stay in one candidate object."""
+
     with pytest.raises(EvidenceContractError, match="base is not a full lowercase commit"):
-        _handoff(pull_request_base_commit_by_url_map={PULL_REQUEST_URL: "main"})
+        _pull_request_candidate(base_commit="main")
+    with pytest.raises(EvidenceContractError, match="head is not a full lowercase commit"):
+        _pull_request_candidate(head_commit="main")
 
 
 @pytest.mark.parametrize(
@@ -329,11 +415,7 @@ def test_handoff_rejects_noncanonical_pull_request_url_without_secret_echo(url: 
     """Unsafe PR identity is rejected without reflecting credential-bearing input."""
 
     with pytest.raises(EvidenceContractError, match="canonical GitHub PR") as captured:
-        _handoff(
-            pull_request_base_branch_by_url_map={url: "main"},
-            pull_request_base_commit_by_url_map={url: COMMIT_BASE},
-            pull_request_head_by_url_map={url: COMMIT_ONE},
-        )
+        _pull_request_candidate(url=url)
 
     assert "secret" not in str(captured.value)
 

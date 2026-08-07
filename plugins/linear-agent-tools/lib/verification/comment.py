@@ -17,6 +17,7 @@ class EvidenceCommentCodec:
 
     prefix: str
     label: str
+    sort_keys: bool = True
 
     def __post_init__(self) -> None:
         """Reject an ambiguous or unsafe comment marker."""
@@ -28,6 +29,7 @@ class EvidenceCommentCodec:
             or not isinstance(self.label, str)
             or not self.label
             or any(character in self.label for character in "\x00\r\n")
+            or not isinstance(self.sort_keys, bool)
         ):
             raise EvidenceContractError("Evidence comment codec has another shape")
 
@@ -45,13 +47,14 @@ class EvidenceCommentCodec:
     def render(self, payload: dict[str, object]) -> str:
         """Render one canonical JSON payload as a marked Linear comment."""
 
-        encoded = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True).replace("/", r"\/")
+        encoded = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=self.sort_keys).replace("/", r"\/")
         return self.prefix + encoded + _COMMENT_SUFFIX
 
 
 HANDOFF_COMMENT_CODEC = EvidenceCommentCodec(
-    prefix="<!-- linear-agent-tools-handoff:v1 -->\n```json\n",
+    prefix="<!-- linear-agent-tools-handoff -->\n```json\n",
     label="Task handoff",
+    sort_keys=False,
 )
 LOCAL_PHASE_BASELINE_COMMENT_CODEC = EvidenceCommentCodec(
     prefix="<!-- linear-agent-tools-local-baseline:v1 -->\n```json\n",

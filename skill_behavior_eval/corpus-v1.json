@@ -326,7 +326,7 @@
         },
         {
           "id": "independent-review-boundary",
-          "text": "It creates or adopts exact linked PRs, uses native background-terminal waiting for required CI, completes nested attempt cleanup, publishes and rereads a concise semantic handoff with exact PR base branches, base commits, heads and direct evidence, moves to Review, stops and preserves the workspace for a separate fresh Codex reviewer without per-PR human approval."
+          "text": "It creates or adopts exact linked PRs, uses native background-terminal waiting for required CI, completes nested attempt cleanup, publishes and rereads a minimal human-first handoff whose nonempty outcome values are exact composite PR candidates and direct check results with applicable links, moves to Review, stops and preserves the workspace for a separate fresh Codex reviewer without per-PR human approval."
         },
         {
           "id": "direct-verification-and-usage",
@@ -352,11 +352,11 @@
       "semantic_invariant_list": [
         {
           "id": "fresh-candidate-review",
-          "text": "A fresh gpt-5.6-sol max reviewer derives complete coverage independently from current owners and reads the implementation handoff only as context, then compares its exact PR URL, base branch, base commit and head map with freshly read GitHub state without treating it as an approval fingerprint."
+          "text": "A fresh gpt-5.6-sol max reviewer derives complete coverage independently from current owners and reads the implementation handoff only as context, then compares every exact composite PR candidate URL, base branch, base commit and head commit with freshly read GitHub state without treating the handoff as approval."
         },
         {
           "id": "automated-review-gate",
-          "text": "Zero findings publish and reread a review-passed handoff for current PR base branches, base commits and heads before Review to Merging; a changed base branch, base commit or head and any finding route to Review to Rework. Every success, finding, stale, failed, canceled or controlled interrupted handoff and transition follows idempotent nested attempt cleanup. Review makes no Product fix and requires no per-PR human approval."
+          "text": "Zero findings publish and reread a minimal review summary, exact composite PR candidates and direct check results before Review to Merging; a changed base branch, base commit or head and any finding route to Review to Rework. Every success, finding, stale, failed, canceled or controlled interrupted handoff and transition follows idempotent nested attempt cleanup. Review makes no Product fix and requires no per-PR human approval."
         },
         {
           "id": "exclusive-review-attempt",
@@ -404,7 +404,7 @@
         },
         {
           "id": "baseline-and-approval",
-          "text": "It derives queue, startup, execution, review and merge durations from exact provider history, publishes and byte-rereads that required local-flow baseline before nested attempt cleanup and the final-boundary handoff, includes the baseline evidence URL in that handoff, and only then stops at Review for the sole deployed-result human decision."
+          "text": "It derives queue, startup, execution, review and merge durations from exact provider history, publishes and byte-rereads that required local-flow baseline before nested attempt cleanup and the final handoff, links the baseline from its direct check result, and only then stops at Review for the sole deployed-result human decision."
         },
         {
           "id": "direct-acceptance-evidence",
@@ -426,7 +426,7 @@
       "semantic_invariant_list": [
         {
           "id": "exact-reviewed-identities",
-          "text": "The response reads the complete PR URL/base-branch/base-commit/head map from the provider-read review handoff, inspects the current base OID and same-repository head, rejects deferred auto-merge, verifies branches, Linear links, typed exact-repository/base classic or effective-ruleset protection, executing-identity bypass and typed required checks without a per-PR human approval or fingerprint, and returns a reviewed base-branch, base-commit or head change to Rework instead of fixing it in merge."
+          "text": "The response reads the ordered composite PR candidates with complete URL, base branch, base commit and head commit from the provider-read review handoff, inspects the current base OID and same-repository head, rejects deferred auto-merge, verifies branches, Linear links, typed exact-repository/base classic or effective-ruleset protection, executing-identity bypass and typed required checks without per-PR human approval, and returns a reviewed base-branch, base-commit or head change to Rework instead of fixing it in merge."
         },
         {
           "id": "atomic-reviewed-mutation",
@@ -434,7 +434,7 @@
         },
         {
           "id": "ordered-recovery",
-          "text": "It follows the explicit merge order, records rather than hides partial merge state, and completes idempotent nested attempt cleanup before every success, stale, failed, canceled or controlled interrupted handoff and transition; it proves final commits and links, publishes and rereads a semantic merged handoff, marks only this issue Done, and starts issue-local cleanup."
+          "text": "It follows the explicit merge order, records rather than hides partial merge state, and completes idempotent nested attempt cleanup before every success, stale, failed, canceled or controlled interrupted handoff and transition; it proves final commits and links, publishes and rereads a minimal merged handoff whose corresponding composite candidate contains the exact merged commit, marks only this issue Done, and starts issue-local cleanup."
         },
         {
           "id": "exclusive-attempt",

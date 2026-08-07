@@ -1,59 +1,18 @@
-"""Compact semantic handoff and exact Codex usage telemetry."""
+"""Minimal human-first task handoff and exact Codex usage telemetry."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
 import re
 from urllib.parse import urlsplit
 
-from git_host.model import GitHubContractError, RepositoryIdentity
 from verification._validation import (
     COMMIT_PATTERN,
     EvidenceContractError,
-    ISSUE_IDENTIFIER_PATTERN,
-    UUID_PATTERN,
     evidence_url_validate,
-    instant_parse,
-    instant_render,
     single_line_validate,
-    text_by_text_map_parse,
-    utc_validate,
 )
 
-_GITHUB_PULL_REQUEST_PATH_PATTERN = re.compile(
-    r"/(?P<owner>[A-Za-z0-9_.-]+)/(?P<repository>[A-Za-z0-9_.-]+)/pull/[1-9][0-9]*"
-)
-_DELIVERY_BY_ROLE = {
-    "task:implementation": {"code", "evidence"},
-    "task:review": {"evidence"},
-    "task:acceptance": {"evidence"},
-    "task:cleanup": {"cleanup"},
-}
-_ROLE_BY_OPERATION = {
-    "implementation": {"task:implementation"},
-    "review": {"task:implementation", "task:review"},
-    "acceptance": {"task:acceptance"},
-    "merge": {"task:implementation"},
-    "cleanup": {"task:cleanup"},
-}
-_OUTCOME_BY_OPERATION = {
-    "implementation": {"review-ready", "canceled", "failed", "interrupted"},
-    "review": {"review-passed", "review-findings", "canceled", "failed", "interrupted"},
-    "acceptance": {"final-boundary", "remediation-required", "canceled", "failed", "interrupted"},
-    "merge": {"merged", "rework-required", "canceled", "failed", "interrupted"},
-    "cleanup": {"cleanup-complete", "canceled", "failed", "interrupted"},
-}
-_DIRECT_EVIDENCE_OUTCOME_SET = {
-    "review-ready",
-    "review-passed",
-    "review-findings",
-    "final-boundary",
-    "remediation-required",
-    "merged",
-    "rework-required",
-    "cleanup-complete",
-}
 _CODEX_USAGE_FIELD_SET = frozenset(
     {
         "cached_input_tokens",
@@ -63,10 +22,20 @@ _CODEX_USAGE_FIELD_SET = frozenset(
         "reasoning_output_tokens",
     }
 )
+_GITHUB_PULL_REQUEST_PATH_PATTERN = re.compile(
+    r"/(?P<owner>[A-Za-z0-9_.-]+)/(?P<repository>[A-Za-z0-9_.-]+)/pull/[1-9][0-9]*"
+)
 
 
-def _github_pull_request_url_validate(value: object) -> str:
-    """Return the exact repository identity from one canonical GitHub PR URL."""
+def _github_pull_request_repository_get(value: object) -> str:
+    """Return the exact repository identity from one canonical GitHub PR URL.
+
+    Args:
+        value: Candidate external URL.
+
+    Returns:
+        Canonical owner and repository identity.
+    """
 
     if not isinstance(value, str):
         raise EvidenceContractError("Handoff pull-request URL is not one canonical GitHub PR")
@@ -115,7 +84,11 @@ class CodexUsage:
             raise EvidenceContractError("Handoff Codex usage must contain at least one exposed counter")
 
     def payload(self) -> dict[str, int]:
-        """Return the exact surface counter names in token units."""
+        """Return the exact surface counter names in token units.
+
+        Returns:
+            Every directly exposed counter.
+        """
 
         return {
             field_name: value
@@ -125,7 +98,14 @@ class CodexUsage:
 
     @classmethod
     def from_payload(cls, payload: object) -> "CodexUsage":
-        """Parse one closed structured Codex usage object."""
+        """Parse one closed structured Codex usage object.
+
+        Args:
+            payload: Candidate external value.
+
+        Returns:
+            Validated exact Codex counters.
+        """
 
         if not isinstance(payload, dict) or not payload or not set(payload).issubset(_CODEX_USAGE_FIELD_SET):
             raise EvidenceContractError("Handoff Codex usage has another shape")
@@ -134,199 +114,61 @@ class CodexUsage:
 
 @dataclass(frozen=True, slots=True)
 class TaskHandoff:
-    """Record semantic current state without becoming a reusable receipt."""
+    """Record only human summary and values consumed by the next transition."""
 
-    handoff_id: str
-    issue_identifier: str
-    operation: str
-    role_label: str
-    delivery_kind: str
-    started_at: datetime
-    completed_at: datetime
-    outcome: str
     summary: str
-    attempt_cleanup_complete: bool
-    commit_by_repository_map: dict[str, str]
-    local_phase_baseline_evidence_url: str
-    pull_request_base_branch_by_url_map: dict[str, str]
-    pull_request_base_commit_by_url_map: dict[str, str]
-    pull_request_head_by_url_map: dict[str, str]
-    verification_summary_list: list[str]
-    evidence_url_list: list[str]
-    codex_usage: CodexUsage | None
+    pull_request_candidate_list: list[TaskHandoffPullRequestCandidate] | None = None
+    check_result_list: list[TaskHandoffCheckResult] | None = None
+    codex_usage: CodexUsage | None = None
 
     def __post_init__(self) -> None:
-        """Validate compact state, direct evidence, and exact usage telemetry."""
+        """Reject empty, repeated, or unrelated handoff state."""
 
-        if not isinstance(self.handoff_id, str) or UUID_PATTERN.fullmatch(self.handoff_id) is None:
-            raise EvidenceContractError("Handoff identity must be one lowercase UUID")
-        if (
-            not isinstance(self.issue_identifier, str)
-            or ISSUE_IDENTIFIER_PATTERN.fullmatch(self.issue_identifier) is None
-        ):
-            raise EvidenceContractError("Handoff issue identifier has another shape")
-        if (
-            not isinstance(self.operation, str)
-            or not isinstance(self.role_label, str)
-            or self.operation not in _ROLE_BY_OPERATION
-            or self.role_label not in _ROLE_BY_OPERATION[self.operation]
-        ):
-            raise EvidenceContractError("Handoff operation and task role are incompatible")
-        if (
-            not isinstance(self.delivery_kind, str)
-            or self.role_label not in _DELIVERY_BY_ROLE
-            or self.delivery_kind not in _DELIVERY_BY_ROLE[self.role_label]
-        ):
-            raise EvidenceContractError("Handoff role and delivery kind are incompatible")
-        if self.operation == "merge" and self.delivery_kind != "code":
-            raise EvidenceContractError("Merge handoff requires code delivery")
-        utc_validate(self.started_at, label="Handoff start")
-        utc_validate(self.completed_at, label="Handoff completion")
-        if self.completed_at < self.started_at:
-            raise EvidenceContractError("Handoff completion precedes its start")
-        if not isinstance(self.outcome, str) or self.outcome not in _OUTCOME_BY_OPERATION[self.operation]:
-            raise EvidenceContractError("Handoff operation and outcome are incompatible")
-        single_line_validate(self.summary, label="Handoff semantic summary")
-        if not isinstance(self.attempt_cleanup_complete, bool) or not self.attempt_cleanup_complete:
-            raise EvidenceContractError("Handoff requires completed nested attempt-resource cleanup")
-        if not isinstance(self.commit_by_repository_map, dict):
-            raise EvidenceContractError("Handoff commit set must be a mapping")
-        for repository, commit in self.commit_by_repository_map.items():
-            if not isinstance(repository, str) or not isinstance(commit, str):
-                raise EvidenceContractError("Handoff repository commits must be text identities")
-            try:
-                RepositoryIdentity(repository)
-            except GitHubContractError as error:
-                raise EvidenceContractError("Handoff repository must use exact owner/name form") from error
-            if COMMIT_PATTERN.fullmatch(commit) is None:
-                raise EvidenceContractError("Handoff commit is not a full lowercase identity")
-        if self.delivery_kind != "code" and self.commit_by_repository_map:
-            raise EvidenceContractError("Non-code handoff cannot report Product commits")
-        if self.operation == "review" and self.commit_by_repository_map:
-            raise EvidenceContractError("Review handoff cannot report changed Product commits")
-        for label, value in (
-            ("base branches", self.pull_request_base_branch_by_url_map),
-            ("base commits", self.pull_request_base_commit_by_url_map),
-            ("heads", self.pull_request_head_by_url_map),
-        ):
-            if not isinstance(value, dict):
-                raise EvidenceContractError(f"Handoff pull-request {label} must be a mapping")
-        pull_request_url_set = set(self.pull_request_head_by_url_map)
-        if (
-            set(self.pull_request_base_branch_by_url_map) != pull_request_url_set
-            or set(self.pull_request_base_commit_by_url_map) != pull_request_url_set
-        ):
-            raise EvidenceContractError("Handoff pull-request base branches, base commits and heads must align")
-        pull_request_repository_list: list[str] = []
-        for url in sorted(pull_request_url_set):
-            pull_request_repository_list.append(_github_pull_request_url_validate(url))
-            single_line_validate(
-                self.pull_request_base_branch_by_url_map[url],
-                label="Handoff pull-request base branch",
-            )
-            base_commit = self.pull_request_base_commit_by_url_map[url]
-            head_commit = self.pull_request_head_by_url_map[url]
-            if not isinstance(base_commit, str) or COMMIT_PATTERN.fullmatch(base_commit) is None:
-                raise EvidenceContractError("Handoff pull-request base is not a full lowercase commit")
-            if not isinstance(head_commit, str) or COMMIT_PATTERN.fullmatch(head_commit) is None:
-                raise EvidenceContractError("Handoff pull-request head is not a full lowercase commit")
-        if len(pull_request_repository_list) != len(set(pull_request_repository_list)):
-            raise EvidenceContractError("Handoff repeats one pull-request repository")
-        if self.delivery_kind == "code":
-            if self.outcome in _DIRECT_EVIDENCE_OUTCOME_SET and not self.pull_request_head_by_url_map:
-                raise EvidenceContractError("Code handoff requires exact pull-request heads")
-        elif pull_request_url_set:
-            raise EvidenceContractError("Only code handoff may report pull-request review identities")
-        if (
-            self.operation in {"implementation", "merge"}
-            and self.delivery_kind == "code"
-            and self.outcome in _DIRECT_EVIDENCE_OUTCOME_SET
-            and not self.commit_by_repository_map
-        ):
-            raise EvidenceContractError("Completed code handoff requires repository commits")
-        if self.operation in {"implementation", "merge"} and self.outcome in _DIRECT_EVIDENCE_OUTCOME_SET:
-            for url, pull_request_head in self.pull_request_head_by_url_map.items():
-                repository = _github_pull_request_url_validate(url)
-                if repository not in self.commit_by_repository_map:
-                    raise EvidenceContractError("Handoff pull-request repository is absent from current commits")
-                if (
-                    self.operation == "implementation"
-                    and self.commit_by_repository_map[repository] != pull_request_head
-                ):
-                    raise EvidenceContractError("Implementation handoff pull-request head differs from current commit")
-        if (
-            not isinstance(self.verification_summary_list, list)
-            or any(not isinstance(item, str) for item in self.verification_summary_list)
-            or len(self.verification_summary_list) != len(set(self.verification_summary_list))
-        ):
-            raise EvidenceContractError("Handoff verification summaries must be a duplicate-free list")
-        for summary in self.verification_summary_list:
-            single_line_validate(summary, label="Handoff verification summary")
-        if (
-            not isinstance(self.evidence_url_list, list)
-            or any(not isinstance(item, str) for item in self.evidence_url_list)
-            or self.evidence_url_list != sorted(self.evidence_url_list)
-            or len(self.evidence_url_list) != len(set(self.evidence_url_list))
-        ):
-            raise EvidenceContractError("Handoff evidence links must be unique and sorted")
-        for value in self.evidence_url_list:
-            evidence_url_validate(value)
-        if self.operation == "acceptance" and self.outcome == "final-boundary":
-            evidence_url_validate(self.local_phase_baseline_evidence_url)
-            if self.local_phase_baseline_evidence_url not in self.evidence_url_list:
-                raise EvidenceContractError(
-                    "Final acceptance handoff must include its local phase baseline evidence URL"
+        single_line_validate(self.summary, label="Handoff summary")
+        if self.pull_request_candidate_list is not None:
+            if (
+                not isinstance(self.pull_request_candidate_list, list)
+                or not self.pull_request_candidate_list
+                or any(
+                    not isinstance(item, TaskHandoffPullRequestCandidate) for item in self.pull_request_candidate_list
                 )
-        elif self.local_phase_baseline_evidence_url != "":
-            raise EvidenceContractError("Local phase baseline evidence is valid only for final acceptance")
-        if self.outcome in _DIRECT_EVIDENCE_OUTCOME_SET and (
-            not self.verification_summary_list or not self.evidence_url_list
-        ):
-            raise EvidenceContractError("Completed handoff requires semantic verification and direct evidence")
+            ):
+                raise EvidenceContractError("Handoff pull-request candidates must be a nonempty typed list")
+            url_list = [item.url for item in self.pull_request_candidate_list]
+            repository_list = [
+                _github_pull_request_repository_get(item.url) for item in self.pull_request_candidate_list
+            ]
+            if len(url_list) != len(set(url_list)) or len(repository_list) != len(set(repository_list)):
+                raise EvidenceContractError("Handoff repeats one pull-request candidate repository")
+            object.__setattr__(self, "pull_request_candidate_list", list(self.pull_request_candidate_list))
+        if self.check_result_list is not None:
+            if (
+                not isinstance(self.check_result_list, list)
+                or not self.check_result_list
+                or any(not isinstance(item, TaskHandoffCheckResult) for item in self.check_result_list)
+            ):
+                raise EvidenceContractError("Handoff check results must be a nonempty duplicate-free typed list")
+            check_name_list = [item.name for item in self.check_result_list]
+            if len(self.check_result_list) != len(set(self.check_result_list)) or len(check_name_list) != len(
+                set(check_name_list)
+            ):
+                raise EvidenceContractError("Handoff check results must be a nonempty duplicate-free typed list")
+            object.__setattr__(self, "check_result_list", list(self.check_result_list))
         if self.codex_usage is not None and not isinstance(self.codex_usage, CodexUsage):
             raise EvidenceContractError("Handoff Codex usage must be absent or exact structured counters")
-        object.__setattr__(self, "commit_by_repository_map", dict(sorted(self.commit_by_repository_map.items())))
-        object.__setattr__(
-            self,
-            "pull_request_base_branch_by_url_map",
-            dict(sorted(self.pull_request_base_branch_by_url_map.items())),
-        )
-        object.__setattr__(
-            self,
-            "pull_request_base_commit_by_url_map",
-            dict(sorted(self.pull_request_base_commit_by_url_map.items())),
-        )
-        object.__setattr__(
-            self,
-            "pull_request_head_by_url_map",
-            dict(sorted(self.pull_request_head_by_url_map.items())),
-        )
-        object.__setattr__(self, "verification_summary_list", list(self.verification_summary_list))
-        object.__setattr__(self, "evidence_url_list", list(self.evidence_url_list))
 
     def payload(self) -> dict[str, object]:
-        """Return one canonical compact semantic handoff."""
+        """Return the final minimal human-first handoff.
 
-        payload: dict[str, object] = {
-            "schema_version": 1,
-            "attempt_cleanup_complete": self.attempt_cleanup_complete,
-            "commit_by_repository_map": dict(self.commit_by_repository_map),
-            "completed_at": instant_render(self.completed_at),
-            "delivery_kind": self.delivery_kind,
-            "evidence_url_list": list(self.evidence_url_list),
-            "handoff_id": self.handoff_id,
-            "issue_identifier": self.issue_identifier,
-            "local_phase_baseline_evidence_url": self.local_phase_baseline_evidence_url,
-            "operation": self.operation,
-            "outcome": self.outcome,
-            "pull_request_base_branch_by_url_map": dict(self.pull_request_base_branch_by_url_map),
-            "pull_request_base_commit_by_url_map": dict(self.pull_request_base_commit_by_url_map),
-            "pull_request_head_by_url_map": dict(self.pull_request_head_by_url_map),
-            "role_label": self.role_label,
-            "started_at": instant_render(self.started_at),
-            "summary": self.summary,
-            "verification_summary_list": list(self.verification_summary_list),
-        }
+        Returns:
+            JSON-ready handoff with every absent outcome value omitted.
+        """
+
+        payload: dict[str, object] = {"summary": self.summary}
+        if self.pull_request_candidate_list is not None:
+            payload["pull_request_candidate_list"] = [item.payload() for item in self.pull_request_candidate_list]
+        if self.check_result_list is not None:
+            payload["check_result_list"] = [item.payload() for item in self.check_result_list]
         if self.codex_usage is not None:
             payload["codex_usage"] = self.codex_usage.payload()
         return payload
@@ -334,92 +176,180 @@ class TaskHandoff:
     def current_pull_request_identity_require(
         self,
         *,
-        base_branch_by_url_map: dict[str, str],
-        base_commit_by_url_map: dict[str, str],
-        head_commit_by_url_map: dict[str, str],
+        current_pull_request_candidate_list: list[TaskHandoffPullRequestCandidate],
     ) -> None:
-        """Require direct GitHub state to match every declared reviewed PR identity.
+        """Require fresh GitHub state to match each declared PR candidate.
 
         Args:
-            base_branch_by_url_map: Current PR base branch by canonical PR URL.
-            base_commit_by_url_map: Current PR base commit by canonical PR URL.
-            head_commit_by_url_map: Current PR head commit by canonical PR URL.
+            current_pull_request_candidate_list: Fresh typed GitHub candidate state.
         """
 
         if (
-            not isinstance(base_branch_by_url_map, dict)
-            or not isinstance(base_commit_by_url_map, dict)
-            or not isinstance(head_commit_by_url_map, dict)
-            or base_branch_by_url_map != self.pull_request_base_branch_by_url_map
-            or base_commit_by_url_map != self.pull_request_base_commit_by_url_map
-            or head_commit_by_url_map != self.pull_request_head_by_url_map
+            not isinstance(current_pull_request_candidate_list, list)
+            or self.pull_request_candidate_list is None
+            or current_pull_request_candidate_list != self.pull_request_candidate_list
         ):
             raise EvidenceContractError("Current pull-request identity changed from the semantic handoff")
 
     @classmethod
     def from_payload(cls, payload: object) -> "TaskHandoff":
-        """Parse one strict semantic handoff payload."""
+        """Parse the final minimal handoff without legacy compatibility.
 
-        required = {
-            "schema_version",
-            "attempt_cleanup_complete",
-            "commit_by_repository_map",
-            "completed_at",
-            "delivery_kind",
-            "evidence_url_list",
-            "handoff_id",
-            "issue_identifier",
-            "local_phase_baseline_evidence_url",
-            "operation",
-            "outcome",
-            "pull_request_base_branch_by_url_map",
-            "pull_request_base_commit_by_url_map",
-            "pull_request_head_by_url_map",
-            "role_label",
-            "started_at",
-            "summary",
-            "verification_summary_list",
-        }
-        allowed = required | {"codex_usage"}
-        if (
-            not isinstance(payload, dict)
-            or (set(payload) != required and set(payload) != allowed)
-            or payload["schema_version"] != 1
-        ):
+        Args:
+            payload: Candidate external value.
+
+        Returns:
+            Validated minimal handoff.
+        """
+
+        required = {"summary"}
+        allowed = required | {"pull_request_candidate_list", "check_result_list", "codex_usage"}
+        if not isinstance(payload, dict) or not required.issubset(payload) or not set(payload).issubset(allowed):
             raise EvidenceContractError("Task handoff has another shape")
-        evidence_url_list = payload["evidence_url_list"]
-        verification_summary_list = payload["verification_summary_list"]
-        if not isinstance(evidence_url_list, list) or any(not isinstance(item, str) for item in evidence_url_list):
-            raise EvidenceContractError("Handoff evidence URLs must be a string list")
-        if not isinstance(verification_summary_list, list) or any(
-            not isinstance(item, str) for item in verification_summary_list
-        ):
-            raise EvidenceContractError("Handoff verification summaries must be a string list")
+        pull_request_candidate_payload_list = payload.get("pull_request_candidate_list")
+        if "pull_request_candidate_list" in payload and not isinstance(pull_request_candidate_payload_list, list):
+            raise EvidenceContractError("Handoff pull-request candidates must be a list")
+        check_result_payload_list = payload.get("check_result_list")
+        if "check_result_list" in payload and not isinstance(check_result_payload_list, list):
+            raise EvidenceContractError("Handoff check results must be a list")
         return cls(
-            handoff_id=payload["handoff_id"],
-            issue_identifier=payload["issue_identifier"],
-            operation=payload["operation"],
-            role_label=payload["role_label"],
-            delivery_kind=payload["delivery_kind"],
-            started_at=instant_parse(payload["started_at"], label="Handoff start"),
-            completed_at=instant_parse(payload["completed_at"], label="Handoff completion"),
-            outcome=payload["outcome"],
             summary=payload["summary"],
-            attempt_cleanup_complete=payload["attempt_cleanup_complete"],
-            commit_by_repository_map=text_by_text_map_parse(
-                payload["commit_by_repository_map"], label="handoff commits"
+            pull_request_candidate_list=(
+                None
+                if pull_request_candidate_payload_list is None
+                else [
+                    TaskHandoffPullRequestCandidate.from_payload(item) for item in pull_request_candidate_payload_list
+                ]
             ),
-            local_phase_baseline_evidence_url=payload["local_phase_baseline_evidence_url"],
-            pull_request_base_branch_by_url_map=text_by_text_map_parse(
-                payload["pull_request_base_branch_by_url_map"], label="handoff pull-request base branches"
+            check_result_list=(
+                None
+                if check_result_payload_list is None
+                else [TaskHandoffCheckResult.from_payload(item) for item in check_result_payload_list]
             ),
-            pull_request_base_commit_by_url_map=text_by_text_map_parse(
-                payload["pull_request_base_commit_by_url_map"], label="handoff pull-request base commits"
-            ),
-            pull_request_head_by_url_map=text_by_text_map_parse(
-                payload["pull_request_head_by_url_map"], label="handoff pull-request heads"
-            ),
-            verification_summary_list=list(verification_summary_list),
-            evidence_url_list=list(evidence_url_list),
             codex_usage=(None if "codex_usage" not in payload else CodexUsage.from_payload(payload["codex_usage"])),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class TaskHandoffCheckResult:
+    """Carry one direct check result and its optional provider link."""
+
+    name: str
+    result: str
+    evidence_url: str | None = None
+
+    def __post_init__(self) -> None:
+        """Require concise direct result text and a canonical optional link."""
+
+        single_line_validate(self.name, label="Handoff check name")
+        single_line_validate(self.result, label="Handoff check result")
+        if self.evidence_url is not None:
+            evidence_url_validate(self.evidence_url)
+
+    def payload(self) -> dict[str, str]:
+        """Return one compact direct check result.
+
+        Returns:
+            JSON-ready check result.
+        """
+
+        payload = {"name": self.name, "result": self.result}
+        if self.evidence_url is not None:
+            payload["evidence_url"] = self.evidence_url
+        return payload
+
+    @classmethod
+    def from_payload(cls, payload: object) -> "TaskHandoffCheckResult":
+        """Parse one strict direct check result.
+
+        Args:
+            payload: Candidate external value.
+
+        Returns:
+            Validated direct check result.
+        """
+
+        required = {"name", "result"}
+        if not isinstance(payload, dict) or set(payload) not in (
+            required,
+            required | {"evidence_url"},
+        ):
+            raise EvidenceContractError("Handoff check result has another shape")
+        if "evidence_url" in payload and payload["evidence_url"] is None:
+            raise EvidenceContractError("Handoff check result must omit an unavailable evidence URL")
+        return cls(
+            name=payload["name"],
+            result=payload["result"],
+            evidence_url=payload.get("evidence_url"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class TaskHandoffPullRequestCandidate:
+    """Carry one exact PR candidate and its optional terminal merge commit."""
+
+    url: str
+    base_branch: str
+    base_commit: str
+    head_commit: str
+    merged_commit: str | None = None
+
+    def __post_init__(self) -> None:
+        """Require one canonical URL and complete immutable Git identities."""
+
+        _github_pull_request_repository_get(self.url)
+        single_line_validate(self.base_branch, label="Handoff pull-request base branch")
+        for label, commit in (
+            ("base", self.base_commit),
+            ("head", self.head_commit),
+        ):
+            if not isinstance(commit, str) or COMMIT_PATTERN.fullmatch(commit) is None:
+                raise EvidenceContractError(f"Handoff pull-request {label} is not a full lowercase commit")
+        if self.merged_commit is not None and (
+            not isinstance(self.merged_commit, str) or COMMIT_PATTERN.fullmatch(self.merged_commit) is None
+        ):
+            raise EvidenceContractError("Handoff merged commit is not one full lowercase identity")
+
+    def payload(self) -> dict[str, str]:
+        """Return one composite PR candidate.
+
+        Returns:
+            JSON-ready candidate and optional merge result.
+        """
+
+        payload = {
+            "url": self.url,
+            "base_branch": self.base_branch,
+            "base_commit": self.base_commit,
+            "head_commit": self.head_commit,
+        }
+        if self.merged_commit is not None:
+            payload["merged_commit"] = self.merged_commit
+        return payload
+
+    @classmethod
+    def from_payload(cls, payload: object) -> "TaskHandoffPullRequestCandidate":
+        """Parse one strict composite PR candidate.
+
+        Args:
+            payload: Candidate external value.
+
+        Returns:
+            Validated PR candidate.
+        """
+
+        required = {"url", "base_branch", "base_commit", "head_commit"}
+        if not isinstance(payload, dict) or set(payload) not in (
+            required,
+            required | {"merged_commit"},
+        ):
+            raise EvidenceContractError("Handoff pull-request candidate has another shape")
+        if "merged_commit" in payload and payload["merged_commit"] is None:
+            raise EvidenceContractError("Handoff pull-request candidate must omit an unavailable merged commit")
+        return cls(
+            url=payload["url"],
+            base_branch=payload["base_branch"],
+            base_commit=payload["base_commit"],
+            head_commit=payload["head_commit"],
+            merged_commit=payload.get("merged_commit"),
         )

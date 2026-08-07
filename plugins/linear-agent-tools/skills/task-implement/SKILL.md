@@ -11,7 +11,7 @@ Use `gpt-5.6-sol` medium only for a bounded implementation whose approved plan c
 
 Read `../../references/manual-workflow.md` and the complete issue, relations, comments, exact published source revision and relevant sections, repository instructions, Git/PR state and current direct verification evidence.
 
-Every preview or handoff response MUST state that one exact issue process-lifetime host-local attempt guard is acquired before dispatch or status mutation, held continuously through nested attempt cleanup and final Linear provider readback, and released only by process exit after that boundary.
+Every preview or user-facing handoff response MUST state that one exact issue process-lifetime host-local attempt guard is acquired before dispatch or status mutation, held continuously through nested attempt cleanup and final Linear provider readback, and released only by process exit after that boundary. The provider handoff does not duplicate guard state.
 
 ## Start
 
@@ -31,7 +31,7 @@ Every preview or handoff response MUST state that one exact issue process-lifeti
 
 ## Handoff
 
-Reconcile attempt-lifetime resources first. Build one concise `handoff` input containing completed attempt cleanup, semantic current state, exact delivery-applicable commits, the PR URL/base-branch/base-commit/head map, direct verification summaries and bounded evidence URLs. Include any nonempty subset of exact known structured `input_tokens`, `cached_input_tokens`, `cache_write_input_tokens`, `output_tokens` and `reasoning_output_tokens` counters directly exposed by Codex, aggregated independently across nested invocations. Omit the usage object only when no counters are exposed; never estimate or derive it.
+Reconcile attempt-lifetime resources first. Build one final minimal `handoff` input. Start with a concise human summary. For a code result, include one ordered nonempty composite PR candidate list. Each candidate contains its URL, base branch, base commit and head commit. Include direct check results and an optional evidence link on each result. Include any nonempty subset of exact known structured `input_tokens`, `cached_input_tokens`, `cache_write_input_tokens`, `output_tokens` and `reasoning_output_tokens` counters directly exposed by Codex. Aggregate each counter independently across nested invocations. Omit every unavailable outcome field instead of emitting an empty collection. Never add issue, role, delivery, outcome, cleanup, timestamp, UUID, schema, separate commit map or compatibility metadata. Never estimate or derive usage.
 
 Render the handoff through `../../lib/verification/tool/evidence.py handoff`, publish it once, fully paginate and require one byte-identical provider readback. The handoff is recovery context, not an approval object or automatic verification cache. Exclude prompts, secrets and raw logs; delete transient inputs after readback.
 
