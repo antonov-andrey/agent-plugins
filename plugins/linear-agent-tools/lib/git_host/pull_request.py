@@ -10,9 +10,9 @@ import subprocess
 from json_contract import JsonContractError, json_load_strict
 
 from git_host.atomic_merge import GitHubAtomicMergeBoundary
-from git_host.authentication import GitHubAuthenticationBoundary, GitHubPrincipal
+from git_host.authentication import GitHubPrincipal
 from git_host.branch_protection import GitHubBranchProtectionBoundary
-from git_host.command import CommandRunner, command_run
+from git_host.command import CommandRunner, command_closed_run, command_run
 from git_host.model import (
     BranchProtectionSnapshot,
     GitHubContractError,
@@ -209,11 +209,19 @@ class GitHubPullRequestBoundary:
             payload = json_load_strict(completed_process.stdout)
         except JsonContractError as error:
             raise GitHubContractError("GitHub PR response is malformed") from error
+        merged_principal = None
+        if isinstance(payload, dict) and payload.get("state") == "MERGED":
+            merged_principal = self._merged_principal_get(repository=repository, number=number)
         snapshot = PullRequestSnapshot.from_gh_payload(
             repository,
             payload,
             required_check_list=[],
+            merged_by_user_id=merged_principal.user_id if merged_principal is not None else 0,
         )
+        if merged_principal is not None and (
+            snapshot.merged_by_login != merged_principal.login or snapshot.merged_by_node_id != merged_principal.node_id
+        ):
+            raise GitHubContractError("GitHub merged provider identities disagree")
         expected_url = f"https://github.com/{repository.value}/pull/{number}"
         if snapshot.number != number or snapshot.url.rstrip("/") != expected_url:
             raise GitHubContractError("GitHub pull-request response differs from the exact requested identity")
@@ -230,6 +238,7 @@ class GitHubPullRequestBoundary:
         reviewed_base_commit: str,
         reviewed_head_commit: str,
         merge_method: str,
+        repository_path: Path | None = None,
     ) -> PullRequestMergeInspection:
         """Read exact reviewed PR, effective protection and required check results.
 
@@ -242,6 +251,7 @@ class GitHubPullRequestBoundary:
             reviewed_base_commit: Exact independently reviewed base commit.
             reviewed_head_commit: Exact independently reviewed head.
             merge_method: Declared repository merge strategy.
+            repository_path: Exact worktree required to prove a terminal merge result.
 
         Returns:
             Terminal PR alone, or open PR plus executing-identity-bound protection.
@@ -251,7 +261,16 @@ class GitHubPullRequestBoundary:
         snapshot.target_require(base_branch=base_branch, head_branch=head_branch)
         snapshot.task_branch_identity_require(issue_identifier)
         if snapshot.state == "MERGED":
-            snapshot.merged_result_require(
+            if merge_method != "merge":
+                raise GitHubContractError(
+                    "Merged squash and rebase results are unsupported without exact immutable strategy proof"
+                )
+            if repository_path is None:
+                raise GitHubContractError("Merged-result inspection requires the exact repository worktree path")
+            GitHubAtomicMergeBoundary(self._runner).merged_result_require(
+                repository=repository,
+                repository_path=repository_path,
+                snapshot=snapshot,
                 reviewed_base_commit=reviewed_base_commit,
                 reviewed_head_commit=reviewed_head_commit,
             )
@@ -310,6 +329,10 @@ class GitHubPullRequestBoundary:
             Merged PR snapshot.
         """
 
+        if merge_method != "merge":
+            raise GitHubContractError(
+                "Squash and rebase mutation are unsupported without exact immutable strategy proof"
+            )
         inspection = self.reviewed_inspect(
             repository=repository,
             number=number,
@@ -319,55 +342,24 @@ class GitHubPullRequestBoundary:
             reviewed_base_commit=reviewed_base_commit,
             reviewed_head_commit=reviewed_head_commit,
             merge_method=merge_method,
+            repository_path=repository_path,
         )
         before = inspection.pull_request
         if before.state == "MERGED":
-            if merge_method == "merge":
-                if repository_path is None:
-                    raise GitHubContractError("Atomic merge recovery requires the exact repository worktree path")
-                GitHubAtomicMergeBoundary(self._runner).merged_result_require(
-                    repository=repository,
-                    repository_path=repository_path,
-                    snapshot=before,
-                    reviewed_base_commit=reviewed_base_commit,
-                    reviewed_head_commit=reviewed_head_commit,
-                )
             return before
         protection = inspection.branch_protection
         if protection is None:
             raise GitHubContractError("Open pull-request merge omitted applicable branch protection")
-        expected_merge_commit = ""
-        if merge_method == "merge":
-            if repository_path is None:
-                raise GitHubContractError("Atomic merge requires the exact repository worktree path")
-            expected_merge_commit = GitHubAtomicMergeBoundary(self._runner).merge(
-                repository=repository,
-                repository_path=repository_path,
-                snapshot=before,
-                execution_login=protection.execution_login,
-                execution_user_id=protection.execution_user_id,
-                execution_node_id=protection.execution_node_id,
-            )
-        else:
-            GitHubAuthenticationBoundary(self._runner).principal_require(
-                GitHubPrincipal(
-                    login=protection.execution_login,
-                    user_id=protection.execution_user_id,
-                    node_id=protection.execution_node_id,
-                )
-            )
-            self._checked(
-                (
-                    "pr",
-                    "merge",
-                    str(number),
-                    "--repo",
-                    repository.value,
-                    f"--{merge_method}",
-                    "--match-head-commit",
-                    reviewed_head_commit,
-                )
-            )
+        if repository_path is None:
+            raise GitHubContractError("Atomic merge requires the exact repository worktree path")
+        expected_merge_commit = GitHubAtomicMergeBoundary(self._runner).merge(
+            repository=repository,
+            repository_path=repository_path,
+            snapshot=before,
+            execution_login=protection.execution_login,
+            execution_user_id=protection.execution_user_id,
+            execution_node_id=protection.execution_node_id,
+        )
         after = self.inspect(repository=repository, number=number)
         after.target_require(base_branch=base_branch, head_branch=head_branch)
         after.task_branch_identity_require(issue_identifier)
@@ -375,13 +367,24 @@ class GitHubPullRequestBoundary:
             raise GitHubContractError(
                 "Atomic Git transaction completed but GitHub merge readback is not terminal; retry exact recovery"
             )
-        after.merged_result_require(
+        after.merged_metadata_require(
             reviewed_base_commit=reviewed_base_commit,
             reviewed_head_commit=reviewed_head_commit,
         )
-        after.merged_by_require(login=protection.execution_login, node_id=protection.execution_node_id)
-        if expected_merge_commit and after.merge_commit != expected_merge_commit:
+        after.merged_by_require(
+            login=protection.execution_login,
+            user_id=protection.execution_user_id,
+            node_id=protection.execution_node_id,
+        )
+        if after.merge_commit != expected_merge_commit:
             raise GitHubContractError("GitHub merged result differs from the atomic Git transaction")
+        GitHubAtomicMergeBoundary(self._runner).merged_result_require(
+            repository=repository,
+            repository_path=repository_path,
+            snapshot=after,
+            reviewed_base_commit=reviewed_base_commit,
+            reviewed_head_commit=reviewed_head_commit,
+        )
         return after
 
     def close_if_open(
@@ -418,6 +421,39 @@ class GitHubPullRequestBoundary:
             raise GitHubContractError("Canceled-task pull request did not reach a terminal state")
         return snapshot
 
+    def _merged_principal_get(
+        self,
+        *,
+        repository: RepositoryIdentity,
+        number: int,
+    ) -> GitHubPrincipal:
+        """Read the terminal REST principal including its numeric database ID."""
+
+        completed_process = self._checked(
+            (
+                "api",
+                "--hostname",
+                "github.com",
+                f"repos/{repository.value}/pulls/{number}",
+                "--jq",
+                "{login:.merged_by.login,user_id:.merged_by.id,node_id:.merged_by.node_id}",
+            )
+        )
+        try:
+            payload = json_load_strict(completed_process.stdout)
+        except JsonContractError as error:
+            raise GitHubContractError("GitHub merged principal response is malformed") from error
+        if not isinstance(payload, dict) or set(payload) != {"login", "user_id", "node_id"}:
+            raise GitHubContractError("GitHub merged principal response has another shape")
+        try:
+            return GitHubPrincipal(
+                login=payload["login"],
+                user_id=payload["user_id"],
+                node_id=payload["node_id"],
+            )
+        except (KeyError, TypeError) as error:
+            raise GitHubContractError("GitHub merged principal response has another shape") from error
+
     def _required_check_list_get(
         self,
         *,
@@ -437,7 +473,8 @@ class GitHubPullRequestBoundary:
         """
 
         if not required_check_name_list:
-            completed_process = self._runner(
+            completed_process = command_closed_run(
+                self._runner,
                 [
                     "gh",
                     "pr",
@@ -447,7 +484,7 @@ class GitHubPullRequestBoundary:
                     repository.value,
                     "--json",
                     "statusCheckRollup",
-                ]
+                ],
             )
             if completed_process.returncode != 0 or not completed_process.stdout:
                 raise GitHubContractError("Unable to read empty required GitHub check set")
@@ -463,7 +500,8 @@ class GitHubPullRequestBoundary:
             ):
                 raise GitHubContractError("GitHub status-check rollup response has another shape")
             return []
-        completed_process = self._runner(
+        completed_process = command_closed_run(
+            self._runner,
             [
                 "gh",
                 "pr",
@@ -474,7 +512,7 @@ class GitHubPullRequestBoundary:
                 "--required",
                 "--json",
                 "name,bucket,link",
-            ]
+            ],
         )
         if completed_process.returncode not in {0, 8} or not completed_process.stdout:
             raise GitHubContractError("Unable to read required GitHub checks")
@@ -501,7 +539,7 @@ class GitHubPullRequestBoundary:
             Completed command.
         """
 
-        completed_process = self._runner(["gh", *argument_list])
+        completed_process = command_closed_run(self._runner, ["gh", *argument_list])
         if completed_process.returncode != 0:
             raise GitHubContractError("Authenticated GitHub pull-request operation failed")
         return completed_process

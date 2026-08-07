@@ -1525,6 +1525,7 @@ def test_cleanup_reconciles_complete_exact_pull_request_set(
         merged_at=datetime.now(timezone.utc) if merged else None,
         merge_commit="b" * 40 if merged else "",
         merged_by_login="octocat" if merged else "",
+        merged_by_user_id=7 if merged else 0,
         merged_by_node_id="U_octocat" if merged else "",
         required_check_list=[],
     )

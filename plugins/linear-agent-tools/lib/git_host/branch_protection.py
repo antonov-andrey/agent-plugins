@@ -11,7 +11,7 @@ from urllib.parse import quote
 from json_contract import JsonContractError, json_load_strict
 
 from git_host.authentication import GitHubAuthenticationBoundary
-from git_host.command import CommandRunner, command_run
+from git_host.command import CommandRunner, command_closed_run, command_run
 from git_host.model import BranchProtectionSnapshot, GitHubContractError, RepositoryIdentity, branch_name_require
 
 _HTTP_STATUS_PATTERN = re.compile(r"HTTP/\S+ (?P<status>[1-5][0-9]{2})(?: .*)?")
@@ -272,7 +272,8 @@ class GitHubBranchProtectionBoundary:
             before.merge_mechanism_require("merge")
             return before
         encoded_branch = quote(base_branch, safe="")
-        completed_process = self._runner(
+        completed_process = command_closed_run(
+            self._runner,
             [
                 "gh",
                 "api",
@@ -301,7 +302,7 @@ class GitHubBranchProtectionBoundary:
                 "lock_branch=false",
                 "-F",
                 "allow_fork_syncing=false",
-            ]
+            ],
         )
         _completed_json_require(completed_process, label="GitHub branch-protection configuration")
         after = self.inspect(repository=repository, base_branch=base_branch)
@@ -317,13 +318,14 @@ class GitHubBranchProtectionBoundary:
         """Read classic branch protection, accepting only one typed 404 as absence."""
 
         encoded_branch = quote(base_branch, safe="")
-        completed_process = self._runner(
+        completed_process = command_closed_run(
+            self._runner,
             [
                 "gh",
                 "api",
                 "--include",
                 f"repos/{repository.value}/branches/{encoded_branch}/protection",
-            ]
+            ],
         )
         status, payload = _included_json_get(completed_process)
         if status == 404:
@@ -388,7 +390,7 @@ class GitHubBranchProtectionBoundary:
     def _json_get(self, argument_list: Sequence[str], *, label: str) -> object:
         """Run one successful gh read and require nonempty strict JSON."""
 
-        completed_process = self._runner(["gh", *argument_list])
+        completed_process = command_closed_run(self._runner, ["gh", *argument_list])
         return _completed_json_require(completed_process, label=label)
 
 

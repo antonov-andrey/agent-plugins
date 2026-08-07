@@ -56,9 +56,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         repository = RepositoryIdentity(args.repository)
         protection = None
+        if args.merge_method == "merge" and args.repository_path is None:
+            raise GitHubContractError("Exact merge inspection and mutation require --repository-path")
         if args.command == "merge":
-            if args.merge_method == "merge" and args.repository_path is None:
-                raise GitHubContractError("Atomic merge requires --repository-path")
             snapshot = boundary.merge(
                 repository=repository,
                 number=args.number,
@@ -80,6 +80,7 @@ def main(argv: list[str] | None = None) -> int:
                 reviewed_base_commit=args.reviewed_base_commit,
                 reviewed_head_commit=args.reviewed_head_commit,
                 merge_method=args.merge_method,
+                repository_path=args.repository_path,
             )
             snapshot = inspection.pull_request
             protection = inspection.branch_protection

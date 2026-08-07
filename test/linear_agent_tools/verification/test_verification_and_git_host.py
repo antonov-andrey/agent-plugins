@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from datetime import datetime, timezone
 import importlib.util
@@ -508,25 +508,56 @@ class _GhRunner:
         self.push_url_list = ["git@github.com:antonov-andrey/example.git"]
         self.explicit_fetch_url_list = ["https://github.com/antonov-andrey/example.git"]
         self.explicit_push_url_list = ["https://github.com/antonov-andrey/example.git"]
+        self.local_config_name_list = [
+            "core.repositoryformatversion",
+            "remote.origin.url",
+            "remote.origin.fetch",
+        ]
+        self.pre_push_hook = False
+        self.alternate_object_store = False
+        self.replace_ref_list: list[str] = []
+        self.shallow_repository = False
         self.merge_base_commit = base_commit
         self.merge_head_commit = head_commit
         self.constructed_merge_tree = "f" * 40
         self.merge_commit_tree = "f" * 40
         self.merged_by_login = "octocat"
+        self.merged_by_user_id = 7
         self.merged_by_node_id = "U_octocat"
+        self.credential_login = "octocat"
+        self.credential_user_id = 7
+        self.credential_node_id = "U_octocat"
         self.remote_commit_by_ref_map = {
             f"refs/heads/{base_branch}": base_commit,
             "refs/heads/linear/and-17": head_commit,
         }
         self.command_list: list[list[str]] = []
+        self.environment_list: list[dict[str, str]] = []
 
-    def __call__(self, argument_list: list[str]) -> subprocess.CompletedProcess[str]:
+    def __call__(
+        self,
+        argument_list: Sequence[str],
+        *,
+        environment_by_name_map: Mapping[str, str],
+        input_text: str | None = None,
+    ) -> subprocess.CompletedProcess[str]:
         """Return the provider response for one expected gh command."""
 
         argument_list = list(argument_list)
         self.command_list.append(argument_list)
+        self.environment_list.append(dict(environment_by_name_map))
+        assert input_text is None
+        if argument_list[0] == "/bin/sh":
+            expected_identity = (self.execution_login, self.execution_user_id, self.execution_node_id)
+            credential_identity = (self.credential_login, self.credential_user_id, self.credential_node_id)
+            return subprocess.CompletedProcess(
+                argument_list,
+                0 if credential_identity == expected_identity else 1,
+                "",
+                "",
+            )
         if argument_list[0] == "git":
-            return self._git_call(argument_list)
+            return self._git_call(argument_list, environment_by_name_map=environment_by_name_map)
         if argument_list[1:3] == ["pr", "checks"]:
             payload = [
                 {"name": name, "bucket": self.check_bucket, "link": "https://example.test/check"}
@@ -551,6 +582,22 @@ class _GhRunner:
                 "node_id": self.changed_execution_node_id if changed else self.execution_node_id,
             }
             return subprocess.CompletedProcess(argument_list, 0, json.dumps(payload), "")
+        if (
+            argument_list[1:4] == ["api", "--hostname", "github.com"]
+            and argument_list[4] == "repos/antonov-andrey/example/pulls/17"
+        ):
+            return subprocess.CompletedProcess(
+                argument_list,
+                0,
+                json.dumps(
+                    {
+                        "login": self.merged_by_login,
+                        "user_id": self.merged_by_user_id,
+                        "node_id": self.merged_by_node_id,
+                    }
+                ),
+                "",
+            )
         if argument_list[1:3] == ["api", "--include"]:
             if self.protection_kind == "classic":
                 payload = {
@@ -769,31 +816,66 @@ class _GhRunner:
         rule_list.extend({"type": rule_type} for rule_type in self.ruleset_additional_rule_type_list)
         return rule_list
 
-    def _git_call(self, argument_list: list[str]) -> subprocess.CompletedProcess[str]:
+    def _git_call(
+        self,
+        argument_list: list[str],
+        *,
+        environment_by_name_map: Mapping[str, str],
+    ) -> subprocess.CompletedProcess[str]:
         """Model local object creation and one atomic remote ref transaction."""
 
         if "rev-parse" in argument_list:
-            return subprocess.CompletedProcess(argument_list, 0, argument_list[2] + "\n", "")
-        if argument_list[-4:] == ["remote", "get-url", "--all", "origin"]:
-            return subprocess.CompletedProcess(argument_list, 0, "\n".join(self.fetch_url_list) + "\n", "")
-        if argument_list[-5:] == ["remote", "get-url", "--push", "--all", "origin"]:
-            return subprocess.CompletedProcess(argument_list, 0, "\n".join(self.push_url_list) + "\n", "")
-        if "config" in argument_list and "--get-regexp" in argument_list:
-            canonical = "https://github.com/antonov-andrey/example.git"
-            record_list = [
-                f"url.{resolved}.insteadof\n{canonical}\x00"
-                for resolved in self.explicit_fetch_url_list
-                if resolved != canonical or len(self.explicit_fetch_url_list) > 1
-            ]
-            record_list.extend(
-                f"url.{resolved}.pushinsteadof\n{canonical}\x00"
-                for resolved in self.explicit_push_url_list
-                if resolved != canonical or len(self.explicit_push_url_list) > 1
-            )
+            root = Path(argument_list[argument_list.index("-C") + 1])
+            if "--absolute-git-dir" in argument_list or "--git-common-dir" in argument_list:
+                git_dir = root / ".git"
+                (git_dir / "hooks").mkdir(parents=True, exist_ok=True)
+                (git_dir / "objects" / "info").mkdir(parents=True, exist_ok=True)
+                (git_dir / "info").mkdir(parents=True, exist_ok=True)
+                (git_dir / "config").write_text("[core]\n\trepositoryformatversion = 0\n", encoding="utf-8")
+                if self.pre_push_hook:
+                    hook_path = git_dir / "hooks" / "pre-push"
+                    hook_path.write_text(
+                        f"#!/bin/sh\nprintf attacked > {root / 'hook-mutated'}\nexit 1\n",
+                        encoding="utf-8",
+                    )
+                    hook_path.chmod(0o755)
+                if self.alternate_object_store:
+                    (git_dir / "objects" / "info" / "alternates").write_text("/tmp/foreign\n", encoding="utf-8")
+                return subprocess.CompletedProcess(argument_list, 0, str(git_dir) + "\n", "")
+            if "--is-shallow-repository" in argument_list:
+                return subprocess.CompletedProcess(
+                    argument_list,
+                    0,
+                    ("true" if self.shallow_repository else "false") + "\n",
+                    "",
+                )
+            return subprocess.CompletedProcess(argument_list, 0, str(root) + "\n", "")
+        if argument_list[:2] == ["git", "config"]:
+            assert environment_by_name_map["GIT_CONFIG"] != "/dev/null"
+            if "--name-only" in argument_list:
+                return subprocess.CompletedProcess(
+                    argument_list,
+                    0,
+                    "".join(f"{name}\x00" for name in self.local_config_name_list),
+                    "",
+                )
+            if argument_list[-1] == "remote.origin.url":
+                value_list = self.fetch_url_list
+            elif argument_list[-1] == "remote.origin.pushurl":
+                value_list = self.push_url_list if self.push_url_list != self.fetch_url_list else []
+            else:
+                raise AssertionError(f"Unexpected config value read: {argument_list}")
             return subprocess.CompletedProcess(
                 argument_list,
-                0 if record_list else 1,
-                "".join(record_list),
+                0 if value_list else 1,
+                "".join(f"{value}\x00" for value in value_list),
+                "",
+            )
+        if "for-each-ref" in argument_list:
+            return subprocess.CompletedProcess(
+                argument_list,
+                0,
+                "".join(f"{ref_name}\n" for ref_name in self.replace_ref_list),
                 "",
             )
         if "fetch" in argument_list:
@@ -927,6 +1009,35 @@ def test_merge_cli_requires_reviewed_base_and_head_identity() -> None:
     assert "--merge-method" in result.stdout
     assert "--repository-path" in result.stdout
 
+    terminal_inspection_without_worktree = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "inspect",
+            "--repository",
+            "antonov-andrey/example",
+            "--number",
+            "17",
+            "--issue-identifier",
+            "AND-17",
+            "--base-branch",
+            "main",
+            "--head-branch",
+            "linear/and-17",
+            "--reviewed-base-commit",
+            COMMIT_BASE,
+            "--reviewed-head-commit",
+            COMMIT_ONE,
+            "--merge-method",
+            "merge",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert terminal_inspection_without_worktree.returncode == 2
+    assert "require --repository-path" in terminal_inspection_without_worktree.stderr
+
     protection_script = PLUGIN_ROOT / "skills" / "workflow-configure" / "scripts" / "branch_protection.py"
     protection_help = subprocess.run(
         [sys.executable, str(protection_script), "plan", "--help"],
@@ -965,12 +1076,28 @@ def test_github_merge_binds_exact_reviewed_base_head_and_typed_zero_required_che
     assert "origin" not in push_command
     assert "credential.helper=" in push_command
     helper_argument = next(item for item in push_command if item.startswith("credential.helper=!"))
-    assert "gh auth token --hostname github.com --user 'octocat'" in helper_argument
+    assert "/usr/bin/gh auth token --hostname github.com --user octocat" in helper_argument
+    assert "/usr/bin/gh api --hostname github.com /user" in helper_argument
+    assert "7" in helper_argument
+    assert "U_octocat" in helper_argument
+    assert helper_argument.index("/user") < helper_argument.index("username=x-access-token")
     assert "credential.useHttpPath=true" in push_command
+    assert "core.hooksPath=/dev/null" in push_command
+    assert "http.extraHeader=" in push_command
+    assert "http.followRedirects=false" in push_command
+    assert "--no-verify" in push_command
+    assert "--no-signed" in push_command
     assert not any(item[1:3] == ["config", "--global"] for item in runner.command_list)
     assert not any("ghp_" in argument for item in runner.command_list for argument in item)
     assert not any(item[1:3] == ["pr", "merge"] for item in runner.command_list)
     assert runner.operation_mutation_count == 1
+    push_environment = runner.environment_list[runner.command_list.index(push_command)]
+    assert push_environment["HOME"] == "/home/andrey"
+    assert push_environment["GIT_CONFIG"] == "/dev/null"
+    assert push_environment["GIT_TERMINAL_PROMPT"] == "0"
+    assert "CODEX_HOME" not in push_environment
+    assert "GIT_ASKPASS" not in push_environment
+    assert "GH_TOKEN" not in push_environment
     view_command = next(item for item in runner.command_list if item[1:3] == ["pr", "view"])
     assert "baseRefOid" in view_command[-1]
     assert "reviewDecision" not in view_command[-1]
@@ -985,7 +1112,7 @@ def test_github_merge_binds_exact_reviewed_base_head_and_typed_zero_required_che
                 "git@github.com:antonov-andrey/example.git",
                 "https://github.com/antonov-andrey/example.git",
             ],
-            "fetch URL set.*exactly one",
+            "configured fetch URL set.*exactly one",
         ),
         (
             "push_url_list",
@@ -993,12 +1120,12 @@ def test_github_merge_binds_exact_reviewed_base_head_and_typed_zero_required_che
                 "git@github.com:antonov-andrey/example.git",
                 "https://github.com/antonov-andrey/example.git",
             ],
-            "push URL set.*exactly one",
+            "configured push URL set.*exactly one",
         ),
         (
             "push_url_list",
             ["git@github.com:attacker/example.git"],
-            "fetch and push URLs diverge",
+            "configured fetch and push URLs diverge",
         ),
         (
             "fetch_url_list",
@@ -1008,25 +1135,22 @@ def test_github_merge_binds_exact_reviewed_base_head_and_typed_zero_required_che
         (
             "fetch_url_list",
             ["git@github.com:attacker/example.git"],
-            "fetch and push URLs diverge",
+            "configured fetch and push URLs diverge",
         ),
         (
-            "explicit_fetch_url_list",
-            ["https://github.com/attacker/example.git"],
-            "rewritten by Git configuration",
+            "local_config_name_list",
+            ["remote.origin.url", "url.https://attacker.example/.insteadof"],
+            "merge-unsafe keys",
         ),
         (
-            "explicit_push_url_list",
-            ["https://github.com/attacker/example.git"],
-            "rewritten by Git configuration",
+            "local_config_name_list",
+            ["remote.origin.url", "url.https://attacker.example/.pushinsteadof"],
+            "merge-unsafe keys",
         ),
         (
-            "explicit_push_url_list",
-            [
-                "https://github.com/antonov-andrey/example.git",
-                "https://github.com/attacker/example.git",
-            ],
-            "multiple effective destinations",
+            "local_config_name_list",
+            ["remote.origin.url", "http.https://github.com/.extraheader"],
+            "merge-unsafe keys",
         ),
     ),
 )
@@ -1056,6 +1180,187 @@ def test_atomic_merge_rejects_ambiguous_or_noncanonical_git_destination_without_
 
     assert runner.operation_mutation_count == 0
     assert not any("push" in item for item in runner.command_list)
+
+
+@pytest.mark.parametrize(
+    "config_name",
+    (
+        "http.https://github.com/.extraheader",
+        "url.https://attacker.example/.insteadof",
+    ),
+)
+def test_atomic_merge_rejects_local_authorization_or_url_redirection_without_mutation(
+    tmp_path: Path,
+    config_name: str,
+) -> None:
+    """Local headers and URL rewrites cannot enter the explicit GitHub transaction."""
+
+    runner = _GhRunner()
+    runner.local_config_name_list.append(config_name)
+
+    with pytest.raises(GitHubContractError, match="merge-unsafe keys"):
+        GitHubPullRequestBoundary(runner).merge(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+            repository_path=tmp_path,
+        )
+
+    assert runner.operation_mutation_count == 0
+    assert not any("merge-tree" in item or "push" in item for item in runner.command_list)
+
+
+@pytest.mark.parametrize(
+    "environment_by_name_map",
+    (
+        {"GIT_ASKPASS": "/tmp/task-askpass"},
+        {
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "http.extraHeader",
+            "GIT_CONFIG_VALUE_0": "Authorization: bearer hidden",
+        },
+        {"HTTPS_PROXY": "http://task-proxy.invalid"},
+        {"CODEX_HOME": "/tmp/task-codex-home"},
+        {"HOME": "/tmp/task-home"},
+    ),
+)
+def test_merge_rejects_ambient_process_controls_without_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    environment_by_name_map: dict[str, str],
+) -> None:
+    """Ambient task process controls are rejected by name before any mutation."""
+
+    for name, value in environment_by_name_map.items():
+        monkeypatch.setenv(name, value)
+    runner = _GhRunner()
+
+    with pytest.raises(GitHubContractError, match="unsafe inputs"):
+        GitHubPullRequestBoundary(runner).merge(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+            repository_path=tmp_path,
+        )
+
+    assert runner.operation_mutation_count == 0
+    assert runner.command_list == []
+
+
+def test_atomic_merge_rejects_mutating_pre_push_hook_even_with_no_verify(tmp_path: Path) -> None:
+    """Repository hooks are rejected and also disabled on the atomic push."""
+
+    runner = _GhRunner()
+    runner.pre_push_hook = True
+
+    with pytest.raises(GitHubContractError, match="hook or object substitution"):
+        GitHubPullRequestBoundary(runner).merge(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+            repository_path=tmp_path,
+        )
+
+    assert runner.operation_mutation_count == 0
+    assert not (tmp_path / "hook-mutated").exists()
+    assert not any("push" in item for item in runner.command_list)
+
+
+def test_atomic_merge_rejects_replace_refs_without_mutation(tmp_path: Path) -> None:
+    """A local replacement object cannot alter reviewed commit or tree semantics."""
+
+    runner = _GhRunner()
+    runner.replace_ref_list = [f"refs/replace/{COMMIT_BASE}"]
+
+    with pytest.raises(GitHubContractError, match="replace refs"):
+        GitHubPullRequestBoundary(runner).merge(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+            repository_path=tmp_path,
+        )
+
+    assert runner.operation_mutation_count == 0
+    assert not any("merge-tree" in item or "push" in item for item in runner.command_list)
+
+
+def test_atomic_merge_rejects_alternate_object_store_without_mutation(tmp_path: Path) -> None:
+    """Repository-local alternate object storage cannot supply reviewed objects."""
+
+    runner = _GhRunner()
+    runner.alternate_object_store = True
+
+    with pytest.raises(GitHubContractError, match="hook or object substitution"):
+        GitHubPullRequestBoundary(runner).merge(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+            repository_path=tmp_path,
+        )
+
+    assert runner.operation_mutation_count == 0
+    assert not any("merge-tree" in item or "push" in item for item in runner.command_list)
+
+
+@pytest.mark.parametrize(
+    ("attribute_name", "value"),
+    (
+        ("credential_login", "mallory"),
+        ("credential_user_id", 8),
+        ("credential_node_id", "U_mallory"),
+    ),
+)
+def test_atomic_merge_rejects_actual_credential_token_principal_mismatch_without_mutation(
+    tmp_path: Path,
+    attribute_name: str,
+    value: object,
+) -> None:
+    """The helper validates its token's login, numeric ID and node ID before object creation."""
+
+    runner = _GhRunner()
+    setattr(runner, attribute_name, value)
+
+    with pytest.raises(GitHubContractError, match="credential token differs"):
+        GitHubPullRequestBoundary(runner).merge(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+            repository_path=tmp_path,
+        )
+
+    assert any(item[0] == "/bin/sh" for item in runner.command_list)
+    assert runner.operation_mutation_count == 0
+    assert not any("merge-tree" in item or "push" in item for item in runner.command_list)
 
 
 def test_atomic_merge_rejects_changed_gh_principal_before_git_mutation(tmp_path: Path) -> None:
@@ -1599,25 +1904,25 @@ def test_workflow_configuration_cannot_plan_none_for_incompatible_protection() -
         module._plan_payload(snapshot, merge_method="merge")
 
 
-def test_strict_ruleset_api_merge_keeps_exact_head_match() -> None:
-    """Squash/rebase mutation retains exact head and server strict-base gates."""
+@pytest.mark.parametrize("merge_method", ("squash", "rebase"))
+def test_unprovable_strategy_fails_closed_before_provider_mutation(merge_method: str) -> None:
+    """No unsupported strategy mutates a PR before exact immutable proof exists."""
 
     runner = _GhRunner(protection_kind="ruleset", required_check_name_list=["test"])
-    merged = GitHubPullRequestBoundary(runner).merge(
-        repository=RepositoryIdentity("antonov-andrey/example"),
-        number=17,
-        issue_identifier="AND-17",
-        base_branch="main",
-        head_branch="linear/and-17",
-        reviewed_base_commit=COMMIT_BASE,
-        reviewed_head_commit=COMMIT_ONE,
-        merge_method="squash",
-    )
+    with pytest.raises(GitHubContractError, match="unsupported without exact immutable strategy proof"):
+        GitHubPullRequestBoundary(runner).merge(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method=merge_method,
+        )
 
-    assert merged.state == "MERGED"
-    merge_command = next(item for item in runner.command_list if item[1:3] == ["pr", "merge"])
-    assert "--squash" in merge_command
-    assert merge_command[-2:] == ["--match-head-commit", COMMIT_ONE]
+    assert runner.operation_mutation_count == 0
+    assert not any(item[1:3] == ["pr", "merge"] for item in runner.command_list)
 
 
 @pytest.mark.parametrize("protection_kind", ("classic", "ruleset"))
@@ -1762,12 +2067,22 @@ def test_branch_protection_provider_failure_never_becomes_absence() -> None:
 
     delegate = _GhRunner()
 
-    def runner(argument_list: list[str]) -> subprocess.CompletedProcess[str]:
+    def runner(
+        argument_list: Sequence[str],
+        *,
+        environment_by_name_map: Mapping[str, str],
+        input_text: str | None = None,
+    ) -> subprocess.CompletedProcess[str]:
         """Replace only the classic-protection response with a generic failure."""
 
+        argument_list = list(argument_list)
         if argument_list[1:3] == ["api", "--include"]:
             return subprocess.CompletedProcess(argument_list, 1, "", "provider failed")
-        return delegate(argument_list)
+        return delegate(
+            argument_list,
+            environment_by_name_map=environment_by_name_map,
+            input_text=input_text,
+        )
 
     with pytest.raises(GitHubContractError, match="response is malformed"):
         GitHubPullRequestBoundary(runner).reviewed_inspect(
@@ -1803,6 +2118,120 @@ def test_github_merge_retry_adopts_exact_already_merged_reviewed_identity(tmp_pa
     assert merged.state == "MERGED"
     assert not any(item[1:3] == ["pr", "merge"] for item in runner.command_list)
     assert any("cat-file" in item and "-p" in item for item in runner.command_list)
+
+
+def test_public_reviewed_inspection_proves_terminal_merge_before_reporting_success(tmp_path: Path) -> None:
+    """Public terminal inspection performs REST identity, tree, parent and deletion proof."""
+
+    runner = _GhRunner()
+    runner.state = "MERGED"
+    runner.remote_commit_by_ref_map = {"refs/heads/main": COMMIT_TWO}
+
+    inspection = GitHubPullRequestBoundary(runner).reviewed_inspect(
+        repository=RepositoryIdentity("antonov-andrey/example"),
+        number=17,
+        issue_identifier="AND-17",
+        base_branch="main",
+        head_branch="linear/and-17",
+        reviewed_base_commit=COMMIT_BASE,
+        reviewed_head_commit=COMMIT_ONE,
+        merge_method="merge",
+        repository_path=tmp_path,
+    )
+
+    assert inspection.pull_request.state == "MERGED"
+    assert inspection.pull_request.merged_by_user_id == 7
+    assert inspection.branch_protection is None
+    assert any(
+        item[1:4] == ["api", "--hostname", "github.com"] and "/pulls/17" in item[4] for item in runner.command_list
+    )
+    assert any("merge-tree" in item for item in runner.command_list)
+    assert any("cat-file" in item and "-p" in item for item in runner.command_list)
+    assert any("ls-remote" in item for item in runner.command_list)
+    assert not any(item[1:3] == ["api", "--include"] for item in runner.command_list)
+
+
+def test_public_terminal_inspection_requires_repository_for_immutable_proof() -> None:
+    """A terminal PR cannot fall back to generic metadata when Git proof is unavailable."""
+
+    runner = _GhRunner()
+    runner.state = "MERGED"
+
+    with pytest.raises(GitHubContractError, match="requires the exact repository worktree path"):
+        GitHubPullRequestBoundary(runner).reviewed_inspect(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+        )
+
+    assert not any("fetch" in item or "merge-tree" in item for item in runner.command_list)
+
+
+@pytest.mark.parametrize(
+    ("reviewed_base_commit", "reviewed_head_commit", "message"),
+    (
+        (COMMIT_ONE, COMMIT_ONE, "exact reviewed merge identity"),
+        (COMMIT_BASE, COMMIT_TWO, "head changed after independent review"),
+    ),
+)
+def test_public_terminal_inspection_rejects_changed_reviewed_base_or_head(
+    tmp_path: Path,
+    reviewed_base_commit: str,
+    reviewed_head_commit: str,
+    message: str,
+) -> None:
+    """Neither reviewed commit can drift behind generic merged metadata."""
+
+    runner = _GhRunner()
+    runner.state = "MERGED"
+    runner.remote_commit_by_ref_map = {"refs/heads/main": COMMIT_TWO}
+
+    with pytest.raises(GitHubContractError, match=message):
+        GitHubPullRequestBoundary(runner).reviewed_inspect(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=reviewed_base_commit,
+            reviewed_head_commit=reviewed_head_commit,
+            merge_method="merge",
+            repository_path=tmp_path,
+        )
+
+    assert runner.operation_mutation_count == 0
+
+
+@pytest.mark.parametrize("merge_method", ("squash", "rebase"))
+def test_public_terminal_inspection_rejects_unprovable_strategy(
+    tmp_path: Path,
+    merge_method: str,
+) -> None:
+    """Generic provider metadata never certifies an unsupported terminal strategy."""
+
+    runner = _GhRunner()
+    runner.state = "MERGED"
+    runner.remote_commit_by_ref_map = {"refs/heads/main": COMMIT_TWO}
+
+    with pytest.raises(GitHubContractError, match="unsupported without exact immutable strategy proof"):
+        GitHubPullRequestBoundary(runner).reviewed_inspect(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method=merge_method,
+            repository_path=tmp_path,
+        )
+
+    assert not any("fetch" in item or "merge-tree" in item for item in runner.command_list)
 
 
 @pytest.mark.parametrize(
@@ -1850,13 +2279,15 @@ def test_atomic_merge_recovery_ignores_current_protection_and_check_definition_d
         ("merge_commit_tree", "a" * 40, "exact reviewed merge identity"),
         ("merge_base_commit", COMMIT_ONE, "exact reviewed merge identity"),
         ("merge_head_commit", COMMIT_BASE, "exact reviewed merge identity"),
+        ("merged_by_login", "mallory", "merged provider identity"),
+        ("merged_by_user_id", 8, "merged provider identity"),
         ("merged_by_node_id", "U_mallory", "merged provider identity"),
     ),
 )
 def test_atomic_merge_recovery_rejects_inexact_immutable_terminal_identity(
     tmp_path: Path,
     attribute_name: str,
-    value: str,
+    value: object,
     message: str,
 ) -> None:
     """Tree, ordered parents and terminal provider principal are all exact."""
@@ -1941,9 +2372,16 @@ def test_github_pr_create_is_idempotent_for_exact_issue_branch(tmp_path: Path) -
 def test_github_pr_lookup_rejects_malformed_or_conflicting_pages(payload: object) -> None:
     """Native paginated output cannot weaken exact PR identity or uniqueness."""
 
-    def runner(argument_list: list[str]) -> subprocess.CompletedProcess[str]:
+    def runner(
+        argument_list: Sequence[str],
+        *,
+        environment_by_name_map: Mapping[str, str],
+        input_text: str | None = None,
+    ) -> subprocess.CompletedProcess[str]:
         """Return one malformed or conflicting lookup payload."""
 
+        del environment_by_name_map, input_text
+        argument_list = list(argument_list)
         return subprocess.CompletedProcess(argument_list, 0, json.dumps(payload), "")
 
     with pytest.raises(GitHubContractError, match="lookup"):
@@ -1998,7 +2436,7 @@ def test_github_merge_rejects_pending_required_check() -> None:
     runner = _GhRunner(required_check_name_list=["test"])
     runner.check_bucket = "pending"
     with pytest.raises(GitHubContractError, match="not passing"):
-        GitHubPullRequestBoundary(runner).merge(
+        GitHubPullRequestBoundary(runner).reviewed_inspect(
             repository=RepositoryIdentity("antonov-andrey/example"),
             number=17,
             issue_identifier="AND-17",

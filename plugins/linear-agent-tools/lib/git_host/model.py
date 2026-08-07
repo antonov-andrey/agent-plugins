@@ -316,6 +316,7 @@ class PullRequestSnapshot:
     merged_at: datetime | None
     merge_commit: str
     merged_by_login: str
+    merged_by_user_id: int
     merged_by_node_id: str
     required_check_list: list[RequiredCheck]
     required_checks_verified: bool = False
@@ -365,7 +366,13 @@ class PullRequestSnapshot:
         ):
             if not isinstance(value, str) or any(character in value for character in ("\x00", "\n", "\r")):
                 raise GitHubContractError(f"Pull request {label} has another shape")
-        if bool(self.merged_by_login) != bool(self.merged_by_node_id):
+        if (
+            isinstance(self.merged_by_user_id, bool)
+            or not isinstance(self.merged_by_user_id, int)
+            or self.merged_by_user_id < 0
+        ):
+            raise GitHubContractError("Pull request merged-by user ID has another shape")
+        if len({bool(self.merged_by_login), bool(self.merged_by_user_id), bool(self.merged_by_node_id)}) != 1:
             raise GitHubContractError("Pull request merged-by identity is incomplete")
         object.__setattr__(self, "required_check_list", list(self.required_check_list))
 
@@ -376,6 +383,7 @@ class PullRequestSnapshot:
         payload: object,
         *,
         required_check_list: list[RequiredCheck],
+        merged_by_user_id: int,
     ) -> "PullRequestSnapshot":
         """Parse one exact ``gh`` pull-request payload.
 
@@ -383,6 +391,7 @@ class PullRequestSnapshot:
             repository: Exact repository identity.
             payload: Candidate decoded response.
             required_check_list: Separately read required checks.
+            merged_by_user_id: Exact numeric identity from the merged PR REST resource.
 
         Returns:
             Typed pull-request snapshot.
@@ -467,6 +476,7 @@ class PullRequestSnapshot:
             merged_at=merged_instant,
             merge_commit=merge_commit_value,
             merged_by_login=merged_by_login,
+            merged_by_user_id=merged_by_user_id,
             merged_by_node_id=merged_by_node_id,
             required_check_list=required_check_list,
         )
@@ -554,16 +564,17 @@ class PullRequestSnapshot:
         if failed_check_name_list:
             raise GitHubContractError(f"Required GitHub checks are not passing: {sorted(failed_check_name_list)}")
 
-    def merged_result_require(
+    def merged_metadata_require(
         self,
         *,
         reviewed_base_commit: str,
         reviewed_head_commit: str,
     ) -> None:
-        """Require one exact already-merged independently reviewed base and head.
+        """Require complete terminal metadata and the reviewed source head.
 
-        This is the crash-recovery read path after the provider may have accepted
-        the merge while the local process had not yet persisted its read-back.
+        This validation is necessary but deliberately insufficient for terminal
+        success. The strategy owner must additionally prove the reviewed base and
+        result-commit semantics from immutable Git objects.
 
         Args:
             reviewed_base_commit: Exact base commit covered by independent review.
@@ -574,15 +585,17 @@ class PullRequestSnapshot:
             raise GitHubContractError("Reviewed base must be one full lowercase commit")
         if _COMMIT_PATTERN.fullmatch(reviewed_head_commit) is None:
             raise GitHubContractError("Reviewed head must be one full lowercase commit")
+        if self.head_commit != reviewed_head_commit:
+            raise GitHubContractError("Pull request head changed after independent review")
         if self.state != "MERGED" or self.merged_at is None or not self.merge_commit:
             raise GitHubContractError("Pull request does not expose one complete merged result")
-        if not self.merged_by_login or not self.merged_by_node_id:
+        if not self.merged_by_login or not self.merged_by_user_id or not self.merged_by_node_id:
             raise GitHubContractError("Pull request does not expose exact merged provider identity")
 
-    def merged_by_require(self, *, login: str, node_id: str) -> None:
+    def merged_by_require(self, *, login: str, user_id: int, node_id: str) -> None:
         """Require terminal provider identity to match the pre-mutation principal."""
 
-        if self.merged_by_login.casefold() != login.casefold() or self.merged_by_node_id != node_id:
+        if self.merged_by_login != login or self.merged_by_user_id != user_id or self.merged_by_node_id != node_id:
             raise GitHubContractError("GitHub merged provider identity differs from the executing principal")
 
 

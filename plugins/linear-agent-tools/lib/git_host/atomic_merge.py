@@ -8,11 +8,82 @@ import re
 import subprocess
 from urllib.parse import urlsplit
 
-from git_host.authentication import GitHubAuthenticationBoundary, GitHubPrincipal
-from git_host.command import CommandRunner
+from git_host.authentication import (
+    GitHubAuthenticationBoundary,
+    GitHubPrincipal,
+    git_credential_config_argument_list_get,
+)
+from git_host.command import CommandRunner, command_closed_run
 from git_host.model import GitHubContractError, PullRequestSnapshot, RepositoryIdentity
 
 _COMMIT_PATTERN = re.compile(r"[0-9a-f]{40,64}")
+_CLOSED_GIT_CONFIG_ARGUMENT_LIST = (
+    "-c",
+    "core.hooksPath=/dev/null",
+    "-c",
+    "core.askPass=",
+    "-c",
+    "core.gitProxy=",
+    "-c",
+    "core.sshCommand=",
+    "-c",
+    "core.useReplaceRefs=false",
+    "-c",
+    "credential.helper=",
+    "-c",
+    "credential.interactive=never",
+    "-c",
+    "http.extraHeader=",
+    "-c",
+    "http.proxy=",
+    "-c",
+    "https.proxy=",
+    "-c",
+    "http.followRedirects=false",
+    "-c",
+    "http.sslVerify=true",
+    "-c",
+    "protocol.allow=never",
+    "-c",
+    "protocol.https.allow=always",
+    "-c",
+    "commit.gpgSign=false",
+    "-c",
+    "push.gpgSign=false",
+)
+_DANGEROUS_CONFIG_PREFIX_LIST = (
+    "credential.",
+    "diff.",
+    "difftool.",
+    "filter.",
+    "gpg.",
+    "http.",
+    "https.",
+    "include.",
+    "includeif.",
+    "merge.",
+    "mergetool.",
+    "protocol.",
+    "push.",
+    "transport.",
+    "url.",
+)
+_DANGEROUS_CONFIG_NAME_SET = {
+    "commit.gpgsign",
+    "core.alternaterefscommand",
+    "core.alternaterefsprefixes",
+    "core.askpass",
+    "core.attributesfile",
+    "core.fsmonitor",
+    "core.gitproxy",
+    "core.hookspath",
+    "core.sshcommand",
+    "core.usereplacerefs",
+    "extensions.partialclone",
+    "ssh.variant",
+    "tag.gpgsign",
+    "user.signingkey",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,17 +91,7 @@ class GitHubRemoteDestination:
     """Bind one validated worktree to its sole explicit GitHub destination."""
 
     root: Path
-    configured_url: str
     explicit_url: str
-
-
-@dataclass(frozen=True, slots=True)
-class GitUrlRewrite:
-    """Contain one effective Git URL prefix rewrite from current configuration."""
-
-    replacement: str
-    match_prefix: str
-    push_only: bool
 
 
 class GitHubAtomicMergeBoundary:
@@ -86,21 +147,19 @@ class GitHubAtomicMergeBoundary:
                 node_id=execution_node_id,
             )
         )
+        authentication.credential_validate(principal)
         network_config_argument_list = _network_config_argument_list(
-            authentication=authentication,
             principal=principal,
-            explicit_url=destination.explicit_url,
         )
         for commit in (snapshot.base_commit, snapshot.head_commit):
-            self._checked(
-                ("git", "-C", str(root), "cat-file", "-e", f"{commit}^{{commit}}"),
+            self._git_checked(
+                root,
+                ("cat-file", "-e", f"{commit}^{{commit}}"),
                 label="Reviewed Git commit lookup",
             )
-        merge_tree = self._checked(
+        merge_tree = self._git_checked(
+            root,
             (
-                "git",
-                "-C",
-                str(root),
                 "merge-tree",
                 "--write-tree",
                 snapshot.base_commit,
@@ -110,11 +169,9 @@ class GitHubAtomicMergeBoundary:
         ).stdout.strip()
         if _COMMIT_PATTERN.fullmatch(merge_tree) is None:
             raise GitHubContractError("Git merge-tree construction returned another identity")
-        merge_commit = self._checked(
+        merge_commit = self._git_checked(
+            root,
             (
-                "git",
-                "-C",
-                str(root),
                 "-c",
                 f"user.name={execution_login}",
                 "-c",
@@ -136,12 +193,14 @@ class GitHubAtomicMergeBoundary:
             raise GitHubContractError("Git merge-commit construction returned another identity")
         base_ref = f"refs/heads/{snapshot.base_branch}"
         head_ref = f"refs/heads/{snapshot.head_branch}"
-        self._checked(
+        self._git_checked(
+            root,
             (
-                *_git_prefix(root, network_config_argument_list),
                 "push",
                 "--porcelain",
                 "--atomic",
+                "--no-signed",
+                "--no-verify",
                 f"--force-with-lease={base_ref}:{snapshot.base_commit}",
                 f"--force-with-lease={head_ref}:{snapshot.head_commit}",
                 destination.explicit_url,
@@ -149,10 +208,11 @@ class GitHubAtomicMergeBoundary:
                 f":{head_ref}",
             ),
             label="Atomic reviewed Git ref transaction",
+            config_argument_list=network_config_argument_list,
         )
-        remote_ref_process = self._checked(
+        remote_ref_process = self._git_checked(
+            root,
             (
-                *_git_prefix(root, network_config_argument_list),
                 "ls-remote",
                 "--refs",
                 destination.explicit_url,
@@ -160,6 +220,7 @@ class GitHubAtomicMergeBoundary:
                 head_ref,
             ),
             label="Atomic reviewed Git ref readback",
+            config_argument_list=network_config_argument_list,
         )
         _remote_ref_result_require(
             remote_ref_process.stdout,
@@ -188,7 +249,7 @@ class GitHubAtomicMergeBoundary:
             reviewed_head_commit: Immutable head covered by independent review.
         """
 
-        snapshot.merged_result_require(
+        snapshot.merged_metadata_require(
             reviewed_base_commit=reviewed_base_commit,
             reviewed_head_commit=reviewed_head_commit,
         )
@@ -200,29 +261,29 @@ class GitHubAtomicMergeBoundary:
         authentication = GitHubAuthenticationBoundary(self._runner)
         principal = authentication.principal_identity_require(
             login=snapshot.merged_by_login,
+            user_id=snapshot.merged_by_user_id,
             node_id=snapshot.merged_by_node_id,
         )
+        authentication.credential_validate(principal)
         network_config_argument_list = _network_config_argument_list(
-            authentication=authentication,
             principal=principal,
-            explicit_url=destination.explicit_url,
         )
-        self._checked(
+        self._git_checked(
+            root,
             (
-                *_git_prefix(root, network_config_argument_list),
                 "fetch",
                 "--no-tags",
+                "--no-recurse-submodules",
                 "--no-write-fetch-head",
                 destination.explicit_url,
                 snapshot.merge_commit,
             ),
             label="Merged Git commit fetch",
+            config_argument_list=network_config_argument_list,
         )
-        merge_tree = self._checked(
+        merge_tree = self._git_checked(
+            root,
             (
-                "git",
-                "-C",
-                str(root),
                 "merge-tree",
                 "--write-tree",
                 reviewed_base_commit,
@@ -232,8 +293,9 @@ class GitHubAtomicMergeBoundary:
         ).stdout.strip()
         if _COMMIT_PATTERN.fullmatch(merge_tree) is None:
             raise GitHubContractError("Recovered Git merge-tree returned another identity")
-        commit_payload = self._checked(
-            ("git", "-C", str(root), "cat-file", "-p", snapshot.merge_commit),
+        commit_payload = self._git_checked(
+            root,
+            ("cat-file", "-p", snapshot.merge_commit),
             label="Merged Git commit inspection",
         ).stdout
         _merge_commit_identity_require(
@@ -242,15 +304,16 @@ class GitHubAtomicMergeBoundary:
             expected_parent_list=[reviewed_base_commit, reviewed_head_commit],
         )
         head_ref = f"refs/heads/{snapshot.head_branch}"
-        remote_ref_process = self._checked(
+        remote_ref_process = self._git_checked(
+            root,
             (
-                *_git_prefix(root, network_config_argument_list),
                 "ls-remote",
                 "--refs",
                 destination.explicit_url,
                 head_ref,
             ),
             label="Merged Git ref readback",
+            config_argument_list=network_config_argument_list,
         )
         _deleted_ref_result_require(remote_ref_process.stdout, deleted_ref=head_ref)
 
@@ -260,8 +323,9 @@ class GitHubAtomicMergeBoundary:
         if not isinstance(repository_path, Path) or repository_path.is_symlink() or not repository_path.is_dir():
             raise GitHubContractError("Merge repository path must be one ordinary directory")
         root = repository_path.resolve()
-        reported = self._checked(
-            ("git", "-C", str(root), "rev-parse", "--show-toplevel"),
+        reported = self._git_checked(
+            root,
+            ("rev-parse", "--show-toplevel"),
             label="Git worktree-root read",
         ).stdout.strip()
         if not reported or Path(reported).resolve() != root:
@@ -274,90 +338,127 @@ class GitHubAtomicMergeBoundary:
         repository: RepositoryIdentity,
         repository_path: Path,
     ) -> GitHubRemoteDestination:
-        """Require one canonical matching effective fetch/push destination."""
+        """Require one audited local repository and canonical destination."""
 
         root = self._repository_root_require(repository_path)
-        fetch_url = _single_effective_url_get(
-            self._checked(
-                ("git", "-C", str(root), "remote", "get-url", "--all", "origin"),
-                label="Git effective fetch URL read",
-            ).stdout,
-            label="fetch",
+        git_dir = self._git_path_get(root, "--absolute-git-dir", label="Git worktree metadata directory")
+        common_git_dir = self._git_path_get(
+            root,
+            "--path-format=absolute",
+            "--git-common-dir",
+            label="Git common metadata directory",
         )
-        push_url = _single_effective_url_get(
-            self._checked(
-                ("git", "-C", str(root), "remote", "get-url", "--push", "--all", "origin"),
-                label="Git effective push URL read",
-            ).stdout,
-            label="push",
-        )
+        if git_dir.is_symlink() or not git_dir.is_dir() or common_git_dir.is_symlink() or not common_git_dir.is_dir():
+            raise GitHubContractError("Git metadata directory has another shape")
+        config_path_list = [common_git_dir / "config"]
+        worktree_config_path = git_dir / "config.worktree"
+        if worktree_config_path.exists() or worktree_config_path.is_symlink():
+            config_path_list.append(worktree_config_path)
+        fetch_url_list: list[str] = []
+        push_url_list: list[str] = []
+        for config_path in config_path_list:
+            self._config_file_require(config_path)
+            self._config_safety_require(config_path)
+            fetch_url_list.extend(self._config_value_list_get(config_path, "remote.origin.url"))
+            push_url_list.extend(self._config_value_list_get(config_path, "remote.origin.pushurl"))
+        fetch_url = _single_configured_url_get(fetch_url_list, label="fetch", empty_allowed=False)
+        push_url = _single_configured_url_get(push_url_list, label="push", empty_allowed=True) or fetch_url
         fetch_repository = _github_remote_repository_get(fetch_url)
         push_repository = _github_remote_repository_get(push_url)
         if fetch_url != push_url:
-            raise GitHubContractError("Git effective fetch and push URLs diverge")
+            raise GitHubContractError("Git configured fetch and push URLs diverge")
         if fetch_repository != repository or push_repository != repository:
             raise GitHubContractError("Local Git destination differs from the exact pull-request repository")
-        explicit_url = repository.canonical_https_url
-        rewrite_list = self._url_rewrite_list_get(root)
-        resolved_explicit_fetch_url = _rewritten_url_get(explicit_url, rewrite_list=rewrite_list, push=False)
-        resolved_explicit_push_url = _rewritten_url_get(explicit_url, rewrite_list=rewrite_list, push=True)
-        if resolved_explicit_fetch_url != explicit_url or resolved_explicit_push_url != explicit_url:
-            raise GitHubContractError("Explicit GitHub destination is rewritten by Git configuration")
-        return GitHubRemoteDestination(root=root, configured_url=fetch_url, explicit_url=explicit_url)
+        self._repository_substitution_and_hook_state_require(root=root, common_git_dir=common_git_dir)
+        return GitHubRemoteDestination(root=root, explicit_url=repository.canonical_https_url)
 
-    def _url_rewrite_list_get(self, root: Path) -> list[GitUrlRewrite]:
-        """Read every effective URL rewrite without contacting an unresolved host."""
+    def _git_path_get(self, root: Path, *argument_list: str, label: str) -> Path:
+        """Read one absolute Git metadata path through the config-free boundary."""
 
-        completed_process = self._runner(
-            [
-                "git",
-                "-C",
-                str(root),
-                "config",
-                "--null",
-                "--get-regexp",
-                r"^url\..*\.(insteadof|pushinsteadof)$",
-            ]
+        value = self._git_checked(root, ("rev-parse", *argument_list), label=label).stdout.strip()
+        if not value or any(character in value for character in ("\x00", "\n", "\r")):
+            raise GitHubContractError(f"{label} has another shape")
+        path = Path(value)
+        if not path.is_absolute():
+            raise GitHubContractError(f"{label} is not absolute")
+        return path
+
+    def _config_file_require(self, config_path: Path) -> None:
+        """Require one ordinary exact Git config file before auditing its names."""
+
+        if config_path.is_symlink() or not config_path.is_file() or config_path.stat().st_nlink != 1:
+            raise GitHubContractError("Git repository config must be one ordinary file")
+
+    def _config_safety_require(self, config_path: Path) -> None:
+        """Reject local keys that could redirect any merge-time Git operation."""
+
+        completed_process = command_closed_run(
+            self._runner,
+            ["git", "config", "--no-includes", "--null", "--name-only", "--list"],
+            git_config_path=config_path,
+        )
+        if completed_process.returncode != 0:
+            raise GitHubContractError("Git repository config-name audit failed")
+        name_list = _null_record_list_get(completed_process.stdout, label="Git repository config-name audit")
+        dangerous_name_list = sorted(name for name in name_list if _config_name_is_dangerous(name))
+        if dangerous_name_list:
+            raise GitHubContractError("Git repository config contains merge-unsafe keys")
+
+    def _config_value_list_get(self, config_path: Path, name: str) -> list[str]:
+        """Read values for one audited local key without loading any other config."""
+
+        completed_process = command_closed_run(
+            self._runner,
+            ["git", "config", "--no-includes", "--null", "--get-all", name],
+            git_config_path=config_path,
         )
         if completed_process.returncode == 1 and not completed_process.stdout:
             return []
         if completed_process.returncode != 0 or not completed_process.stdout:
-            raise GitHubContractError("Git URL rewrite configuration read failed")
-        rewrite_list: list[GitUrlRewrite] = []
-        record_list = completed_process.stdout.split("\x00")
-        if record_list[-1] != "":
-            raise GitHubContractError("Git URL rewrite configuration has another shape")
-        for record in record_list[:-1]:
-            key, separator, match_prefix = record.partition("\n")
-            if (
-                not separator
-                or "\n" in match_prefix
-                or not match_prefix
-                or any(character in record for character in ("\r",))
-            ):
-                raise GitHubContractError("Git URL rewrite configuration has another shape")
-            if key.startswith("url.") and key.endswith(".pushinsteadof"):
-                replacement = key[len("url.") : -len(".pushinsteadof")]
-                push_only = True
-            elif key.startswith("url.") and key.endswith(".insteadof"):
-                replacement = key[len("url.") : -len(".insteadof")]
-                push_only = False
-            else:
-                raise GitHubContractError("Git URL rewrite configuration has another shape")
-            if not replacement or any(character in replacement for character in ("\x00", "\n", "\r")):
-                raise GitHubContractError("Git URL rewrite configuration has another shape")
-            rewrite_list.append(GitUrlRewrite(replacement=replacement, match_prefix=match_prefix, push_only=push_only))
-        return rewrite_list
+            raise GitHubContractError(f"Git repository {name} read failed")
+        return _null_record_list_get(completed_process.stdout, label=f"Git repository {name}")
 
-    def _checked(
+    def _repository_substitution_and_hook_state_require(self, *, root: Path, common_git_dir: Path) -> None:
+        """Reject hooks, alternate object stores, grafts, replacements and shallow history."""
+
+        forbidden_path_list = [
+            common_git_dir / "hooks" / "pre-push",
+            common_git_dir / "objects" / "info" / "alternates",
+            common_git_dir / "objects" / "info" / "http-alternates",
+            common_git_dir / "info" / "grafts",
+        ]
+        for path in forbidden_path_list:
+            if path.exists() or path.is_symlink():
+                raise GitHubContractError("Git repository contains merge-unsafe hook or object substitution state")
+        replace_ref_output = self._git_checked(
+            root,
+            ("for-each-ref", "--format=%(refname)", "refs/replace/"),
+            label="Git replace-ref audit",
+        ).stdout
+        if replace_ref_output:
+            raise GitHubContractError("Git repository contains replace refs")
+        shallow_value = self._git_checked(
+            root,
+            ("rev-parse", "--is-shallow-repository"),
+            label="Git shallow-repository audit",
+        ).stdout.strip()
+        if shallow_value != "false":
+            raise GitHubContractError("Git merge repository must contain complete non-shallow history")
+
+    def _git_checked(
         self,
+        root: Path,
         argument_list: tuple[str, ...],
         *,
         label: str,
+        config_argument_list: tuple[str, ...] = (),
     ) -> subprocess.CompletedProcess[str]:
-        """Run one direct Git command and hide untrusted provider diagnostics."""
+        """Run one config-free Git command and hide untrusted diagnostics."""
 
-        completed_process = self._runner(argument_list)
+        completed_process = command_closed_run(
+            self._runner,
+            [*_git_prefix(root, config_argument_list), *argument_list],
+        )
         if completed_process.returncode != 0:
             raise GitHubContractError(f"{label} failed")
         return completed_process
@@ -395,59 +496,63 @@ def _github_remote_repository_get(value: str) -> RepositoryIdentity:
     return RepositoryIdentity(path)
 
 
-def _single_effective_url_get(value: str, *, label: str) -> str:
-    """Require one and only one effective Git remote URL."""
+def _single_configured_url_get(url_list: list[str], *, label: str, empty_allowed: bool) -> str:
+    """Require one audited local URL, or an allowed absent push override."""
 
-    url_list = value.splitlines()
+    if not url_list and empty_allowed:
+        return ""
     if len(url_list) != 1 or not url_list[0]:
-        raise GitHubContractError(f"Git effective {label} URL set must contain exactly one destination")
+        raise GitHubContractError(f"Git configured {label} URL set must contain exactly one destination")
     _github_remote_repository_get(url_list[0])
     return url_list[0]
 
 
-def _rewritten_url_get(value: str, *, rewrite_list: list[GitUrlRewrite], push: bool) -> str:
-    """Resolve Git's longest matching fetch or push URL rewrite fail-closed."""
+def _null_record_list_get(value: str, *, label: str) -> list[str]:
+    """Parse one exact NUL-terminated Git config record sequence."""
 
-    instead_of_match_list = [
-        item for item in rewrite_list if not item.push_only and value.startswith(item.match_prefix)
-    ]
-    push_instead_of_match_list = [
-        item for item in rewrite_list if item.push_only and value.startswith(item.match_prefix)
-    ]
-    candidate_list = push_instead_of_match_list if push and push_instead_of_match_list else instead_of_match_list
-    if not candidate_list:
-        return value
-    longest_length = max(len(item.match_prefix) for item in candidate_list)
-    selected_list = [item for item in candidate_list if len(item.match_prefix) == longest_length]
-    resolved_url_set = {item.replacement + value[len(item.match_prefix) :] for item in selected_list}
-    if len(resolved_url_set) != 1:
-        raise GitHubContractError("Git URL rewrite configuration has multiple effective destinations")
-    resolved_url = resolved_url_set.pop()
-    _github_remote_repository_get(resolved_url)
-    return resolved_url
+    if not value:
+        return []
+    record_list = value.split("\x00")
+    if record_list[-1] != "" or any(
+        not record or any(character in record for character in ("\n", "\r")) for record in record_list[:-1]
+    ):
+        raise GitHubContractError(f"{label} has another shape")
+    return record_list[:-1]
+
+
+def _config_name_is_dangerous(name: str) -> bool:
+    """Return whether one local key can redirect or extend merge-time Git."""
+
+    lowered = name.casefold()
+    if lowered in _DANGEROUS_CONFIG_NAME_SET or any(
+        lowered.startswith(prefix) for prefix in _DANGEROUS_CONFIG_PREFIX_LIST
+    ):
+        return True
+    if lowered.startswith("objects."):
+        return True
+    if lowered.startswith("remote."):
+        return lowered not in {
+            "remote.origin.fetch",
+            "remote.origin.pushurl",
+            "remote.origin.tagopt",
+            "remote.origin.url",
+        }
+    return False
 
 
 def _network_config_argument_list(
     *,
-    authentication: GitHubAuthenticationBoundary,
     principal: GitHubPrincipal,
-    explicit_url: str,
 ) -> tuple[str, ...]:
-    """Return a credential- and destination-bound invocation-local Git config."""
+    """Return the one credential-bound invocation-local Git helper."""
 
-    return (
-        *authentication.git_credential_config_argument_list(principal),
-        "-c",
-        f"url.{explicit_url}.insteadOf={explicit_url}",
-        "-c",
-        f"url.{explicit_url}.pushInsteadOf={explicit_url}",
-    )
+    return git_credential_config_argument_list_get(principal)
 
 
 def _git_prefix(root: Path, config_argument_list: tuple[str, ...]) -> tuple[str, ...]:
-    """Return the direct Git prefix shared by authenticated network operations."""
+    """Return the config-free Git prefix shared by every merge operation."""
 
-    return ("git", "-C", str(root), *config_argument_list)
+    return ("git", "-C", str(root), *_CLOSED_GIT_CONFIG_ARGUMENT_LIST, *config_argument_list)
 
 
 def _remote_ref_result_require(
