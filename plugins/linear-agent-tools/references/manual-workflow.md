@@ -1,117 +1,46 @@
 # Manual Linear Development Workflow
 
-## Quickstart
+## Contract Owners
 
-1. Run `linear-agent-tools:workflow-configure` once for the exact workspace and team. Its migration renames the provider-owned `Human Review` status to `Review` in place, preserving the Linear status ID.
-2. On each Ubuntu 24.04 amd64 merge host, run the `task-merge`-owned `scripts/git_transport.py provision` once with the OS user's standard `HOME`; ordinary merge attempts run `inspect` only and never download, compile or install a runtime.
-3. In a fresh thread, run `linear-agent-tools:task-graph-sync` for one approved `project-goals` revision. Review the complete proposed change before mutation.
-4. Open a fresh Codex thread for one ready issue and invoke the skill matching its operation: implementation, review, acceptance, merge or cleanup.
-5. Implementation stops in `Review`. A separate fresh Codex review derives complete coverage independently: zero findings moves a code task to `Merging` and an evidence implementation to `Done`; findings move the implementation to `Rework`.
-6. Only final whole-outcome acceptance stops in `Review` for a human decision about the deployed result. That human boundary moves unchanged accepted evidence to `Done`, rejected evidence to `Rework`, or cancels it.
-7. After acceptance and cleanup, keep the Linear Project as `Completed` or `Canceled` history.
+- Root `DESIGN.md`, section `Goal Brainstorm И Linear Task Workflow`, owns stable Project identity, task identity, synchronization, lifecycle, Review, handoff, validation and concurrency policy.
+- `plugins/linear-agent-tools/lib/task_graph/issue-contract.md` owns the visible issue-card schema and conditional sections.
+- Each `linear-agent-tools` skill owns its operation-specific preconditions, evidence and terminal boundary.
+- This manual owns only the shared operational sequence. It does not restate stable policy.
 
-## Canonical Ownership
+## Setup And Graph Entry
 
-- Linear Project issues and blocker relations are the task graph and lifecycle owner after activation.
-- A Linear Project represents one agreed source outcome, not one Git repository. Repository/base/branch/PR identities belong to individual issues; a Project may span repositories and one repository may participate in multiple Projects.
-- Git owns branches and commits. GitHub owns PR state, typed required-check results, classic/effective-ruleset protection, repository merge policy and merge results. `workflow-configure` plans and applies the exact principal-bound repository setting `delete_branch_on_merge=false`, mutating only that field when needed and requiring a complete exact final readback. Before mutation, protection is one closed typed snapshot for the exact repository/base and authenticated login/numeric/node identity with exact write permission and no bypass; absent, disabled, ineffective, incompatible or unknown protection is never accepted. After a successful merge, recovery uses immutable terminal result identity and no longer depends on mutable protection/check definitions.
-- GitHub integration owns official issue-to-branch/PR linking only. Every team Git status automation, including target-branch rules, is absent so PR events cannot bypass provider-owned `Review`, `Merging`, evidence publication or cleanup transitions.
-- Source systems such as `project-goals` own authoring before handoff and immutable Git provenance for each approved synchronized revision.
-- Git administration state contains only local ownership and crash recovery. No local task graph, scheduler, verification database or execution journal exists.
-- Symphony, scheduled audits and EC2 orchestration are separate outcomes and are not part of this local lifecycle.
+1. Run `linear-agent-tools:workflow-configure` once for the exact workspace, team and GitHub repositories.
+2. On each supported merge host, run the `task-merge` transport provision operation once with the operating-system user's standard `HOME` and no `CODEX_HOME`.
+3. Use the currently installed `linear-agent-tools:task-graph-create` skill for graph publication. The `AND-47` cutover replaces that skill and this step atomically with `task-graph-sync`; do not invoke the replacement name before that cutover lands.
+4. Review the complete provider preview before its mutation boundary.
+5. Open one fresh Codex thread for one ready issue and invoke the skill that matches its role and current status.
 
-`DESIGN.md` section `Goal Brainstorm И Linear Task Workflow` is the sole owner of stable Project/task identity, lifecycle, Review and retained-validation semantics. This manual owns only operational ordering, recovery procedure and the one-time replacement boundaries below. `../lib/task_graph/issue-contract.md` is the sole owner of visible issue-card schema and omission rules. The `project-goals` source directory contains exact sibling `goal.md` and `spec.md` files.
+## Guarded Attempt Sequence
 
-## Boundary Canonicalization
+1. Set `LINEAR_AGENT_WORKSPACE_ROOT` to the canonical multi-repository checkout container. Keep the standard `HOME` and leave `CODEX_HOME` unset.
+2. Acquire the exact issue process-lifetime attempt guard before dispatch or provider/Git mutation. Hold it through nested attempt cleanup and final Linear readback. Release it only by process exit.
+3. Fully read the authenticated destination, issue, relations, comments, source, repository state and delivery-applicable external state.
+4. Save one transient complete snapshot and run the owning dispatch or transition validator before each status mutation.
+5. Reconcile the exact attempt-lifetime resources before `Todo` or `Rework` enters `In Progress`. Nested cleanup reuses the live attempt guard.
+6. Mutate one provider boundary, fully read its semantic result, then continue with only the next permitted phase.
+7. Run targeted checks after each coherent owner slice. Run the required complete deterministic checks on the frozen result.
+8. Perform the required fresh semantic owner reread after the last fix.
+9. Reconcile attempt-lifetime resources before every result handoff or status transition.
+10. Render the one minimal human-first handoff through the shared evidence owner, publish it once and require byte-identical provider readback.
+11. Validate the result transition, mutate Linear, fully reread the issue and preserve or retire the workspace as the role skill requires.
+12. Exit only after final provider readback so the process-lifetime guard releases at the correct boundary.
 
-- Normalize a supported Git remote or directory URL once into one credential-free repository identity.
-- Normalize the source directory once into one full repository-relative POSIX path.
-- Resolve the approved revision once into one full Git commit.
-- Normalize Linear Project, issue, relation, comment and attachment payloads at the Linear transport boundary.
-- Pass only canonical typed values to synchronization and task owners. Do not keep fallback parsers downstream.
+## Code Delivery Sequence
 
-## Direct Verification And Semantic Handoff
+1. Prepare or adopt only the deterministic issue worktrees and branches declared by the card's code delivery section.
+2. On `Rework`, preserve the existing worktree, branch and current open pull request. Do not reset them.
+3. Use `agent-workflows:git-commit` for logical commits and push each green commit immediately.
+4. Create or adopt the exact pull request through the task implementation owner and reread the official Linear integration attachment.
+5. Wait for configured checks through the harness-native background terminal and native resume path.
+6. Stop implementation in `Review` after the handoff and readback. A separate fresh `task-review` attempt owns the decision.
 
-Use `gpt-5.6-sol` max for task-graph planning, unresolved design, architecture, security, migration, cross-repository lifecycle decisions, independent review, acceptance and any complete behavior corpus. Medium is valid only for bounded implementation under an approved plan with no open conceptual decision and direct deterministic coverage; escalate immediately after a substantive conceptual finding. An explicit user model or reasoning choice takes precedence.
+## Cleanup Boundary
 
-A verification result may be reused only when a direct current read proves its result-affecting source, exact command, environment/release state and semantic contract are unchanged. The agent makes that bounded semantic decision from current owners and direct evidence. It does not create a persistent verification receipt, candidate fingerprint, generic invalidation key or estimated result.
+Standalone cleanup owns its exact issue process-lifetime guard. Nested cleanup reuses the caller's live guard and does not acquire another attempt guard. Cleanup closes only exact linked open canceled pull requests. Resource execution is limited to the complete independently approved declaration with its exact direct arguments and working directory. All Linear Project, issue, comment and evidence history and every foreign resource remain preserved.
 
-Each attempt boundary first reconciles nested attempt-lifetime resources, then publishes one provider-marked semantic handoff through `../lib/verification/tool/evidence.py handoff`. The handoff starts with one concise human summary. It adds only nonempty outcome values that the next transition consumes: a composite PR candidate list with URL, base branch, base commit, head commit and optional merged commit, plus direct check results with optional evidence links. Linear already owns the issue, role, delivery, status, outcome history and timestamps, so the handoff does not repeat them or cleanup state. It has no UUID, schema version, compatibility shape, separate commit or PR maps, or empty collection. It is context for recovery, not an approval object or automatic reuse decision. Recovery rereads Linear, source, repository, PR and external state and resumes from their semantic current state; chat history, an exact Codex binary version and brittle orchestration equality are not prerequisites.
-
-Synchronization consumes this final human-first handoff unchanged. It does not create a second handoff, receipt, fingerprint or compatibility form.
-
-When Codex exposes structured usage, the handoff preserves a nonempty closed subset of exact `input_tokens`, `cached_input_tokens`, `cache_write_input_tokens`, `output_tokens` and `reasoning_output_tokens` counters in token units. Validate every exposed counter and aggregate it independently across nested invocations. Omit the usage object when no counters are exposed. Reject unknown, invalid, empty or estimated counters. Never derive a total or infer usage from logs. Prompts, secrets and raw logs never enter the handoff.
-
-Targeted checks run after coherent owner slices, directly applicable complete deterministic suites run on the frozen candidate, and a fresh complete semantic owner audit runs after the last fix. A direct current passed check may be cited instead of rerun only after the four unchanged dimensions above are proved and recorded in the handoff.
-
-Behavior-evaluation convergence is a closed failed-subset cycle. Run only IDs in the current failed list. After one owner-level root correction iteration, rerun only the IDs that failed the immediately preceding iteration; cases that passed remain accepted for that cycle and never reenter it. The semantic contract decides whether the provider behavior or the case/judge is corrected. An empty current failed list means no model case runs. A full corpus never substitutes for this cycle unless a separate task explicitly owns it.
-
-## Publication And Recovery
-
-- Fully paginate the exact team's active and archived Projects. Match only canonical repository plus full source-directory path in the exact team.
-- Unarchive the one match before status-specific work. Create one `Planned` Project for zero matches. Stop for multiple matches.
-- Read every Project issue, role and dispatch label, assignment, comment, attachment and blocker relation before each plan. Historical import and delta documents are inert history.
-- Render the complete semantic no-op or mutation plan for the approved source revision. Stop for malformed metadata, unsupported status, duplicate identity or an unapproved revision.
-- For `Planned`, or for `Completed` or `Canceled` receiving a new revision, use `Planned` as the complete non-dispatchable barrier. Do not reopen a terminal Project for an already synchronized complete revision.
-- For `In Progress`, stage every new, replacement and update-eligible issue in `Backlog` without `agent:codex`. Reconcile all cards, assignments and relations before activation.
-- Add `agent:codex` only to agent tasks after complete metadata readback. Move staged tasks to `Todo` last.
-- Preserve unchanged issues. Update changed `Backlog` or `Todo` issues in place only after making them non-dispatchable.
-- Preserve active and terminal changed issues. Create explicit replacement work with a new approved stable task key and native blocker relation.
-- Apply the removed-task rule owned by `DESIGN.md`. Stop for an active removal until its explicit human cancellation decision exists.
-- Maintain one non-terminal downstream Review and acceptance chain. Never reopen terminal gates or take a running gate from its owning attempt.
-- Write the latest synchronized commit after issue activation. For a `Planned` Project, write it before the final `Planned -> In Progress` transition.
-- After each mutation, reread semantic current state and compute only the next phase. Retry uses no transaction document, receipt or private graph.
-- An unchanged complete revision is a no-op. An interrupted revision resumes from current Linear state even when some mutations already succeeded.
-
-## Review Procedure
-
-- Apply the finding rule owned by `DESIGN.md` to current code and provider state.
-- Group duplicate manifestations under their one owning root and report the complete current set.
-- After remediation, start a fresh complete Review. Continue until one pass has zero findings.
-
-## Replacement Ownership
-
-| Issue | Exact owner boundary |
-| --- | --- |
-| `AND-45` | Simplify owners outside `lib/task_graph/`: configuration plan state in `lib/linear_boundary/configuration/`; manifest, workspace/local baseline and cleanup identity state in `lib/task_workspace/`, `lib/task_cleanup/` and `lib/verification/`; downstream fallback normalization and wrapper-only helpers; Review, standard-home installation, child launch and native-wait procedure in their existing skills. Derive standard worktree, branch, PR and private state from natural identities. Give a non-standard resource one provider-owned handler instead of stored cleanup argv or an approval fingerprint. Consume the AND-35 handoff unchanged and do not repeat its deletions. Do not edit the old task graph model, renderer, source/graph/delta identity, reconcilers or transaction documents. |
-| `AND-47` | Replace `skills/task-graph-create/` once with `skills/task-graph-sync/` and replace the executable create/delta owners in `lib/task_graph/`; keep `lib/task_graph/issue-contract.md` as the canonical target schema. Delete the old create/delta models and reconcilers, `TaskNode`, renderer, transaction-document reader, documents-as-input behavior and source/graph/delta fingerprints. Add the transport-independent Project-source identity to the existing `lib/git_origin/identity.py` boundary. Update `agent-workflows` goal-authoring handoff, plugin metadata and deterministic goal-authoring/task-graph tests in the same change. Migrate current eligible Project cards in place and preserve existing Linear documents and terminal issues as inert history. |
-
-Do not refactor an old `task_graph` owner in `AND-45` for deletion by `AND-47`. Apply the retained-validation and checksum rule owned by `DESIGN.md` in both changes.
-
-The one-time current-Project migration in `AND-47` runs only after the pre-existing Review and acceptance gates close. Its approved synchronization plan binds each eligible non-terminal issue by exact Linear issue ID to the human-visible current task key, renders the canonical card, and requires readback before normal synchronization. Legacy terminal issues and attached import/delta documents remain inert history and are excluded from stable-key lookup. The plan and provider output retain no legacy-card parser, issue mapping or compatibility schema.
-
-## Statuses
-
-- `Backlog`: inactive synchronization staging.
-- `Todo`: fully defined; blockers may still make it non-dispatchable.
-- `In Progress`: an implementation, graph-review, acceptance or cleanup attempt owns current work.
-- `Review`: an implementation awaits a separate independent Codex review, or final whole-outcome acceptance awaits the sole human deployed-result decision.
-- `Rework`: an independent review found an implementation problem, or the final human rejected deployed-result acceptance; the next implementation attempt uses a fresh thread and the existing workspace.
-- `Merging`: merge may operate only on the exact PR base commits and heads covered by the zero-finding independent review.
-- `Done` and `Canceled`: terminal issue states.
-
-Project statuses are `Planned`, `In Progress`, `Completed` and `Canceled`. `Planned` is the complete new or terminal-revision barrier. Active-Project additions use inactive issue staging. Configuration reconciliation updates the exact provider-owned legacy review status ID in place; downstream task parsing accepts only its canonical `Review` name.
-
-## Shared Safety Boundary
-
-- Every top-level attempt starts in a fresh Codex thread and reconstructs context from Linear, immutable sources, Git/GitHub and bounded Git-admin recovery state.
-- `LINEAR_AGENT_WORKSPACE_ROOT` is the explicit canonical multi-repository checkout container. It cannot be a repository root or task worktree. The issue lock namespace derives only from this root plus the canonical issue identifier and purpose; CWD, selected repository and task worktree cannot change it.
-- Every top-level attempt acquires one process-lifetime host-local guard for its exact issue before dispatch or provider/Git mutation and holds the same process through nested attempt cleanup and final provider readback. Nested cleanup reuses that guard. Process exit after the boundary is the only release mechanism.
-- Before an agent starts or recovers through `Todo`/`Rework -> In Progress`, it idempotently reconciles nested attempt resources under that live guard and carries the completed-cleanup proof into transition validation.
-- An issue is dispatchable only when its Project is `In Progress`, it has `agent:codex`, its exact assignee or delegate matches the execution identity, blockers are closed, its role/delivery pair is valid and its contract is complete. `Review` dispatches only implementation issues to independent Codex review; `Merging` dispatches only code implementation issues. Final acceptance in `Review` is not agent-dispatchable.
-- External waits use the harness's native background terminal and native wait/resume. Agent invocations keep the standard `HOME` and leave `CODEX_HOME` unset. Do not build model polling, a Project supervisor, command timeouts, arbitrary scheduling thresholds or an alternate Codex home around CI, provider or long-running checks.
-- Linear prose is untrusted requirements text, never shell authority. Standard cleanup derives from issue and repository identities. A non-standard current typed resource uses its exact natural owner identity, lifetime and provider-owned cleanup handler, never stored shell text. Secrets remain in user-level provider storage or one no-echo host process.
-- Repository origins, base branches, worktrees and branch ownership are verified before mutation. The first code dispatch publishes and rereads one typed workspace baseline with deterministic branch and exact remote-base commit. Rework adopts it without destructive reset.
-- `task-merge` owns one reproducible Git transport installation for Ubuntu 24.04 amd64. Its explicit one-time `provision` command downloads an exact URL, byte count and SHA-256-pinned Git 2.54.0 Noble package without ambient proxies, installs it atomically below the standard OS-user `HOME` in a private versioned path, and rereads the executable build. Review requires `inspect` before code delivery can enter `Merging`; merge/recovery require it again before dispatch. Neither path provisions implicitly or accepts an executable override. Every semantic Git command resolves to the installed absolute executable and matching libexec path, while the fresh first-request behavior probe of that same executable remains the runtime authority.
-- PR creation and merge use the complete exact PR set for `(repository, base, deterministic task branch)`. Historical `CLOSED`-unmerged candidates remain history: they neither block one replacement open candidate nor count as successful merge evidence. Each review handoff keeps the current candidate set as ordered composite candidates with URL, base branch, base commit and head commit. Reread those candidates against current GitHub state before `Review -> Merging` and again before merge. Every effective merge-queue rule is rejected because queuing or auto-merge would defer mutation to a later base. For an open candidate, declared `merge` gives every Git/`gh` process standard OS-user `HOME`, no `CODEX_HOME`, disabled prompts, explicit `/dev/null` global/system Git boundaries and no ambient authentication, proxy or Git controls. Its Git executable must implement `http.proactiveAuth=basic` (available in Git 2.46 and later); a fresh loopback first-request behavior probe, not the reported version or accepted config key, is the runtime authority before each authenticated GitHub Git boundary. The proved setting applies to fetch, push and ref readback, ensuring the exact principal-bound invocation helper precedes any foreign standard-home `.netrc` credential; probe failure stops before GitHub Git network access. The task worktree supplies only a one-time no-includes snapshot audit of ordinary config bytes, canonical origin and unsafe repository state; no object, network or recovery command runs in it after that audit. A mode-`0700` provider temporary bare repository with no local config, hooks, alternates, replacements, shallow state or `info/attributes` fetches exact reviewed refs only from the canonical HTTPS repository; `core.attributesFile=/dev/null` and disabled system attributes close the remaining attribute sources. Construction requires base ancestry of head and uses the exact reviewed head tree, so merge drivers cannot affect the result. A strict complete principal-bound repository merge-policy read must enable the declared method and require automatic branch deletion disabled immediately before construction; an equal fresh read must do so immediately before push. Missing, malformed, inactive, foreign or drifted metadata stops before ref mutation. The helper is bound to the exact GitHub HTTPS host/path and validates its token's login, numeric user ID and node ID before delivery; the token reaches GitHub `/user` only through an stdin-fed `/usr/bin/curl -q ... --config -` header and never enters Python, any process argv or environment, files, logs, state or evidence. Absolute `/usr/bin/curl` and `/usr/bin/jq` are runtime prerequisites alongside behaviorally supported Git 2.46 or later. The push leases only the reviewed old base OID and publishes the exact prepared two-parent merge commit only to the base ref; it never updates or deletes the open PR head. Exact ref readback must prove both the prepared base commit and unchanged reviewed head. GitHub provides no atomic transaction combining its REST policy metadata with Git receive-pack, so a narrow policy-change race remains after the second read. This path requires an exact zero required-check definition set because its new merge commit cannot have checks before push. Declared `squash` and `rebase` fail closed until an equally exact immutable proof exists. Public terminal inspection never certifies generic metadata: GitHub must expose the PR as `MERGED`, and recovery uses the same fresh private boundary to prove ancestry, exact reviewed head tree, ordered parents, terminal REST principal and the retained exact head without treating later policy/protection/check/title/base-tip changes as gates. Only after that terminal provider/Git readback and terminal issue transition may ordinary issue cleanup delete the task branch. It never deletes a branch attached to an open PR. Any reviewed base branch, base commit or head change before mutation, including a base lease rejection, completes nested cleanup and goes to `Rework`; merge never fixes forward.
-- Every individual authenticated GitHub fetch, push and ref-readback command in normal merge and recovery requires its own fresh successful behavioral proactive-authentication probe immediately before that command. One probe authorizes exactly one following network Git command; a failed probe stops before that command.
-- Every review, acceptance and merge outcome reconciles nested attempt resources before publishing its handoff or mutating status, including success, findings, stale state, failure, cancellation and controlled interruption. Abrupt process loss publishes nothing; the next guarded attempt repeats idempotent cleanup before recovery. Every agent-owned result transition then requires the delivery-applicable semantic handoff and direct evidence to be published and reread first.
-- Review and acceptance never hide Product fixes. Candidate-review findings return the owning implementation to `Rework`. Findings against merged work use an approved synchronization plan to create remediation blockers and force a fresh complete Review or acceptance pass.
-
-Before every status mutation, save a complete transient task snapshot and run `lib/linear_boundary/tool/task.py dispatch` or `transition`. Exit `0` proves the requested boundary, exit `1` means a well-formed task is currently non-dispatchable, and exit `2` means malformed input. Delete transient inputs after provider readback.
-
-Configuration apply is a destination-bound transaction. It deletes only exact approved Git status automation rules, updates the exact recognized legacy review and Merging status IDs in place, creates only approved missing statuses, rereads the complete result, then leaves supported label creation to official Linear MCP operations. Each approved GitHub configuration requires its second pre-mutation typed protection or repository-policy/principal snapshot to equal the approved snapshot exactly. Repository-policy apply sends only `delete_branch_on_merge=false` when needed and certifies final state only through a complete exact readback for the same approved repository, login, numeric user ID and node ID. The status updates use Linear's native workflow-state update mutation and are recovered by fresh state reconciliation after interruption.
-
-Cleanup closes only exact linked open canceled PRs and deletes only exact task-owned local/remote state after terminal authority and downstream-consumer proof. Final Project cleanup reconciles deferred issue resources first, proves all listed worktrees/branches/private state absent, and completes only an active Project whose acceptance and every other node are terminal. Canceled Projects remain canceled.
-
-Linear and GitHub history own wall-clock lifecycle. Before final acceptance publishes its handoff or enters `Review`, record exactly queue, startup, execution, review and merge durations from provider history through `evidence.py baseline`. Publish and byte-reread that evidence. Include its URL in one direct handoff check result. Never estimate missing phases or parse private chat logs.
+Only an active Project that passes the complete final-cleanup gate reaches cleanup `Done` and Project `Completed`. A canceled Project and its cleanup issue remain `Canceled` after successful reconciliation.

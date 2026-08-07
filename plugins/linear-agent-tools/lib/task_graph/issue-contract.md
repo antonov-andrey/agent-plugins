@@ -17,6 +17,8 @@ Keep these sections:
 
 <only the work needed to produce the result>
 
+<required Delivery section for task:implementation only>
+
 ## Completion criteria
 
 <observable conditions that make the task complete>
@@ -28,11 +30,33 @@ Task key: `<stable-task-key>`
 
 `Task key` is always the final non-empty line. It is a lowercase semantic slug matching `[a-z0-9]+(?:-[a-z0-9]+)*`. The task identity is its Linear Project plus this key.
 
+## Implementation Delivery
+
+Every `task:implementation` card contains one `## Delivery` section. Its first field is exactly one of:
+
+```markdown
+## Delivery
+
+* Kind: `code`
+* Repository: `<canonical-origin>`
+  * Base branch: `<base-branch>`
+  * Merge method: `<merge|squash|rebase>`
+```
+
+Repeat the ordered repository block for each code repository. Every code delivery names at least one repository and includes its base branch and merge method.
+
+```markdown
+## Delivery
+
+* Kind: `evidence`
+```
+
+Evidence delivery may name the required external result when that aids execution. It omits repository, base branch and merge method fields because they are inapplicable. The provider reconstructs the exact implementation role/delivery pair from the native role label and this closed card field.
+
 ## Optional Sections
 
-Add `Delivery`, `Constraints`, `Verification` or `Source` only when that section helps execute or verify this task.
+Add `Constraints`, `Verification` or `Source` only when that section helps execute or verify this task.
 
-- `Delivery` names code or evidence output and any required repository, base branch, merge method or exact external result.
 - `Constraints` contains only task-specific boundaries that are not already owned by a referenced contract.
 - `Verification` contains observable checks that this task must run or obtain.
 - `Source` names useful canonical owners and the synchronized Git commit. It does not contain a content fingerprint.
@@ -51,6 +75,8 @@ Do not copy native operational state into the card:
 - handoffs and evidence links.
 
 The provider reads those values from Linear. Git and GitHub remain the owners of branches, commits, pull requests, checks, reviews and merges.
+
+The role label uniquely determines delivery for review, acceptance, cleanup and human tasks. Only implementation has two allowed kinds, so its exact card field is required durable task state.
 
 ## Excluded Bookkeeping
 
