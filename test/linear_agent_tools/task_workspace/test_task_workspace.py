@@ -643,13 +643,18 @@ def test_attempt_guard_is_canonical_across_cwds_and_prevents_overlapping_mutatio
     workspace.mkdir()
     first_cwd = tmp_path / "first-cwd"
     second_cwd = tmp_path / "second-cwd"
+    first_temp = tmp_path / "first-temp"
+    second_temp = tmp_path / "second-temp"
     first_cwd.mkdir()
     second_cwd.mkdir()
+    first_temp.mkdir()
+    second_temp.mkdir()
     mutation_log = tmp_path / "mutation.log"
     script = LIBRARY_ROOT / "task_workspace" / "tool" / "attempt.py"
     environment = {
         **os.environ,
         "LINEAR_AGENT_WORKSPACE_ROOT": str(workspace.resolve()),
+        "TMPDIR": str(first_temp.resolve()),
     }
     first = subprocess.Popen(
         [sys.executable, str(script), "hold", "--issue-identifier", "AND-104"],
@@ -668,7 +673,7 @@ def test_attempt_guard_is_canonical_across_cwds_and_prevents_overlapping_mutatio
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            env=environment,
+            env={**environment, "TMPDIR": str(second_temp.resolve())},
             cwd=second_cwd,
         )
         assert second.stdout is not None
@@ -745,7 +750,7 @@ def test_issue_lock_rejects_attacker_symlink_parent(tmp_path: Path, monkeypatch:
     outside.mkdir()
     private_root = tmp_path / f"linear-agent-tools-{os.getuid()}"
     private_root.symlink_to(outside, target_is_directory=True)
-    monkeypatch.setattr(lock_module.tempfile, "gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr(lock_module, "_HOST_LOCK_CONTAINER", tmp_path)
 
     with pytest.raises(TaskWorkspaceError, match="private user-owned physical directory"):
         with IssueWorkspaceLock(WorkspaceConfig(workspace.resolve()), "AND-113"):
@@ -1516,7 +1521,6 @@ def test_cleanup_reconciles_complete_exact_pull_request_set(
         head_branch="linear/and-121",
         head_commit="a" * 40,
         merge_state="CLEAN",
-        review_decision="APPROVED",
         merged_at=datetime.now(timezone.utc) if merged else None,
         merge_commit="b" * 40 if merged else "",
         required_check_list=[],

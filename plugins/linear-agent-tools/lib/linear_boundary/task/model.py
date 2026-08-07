@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from linear_boundary.contract import LinearContractError, uuid_validate
-from linear_boundary.status import IssueStatusName, ProjectStatusName
+from linear_boundary.status import IssueStatusName, ProjectStatusName, issue_status_name_parse
 
 _ROLE_LABEL_SET = frozenset(
     {
@@ -124,7 +124,7 @@ class TaskExecutionSnapshot:
             raise LinearContractError("Task dispatch labels must be a list")
         try:
             return cls(
-                issue_status=IssueStatusName(payload["issue_status"]),
+                issue_status=issue_status_name_parse(payload["issue_status"]),
                 project_status=ProjectStatusName(payload["project_status"]),
                 role_label=payload["role_label"],
                 delivery_kind=payload["delivery_kind"],
@@ -145,6 +145,7 @@ class TaskExecutionSnapshot:
         if self.issue_status not in {
             IssueStatusName.TODO,
             IssueStatusName.IN_PROGRESS,
+            IssueStatusName.REVIEW,
             IssueStatusName.REWORK,
             IssueStatusName.MERGING,
         }:
@@ -153,6 +154,8 @@ class TaskExecutionSnapshot:
             blocker_list.append("project-not-active")
         if self.role_label == "task:human":
             blocker_list.append("human-task")
+        if self.issue_status is IssueStatusName.REVIEW and self.role_label != "task:implementation":
+            blocker_list.append("review-role-incompatible")
         if self.issue_status is IssueStatusName.MERGING and (
             self.role_label != "task:implementation" or self.delivery_kind != "code"
         ):
@@ -181,9 +184,10 @@ class TransitionProof:
     publication_ready: bool = False
     required_ci_ready: bool = False
     evidence_ready: bool = False
-    candidate_fingerprint_ready: bool = False
-    candidate_unchanged: bool = False
-    candidate_mutated: bool = False
+    handoff_ready: bool = False
+    review_complete: bool = False
+    reviewed_state_current: bool = False
+    reviewed_state_changed: bool = False
     remediation_blocker_ready: bool = False
     review_finding_ready: bool = False
     merge_complete: bool = False
@@ -202,9 +206,10 @@ class TransitionProof:
             "publication_ready": self.publication_ready,
             "required_ci_ready": self.required_ci_ready,
             "evidence_ready": self.evidence_ready,
-            "candidate_fingerprint_ready": self.candidate_fingerprint_ready,
-            "candidate_unchanged": self.candidate_unchanged,
-            "candidate_mutated": self.candidate_mutated,
+            "handoff_ready": self.handoff_ready,
+            "review_complete": self.review_complete,
+            "reviewed_state_current": self.reviewed_state_current,
+            "reviewed_state_changed": self.reviewed_state_changed,
             "remediation_blocker_ready": self.remediation_blocker_ready,
             "review_finding_ready": self.review_finding_ready,
             "merge_complete": self.merge_complete,
@@ -213,5 +218,7 @@ class TransitionProof:
         for field_name, value in boolean_by_field_name_map.items():
             if not isinstance(value, bool):
                 raise LinearContractError(f"Transition proof {field_name} must be boolean")
-        if self.candidate_unchanged and self.candidate_mutated:
-            raise LinearContractError("Candidate cannot be both unchanged and mutated")
+        if self.reviewed_state_current and self.reviewed_state_changed:
+            raise LinearContractError("Reviewed state cannot be both current and changed")
+        if self.review_complete and self.review_finding_ready:
+            raise LinearContractError("Review cannot be both complete and finding-bearing")

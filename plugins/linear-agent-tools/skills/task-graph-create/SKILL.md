@@ -13,7 +13,7 @@ Read `../../references/manual-workflow.md` and `../../lib/task_graph/issue-contr
 
 ## Preflight
 
-1. Open a fresh thread. Resolve the exact source kind, published revision, canonical URL/paths, outcome and complete content. For `project-goals`, use one commit-pinned canonical URL for the exact source directory; its only source artifacts are the `goal.md` and `spec.md` children at that same commit. The source remains revisable before successful handoff; the selected Git revision becomes immutable provenance only after activation.
+1. Open a fresh `gpt-5.6-sol` max-reasoning thread. Resolve the exact source kind, published revision, canonical URL/paths, outcome and complete content. For `project-goals`, use one commit-pinned canonical URL for the exact source directory; its only source artifacts are the `goal.md` and `spec.md` children at that same commit. The source remains revisable before successful handoff; the selected Git revision becomes immutable provenance only after activation.
 2. Resolve the exact Linear workspace/team and prove `workflow-configure` is current. Verify GitHub integration before adding any code-mutating node.
 3. Inspect every intended repository's current instructions, canonical origin and `worktree-bootstrap.yaml`. A missing current owner, stale goal-brainstorm worktree rule or legacy TOML manifest becomes a blocking instruction-adoption implementation issue; do not add a compatibility parser or dispatch dependent Product work first.
 4. Separate unknown external properties into evidence-only `task:implementation` probes that block bulk implementation.
@@ -21,7 +21,7 @@ Read `../../references/manual-workflow.md` and `../../lib/task_graph/issue-contr
 ## Decomposition
 
 - Prefer one independently verifiable owner slice and one repository/PR per implementation issue. Use a cross-repository issue only for a truly indivisible outcome and include ordered merge and partial-recovery contracts.
-- Use only allowed role/delivery pairs. Create explicit implementation/evidence, post-merge review, acceptance, human decision when needed, and exactly one final cleanup node.
+- Use only allowed role/delivery pairs. Create explicit implementation/evidence, post-merge review, acceptance, a human task only for a genuinely external decision/action, and exactly one final cleanup node. Implementation and review have no human decision boundary; acceptance owns only the final deployed-result human boundary.
 - Review depends on implementation. Acceptance depends on review. Final cleanup depends on every acceptance task. All resource identities, lifetimes and direct-argv cleanup bindings are explicit.
 - Every node contains the complete shared issue template with compact relevant source sections, not the full source repeated in every issue.
 

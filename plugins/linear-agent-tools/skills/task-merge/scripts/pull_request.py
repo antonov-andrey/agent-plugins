@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Inspect or merge one exact human-approved GitHub pull request."""
+"""Inspect or merge one exact independently reviewed GitHub pull request."""
 
 from __future__ import annotations
 
@@ -25,14 +25,14 @@ def _parser_get() -> argparse.ArgumentParser:
         The argument parser.
     """
 
-    parser = argparse.ArgumentParser(description="Inspect or merge one exact GitHub pull request candidate.")
+    parser = argparse.ArgumentParser(description="Inspect or merge one exact reviewed GitHub pull request head.")
     parser.add_argument("command", choices=("inspect", "merge"))
     parser.add_argument("--repository", required=True)
     parser.add_argument("--number", required=True, type=int)
     parser.add_argument("--issue-identifier", required=True)
     parser.add_argument("--base-branch", required=True)
     parser.add_argument("--head-branch", required=True)
-    parser.add_argument("--approved-head-commit", required=True)
+    parser.add_argument("--reviewed-head-commit", required=True)
     parser.add_argument("--merge-method", choices=("merge", "squash", "rebase"))
     return parser
 
@@ -60,7 +60,7 @@ def main(argv: list[str] | None = None) -> int:
                 issue_identifier=args.issue_identifier,
                 base_branch=args.base_branch,
                 head_branch=args.head_branch,
-                approved_head_commit=args.approved_head_commit,
+                reviewed_head_commit=args.reviewed_head_commit,
                 merge_method=args.merge_method,
             )
         else:
@@ -69,9 +69,9 @@ def main(argv: list[str] | None = None) -> int:
         snapshot.target_require(base_branch=args.base_branch, head_branch=args.head_branch)
         if args.command == "inspect":
             if snapshot.state == "MERGED":
-                snapshot.merged_result_require(approved_head_commit=args.approved_head_commit)
+                snapshot.merged_result_require(reviewed_head_commit=args.reviewed_head_commit)
             else:
-                snapshot.merge_preconditions_require(approved_head_commit=args.approved_head_commit)
+                snapshot.merge_preconditions_require(reviewed_head_commit=args.reviewed_head_commit)
     except GitHubContractError as error:
         print(str(error), file=sys.stderr)
         return 2

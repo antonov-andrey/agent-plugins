@@ -187,7 +187,7 @@ class GitHubPullRequestBoundary:
                 "--repo",
                 repository.value,
                 "--json",
-                "number,url,title,state,isDraft,baseRefName,headRefName,headRefOid,mergeStateStatus,reviewDecision,mergedAt,mergeCommit",
+                "number,url,title,state,isDraft,baseRefName,headRefName,headRefOid,mergeStateStatus,mergedAt,mergeCommit",
             )
         )
         try:
@@ -213,19 +213,19 @@ class GitHubPullRequestBoundary:
         issue_identifier: str,
         base_branch: str,
         head_branch: str,
-        approved_head_commit: str,
+        reviewed_head_commit: str,
         merge_method: str,
     ) -> PullRequestSnapshot:
-        """Merge only one exact human-approved PR head and verify final state.
+        """Merge only one exact independently reviewed PR head and verify final state.
 
         Args:
             repository: Exact GitHub repository.
             number: Pull request number.
             issue_identifier: Exact Linear issue identifier.
-            base_branch: Approved destination branch.
-            head_branch: Approved task branch.
-            approved_head_commit: Exact human-approved head.
-            merge_method: Approved repository-supported merge, squash or rebase method.
+            base_branch: Declared destination branch.
+            head_branch: Deterministic task branch.
+            reviewed_head_commit: Exact independently reviewed head.
+            merge_method: Declared repository-supported merge, squash or rebase method.
 
         Returns:
             Merged PR snapshot.
@@ -237,9 +237,9 @@ class GitHubPullRequestBoundary:
         before.integration_identity_require(issue_identifier)
         before.target_require(base_branch=base_branch, head_branch=head_branch)
         if before.state == "MERGED":
-            before.merged_result_require(approved_head_commit=approved_head_commit)
+            before.merged_result_require(reviewed_head_commit=reviewed_head_commit)
             return before
-        before.merge_preconditions_require(approved_head_commit=approved_head_commit)
+        before.merge_preconditions_require(reviewed_head_commit=reviewed_head_commit)
         self._checked(
             (
                 "pr",
@@ -249,13 +249,13 @@ class GitHubPullRequestBoundary:
                 repository.value,
                 f"--{merge_method}",
                 "--match-head-commit",
-                approved_head_commit,
+                reviewed_head_commit,
             )
         )
         after = self.inspect(repository=repository, number=number)
         after.integration_identity_require(issue_identifier)
         after.target_require(base_branch=base_branch, head_branch=head_branch)
-        after.merged_result_require(approved_head_commit=approved_head_commit)
+        after.merged_result_require(reviewed_head_commit=reviewed_head_commit)
         return after
 
     def close_if_open(

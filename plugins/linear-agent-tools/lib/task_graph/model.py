@@ -553,11 +553,14 @@ class TaskNode:
         verification_key_list = [item.key for item in self.verification_list]
         if len(verification_key_list) != len(set(verification_key_list)):
             raise TaskGraphError("Task repeats one verification key")
-        _text_validate(
-            self.human_decision_boundary,
-            label="Human decision boundary",
-            multiline=True,
-        )
+        if self.human_decision_boundary:
+            _text_validate(
+                self.human_decision_boundary,
+                label="Human decision boundary",
+                multiline=True,
+            )
+        elif self.role in {TaskRole.ACCEPTANCE, TaskRole.HUMAN}:
+            raise TaskGraphError("Acceptance and human tasks require the final human decision boundary")
         _text_list_validate(self.source_section_list, label="Source sections")
         object.__setattr__(self, "scope_list", list(self.scope_list))
         object.__setattr__(self, "non_goal_list", list(self.non_goal_list))

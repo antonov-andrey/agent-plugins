@@ -64,59 +64,125 @@ class TaskTransition:
                 and self.delivery_kind == "code"
                 and not self.proof.workspace_preserved
             ):
-                raise LinearContractError("Rework must adopt the existing candidate workspace")
+                raise LinearContractError("Rework must adopt the existing task workspace")
             return
-        if self.current is IssueStatusName.IN_PROGRESS and self.target is IssueStatusName.HUMAN_REVIEW:
+        if self.current is IssueStatusName.IN_PROGRESS and self.target is IssueStatusName.REVIEW:
             common_ready = all(
                 (
                     self.proof.result_ready,
                     self.proof.verification_ready,
                     self.proof.evidence_ready,
-                    self.proof.candidate_fingerprint_ready,
+                    self.proof.handoff_ready,
                 )
             )
-            if self.delivery_kind == "code":
+            if self.role_label == "task:implementation" and self.delivery_kind == "code":
                 common_ready = common_ready and self.proof.publication_ready and self.proof.required_ci_ready
-            elif self.delivery_kind != "evidence":
-                raise LinearContractError("Only code or evidence delivery may enter Human Review")
+            elif not (
+                self.delivery_kind == "evidence" and self.role_label in {"task:implementation", "task:acceptance"}
+            ):
+                raise LinearContractError("Only implementation or final acceptance may enter Review")
             if not common_ready:
-                raise LinearContractError("Human Review requires every delivery-applicable result and candidate proof")
+                raise LinearContractError("Review requires every delivery-applicable result and semantic handoff")
             return
         if self.current is IssueStatusName.IN_PROGRESS and self.target is IssueStatusName.TODO:
-            if self.role_label not in {"task:review", "task:acceptance"} or not self.proof.remediation_blocker_ready:
-                raise LinearContractError("Only review or acceptance may return to Todo with a remediation blocker")
-            return
-        if self.current is IssueStatusName.HUMAN_REVIEW and self.target is IssueStatusName.REWORK:
-            if not self.proof.human_decision and not self.proof.review_finding_ready:
-                raise LinearContractError("Rework requires an explicit human decision or review finding")
-            return
-        if self.current is IssueStatusName.HUMAN_REVIEW and self.target is IssueStatusName.MERGING:
-            if self.delivery_kind != "code" or not self.proof.human_decision or not self.proof.candidate_unchanged:
-                raise LinearContractError("Merging requires human approval of the unchanged code candidate")
-            return
-        if self.current is IssueStatusName.HUMAN_REVIEW and self.target is IssueStatusName.DONE:
-            if self.delivery_kind == "code" or not self.proof.human_decision or not self.proof.candidate_unchanged:
+            if (
+                self.role_label not in {"task:review", "task:acceptance"}
+                or not self.proof.remediation_blocker_ready
+                or not self.proof.evidence_ready
+                or not self.proof.handoff_ready
+            ):
                 raise LinearContractError(
-                    "Non-code completion requires human approval of the unchanged evidence candidate"
+                    "Only review or acceptance may return to Todo with a remediation blocker and semantic handoff"
+                )
+            return
+        if self.current is IssueStatusName.REVIEW and self.target is IssueStatusName.REWORK:
+            implementation_finding = self.role_label == "task:implementation" and self.proof.review_finding_ready
+            acceptance_rejection = self.role_label == "task:acceptance" and self.proof.human_decision
+            if (
+                (not implementation_finding and not acceptance_rejection)
+                or not self.proof.evidence_ready
+                or not self.proof.handoff_ready
+            ):
+                raise LinearContractError(
+                    "Rework requires an independent review finding or final human rejection with semantic handoff"
+                )
+            return
+        if self.current is IssueStatusName.REVIEW and self.target is IssueStatusName.MERGING:
+            if (
+                self.role_label != "task:implementation"
+                or self.delivery_kind != "code"
+                or not self.proof.review_complete
+                or not self.proof.reviewed_state_current
+                or not self.proof.evidence_ready
+                or not self.proof.handoff_ready
+            ):
+                raise LinearContractError(
+                    "Merging requires a zero-finding independent review handoff for the current PR heads"
+                )
+            return
+        if self.current is IssueStatusName.REVIEW and self.target is IssueStatusName.DONE:
+            implementation_review = (
+                self.role_label == "task:implementation"
+                and self.delivery_kind == "evidence"
+                and self.proof.review_complete
+                and self.proof.reviewed_state_current
+            )
+            final_human_boundary = (
+                self.role_label == "task:acceptance"
+                and self.delivery_kind == "evidence"
+                and self.proof.human_decision
+                and self.proof.reviewed_state_current
+            )
+            if (
+                (not implementation_review and not final_human_boundary)
+                or not self.proof.evidence_ready
+                or not self.proof.handoff_ready
+            ):
+                raise LinearContractError(
+                    "Review completion requires independent evidence review or final human acceptance handoff"
                 )
             return
         if self.current is IssueStatusName.MERGING and self.target is IssueStatusName.DONE:
             if self.delivery_kind != "code" or self.role_label != "task:implementation":
                 raise LinearContractError("Only a code implementation task may complete through Merging")
-            if not self.proof.candidate_unchanged or not self.proof.merge_complete:
-                raise LinearContractError("Merge completion must match the exact approved candidate")
+            if (
+                not self.proof.reviewed_state_current
+                or not self.proof.merge_complete
+                or not self.proof.evidence_ready
+                or not self.proof.handoff_ready
+            ):
+                raise LinearContractError(
+                    "Merge completion requires a semantic handoff for the exact independently reviewed PR heads"
+                )
             return
         if self.current is IssueStatusName.MERGING and self.target is IssueStatusName.REWORK:
             if (
                 self.delivery_kind != "code"
                 or self.role_label != "task:implementation"
-                or not self.proof.candidate_mutated
+                or not self.proof.reviewed_state_changed
+                or not self.proof.evidence_ready
+                or not self.proof.handoff_ready
             ):
-                raise LinearContractError("A merging code task returns to Rework only after proven candidate mutation")
+                raise LinearContractError(
+                    "A merging code task returns to Rework only after a reviewed PR head changed with semantic handoff"
+                )
             return
         if self.current is IssueStatusName.IN_PROGRESS and self.target is IssueStatusName.DONE:
-            if self.role_label != "task:cleanup" or not self.proof.cleanup_complete:
-                raise LinearContractError("Only a successfully reconciled cleanup task may complete directly")
+            cleanup_complete = (
+                self.role_label == "task:cleanup"
+                and self.proof.cleanup_complete
+                and self.proof.evidence_ready
+                and self.proof.handoff_ready
+            )
+            semantic_review_complete = (
+                self.role_label == "task:review"
+                and self.delivery_kind == "evidence"
+                and self.proof.review_complete
+                and self.proof.evidence_ready
+                and self.proof.handoff_ready
+            )
+            if not cleanup_complete and not semantic_review_complete:
+                raise LinearContractError("Direct completion requires cleanup or a zero-finding semantic review")
             return
         if self.current is IssueStatusName.TODO and self.target is IssueStatusName.DONE:
             if self.role_label != "task:human" or not self.proof.human_decision or not self.proof.evidence_ready:

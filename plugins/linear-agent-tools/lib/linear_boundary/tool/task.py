@@ -15,7 +15,7 @@ if str(LIBRARY_ROOT) not in sys.path:
 
 from json_contract import JsonContractError, json_load_strict
 from linear_boundary.contract import LinearContractError
-from linear_boundary.status import IssueStatusName, ProjectStatusName
+from linear_boundary.status import ProjectStatusName, issue_status_name_parse
 from linear_boundary.task.model import TaskExecutionSnapshot, TransitionProof
 from linear_boundary.task.workflow import TaskTransition
 
@@ -61,8 +61,8 @@ def _transition_validate(payload: object) -> None:
         raise LinearContractError("Task transition proof has another shape")
     try:
         TaskTransition(
-            current=IssueStatusName(payload["current_status"]),
-            target=IssueStatusName(payload["target_status"]),
+            current=issue_status_name_parse(payload["current_status"]),
+            target=issue_status_name_parse(payload["target_status"]),
             project_status=ProjectStatusName(payload["project_status"]),
             role_label=payload["role_label"],
             delivery_kind=payload["delivery_kind"],

@@ -53,15 +53,15 @@ For cross-repository code delivery this section is an explicit ordered merge pla
 
 ## Verification Plan
 
-<observable checks, owning repository, working directory, direct argv, invalidation paths and required environment identity>
+<observable checks, owning repository, working directory, direct argv, semantic result-affecting paths and required environment identity>
 
-## Human Decision Boundary
+## Final Human Decision Boundary
 
-<what a human must decide and the candidate identity that decision binds>
+<only for final deployed-result acceptance or a task:human action; omitted from implementation, review and cleanup>
 
 ## Evidence And Links
 
-Agent attempts append concise comments with commits, receipts, PRs, CI and telemetry. Raw logs, prompts and credentials never appear here.
+Agent attempts append concise semantic handoffs with direct verification, commits, PRs, CI and exact exposed usage telemetry. Raw logs, prompts and credentials never appear here.
 ```
 
 The issue description is visible durable execution context, not executable shell input. Project-local commands remain requirements until the task skill validates them against current project instructions.

@@ -23,16 +23,36 @@ class ProjectStatusCategory(StrEnum):
 
 
 class IssueStatusName(StrEnum):
-    """Exact issue workflow names used by manual and future Symphony runners."""
+    """Exact issue workflow names used by the local task provider."""
 
     BACKLOG = "Backlog"
     TODO = "Todo"
     IN_PROGRESS = "In Progress"
-    HUMAN_REVIEW = "Human Review"
+    REVIEW = "Review"
     REWORK = "Rework"
     MERGING = "Merging"
     DONE = "Done"
     CANCELED = "Canceled"
+
+
+LEGACY_REVIEW_STATUS_NAME = "Human Review"
+
+
+def issue_status_name_parse(value: object) -> IssueStatusName:
+    """Parse current or migration-compatible provider status text.
+
+    Args:
+        value: Exact status name read from Linear.
+
+    Returns:
+        Current semantic issue status.
+    """
+
+    if value == LEGACY_REVIEW_STATUS_NAME:
+        return IssueStatusName.REVIEW
+    if not isinstance(value, str):
+        raise ValueError("Issue status name must be text")
+    return IssueStatusName(value)
 
 
 class ProjectStatusName(StrEnum):

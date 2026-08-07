@@ -487,6 +487,7 @@ class ConfigurationPlan:
 
     destination: DestinationIdentity
     issue_status_create_list: list[StatusDefinition]
+    issue_status_update_list: list[StatusDefinition]
     project_status_create_list: list[StatusDefinition]
     label_create_list: list[LinearLabel]
     git_status_automation_delete_list: list[GitStatusAutomation]
@@ -504,6 +505,13 @@ class ConfigurationPlan:
             label="issue status",
         )
         _plan_definition_list_validate(
+            self.issue_status_update_list,
+            expected_type=StatusDefinition,
+            label="issue status update",
+        )
+        if any(not item.id for item in self.issue_status_update_list):
+            raise LinearContractError("Configuration plan issue status update requires an existing status ID")
+        _plan_definition_list_validate(
             self.project_status_create_list,
             expected_type=StatusDefinition,
             label="Project status",
@@ -520,6 +528,7 @@ class ConfigurationPlan:
             label="conflict",
         )
         object.__setattr__(self, "issue_status_create_list", list(self.issue_status_create_list))
+        object.__setattr__(self, "issue_status_update_list", list(self.issue_status_update_list))
         object.__setattr__(self, "project_status_create_list", list(self.project_status_create_list))
         object.__setattr__(self, "label_create_list", list(self.label_create_list))
         object.__setattr__(
@@ -547,6 +556,7 @@ class ConfigurationPlan:
 
         return self.can_mutate() and not (
             self.issue_status_create_list
+            or self.issue_status_update_list
             or self.project_status_create_list
             or self.label_create_list
             or self.git_status_automation_delete_list
@@ -596,6 +606,9 @@ class ConfigurationPlan:
             for item in self.issue_status_create_list
         ):
             raise LinearContractError("Linear issue status plan changed after approval")
+        approved_issue_status_update_by_id_map = {item.id: item for item in approved.issue_status_update_list}
+        if any(approved_issue_status_update_by_id_map.get(item.id) != item for item in self.issue_status_update_list):
+            raise LinearContractError("Linear issue status update plan changed after approval")
         approved_project_status_by_name_map = {item.name: item for item in approved.project_status_create_list}
         if any(
             approved_project_status_by_name_map.get(item.name) is None
@@ -631,6 +644,7 @@ class ConfigurationPlan:
                 {"kind": item.kind, "name": item.name, "reason": item.reason} for item in self.conflict_list
             ],
             "issue_status_create_list": [item.payload() for item in self.issue_status_create_list],
+            "issue_status_update_list": [item.payload() for item in self.issue_status_update_list],
             "git_status_automation_delete_list": [item.payload() for item in self.git_status_automation_delete_list],
             "label_create_list": [item.payload() for item in self.label_create_list],
             "project_status_create_list": [item.payload() for item in self.project_status_create_list],
@@ -668,6 +682,7 @@ class ConfigurationPlan:
             "destination",
             "conflict_list",
             "issue_status_create_list",
+            "issue_status_update_list",
             "git_status_automation_delete_list",
             "label_create_list",
             "project_status_create_list",
@@ -688,6 +703,7 @@ class ConfigurationPlan:
         return cls(
             destination=DestinationIdentity(**destination_payload),
             issue_status_create_list=StatusDefinition.list_from_payload(payload["issue_status_create_list"]),
+            issue_status_update_list=StatusDefinition.list_from_payload(payload["issue_status_update_list"]),
             project_status_create_list=StatusDefinition.list_from_payload(payload["project_status_create_list"]),
             label_create_list=LinearLabel.list_from_payload(payload["label_create_list"]),
             git_status_automation_delete_list=GitStatusAutomation.list_from_payload(

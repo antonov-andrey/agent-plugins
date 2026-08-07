@@ -111,7 +111,9 @@ def _node(
                 "semantic" if role != "task:implementation" else "targeted",
             )
         ],
-        "human_decision_boundary": "Approve only the exact published candidate fingerprint.",
+        "human_decision_boundary": (
+            "Accept or reject the complete deployed result." if role in {"task:acceptance", "task:human"} else ""
+        ),
         "source_section_list": ["Required Outcome"],
     }
 
@@ -476,7 +478,7 @@ def test_graph_validates_roles_and_renders_one_shared_issue_contract() -> None:
     assert view.project_key.endswith(graph.source_fingerprint())
     for issue in view.issue_list:
         assert f"* Node key: `{issue.node_key}`" in issue.description
-        assert "## Human Decision Boundary" in issue.description
+        assert ("## Final Human Decision Boundary" in issue.description) == (issue.node_key == "acceptance")
         assert "## Evidence And Links" in issue.description
     assert '"node_list"' in view.import_document_content
 
@@ -1286,7 +1288,7 @@ def test_active_project_delta_keeps_blocked_implementation_in_rework_through_act
 
 @pytest.mark.parametrize(
     "target_status",
-    ["Todo", "In Progress", "Human Review", "Merging", "Done", "Canceled"],
+    ["Todo", "In Progress", "Review", "Human Review", "Merging", "Done", "Canceled"],
 )
 def test_active_project_delta_rejects_non_rework_implementation_target(target_status: str) -> None:
     """An invalid implementation target returns no relation or other mutation plan."""
@@ -1364,6 +1366,7 @@ def test_active_project_delta_rejects_non_rework_implementation_target(target_st
     ("target_status", "declare_reverification"),
     [
         ("In Progress", False),
+        ("Review", True),
         ("Human Review", True),
         ("Rework", True),
         ("Merging", True),

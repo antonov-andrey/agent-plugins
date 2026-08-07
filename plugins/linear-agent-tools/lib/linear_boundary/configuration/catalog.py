@@ -5,6 +5,23 @@ from __future__ import annotations
 from linear_boundary.configuration.model import LinearLabel, StatusDefinition
 from linear_boundary.status import IssueStatusCategory, ProjectStatusCategory
 
+ISSUE_STATUS_LEGACY_REVIEW = StatusDefinition(
+    "",
+    "Human Review",
+    IssueStatusCategory.STARTED,
+    "#7C3AED",
+    "Candidate awaits a human decision",
+    400.0,
+)
+ISSUE_STATUS_LEGACY_MERGING = StatusDefinition(
+    "",
+    "Merging",
+    IssueStatusCategory.STARTED,
+    "#0F766E",
+    "Approved exact candidate is being merged",
+    600.0,
+)
+
 ISSUE_STATUS_DESIRED = (
     StatusDefinition("", "Backlog", IssueStatusCategory.BACKLOG, "#6B7280", "Idea or inactive import staging", 100.0),
     StatusDefinition(
@@ -25,10 +42,10 @@ ISSUE_STATUS_DESIRED = (
     ),
     StatusDefinition(
         "",
-        "Human Review",
+        "Review",
         IssueStatusCategory.STARTED,
         "#7C3AED",
-        "Candidate awaits a human decision",
+        "Independent Codex review or final deployed-result human boundary",
         400.0,
     ),
     StatusDefinition(
@@ -44,7 +61,7 @@ ISSUE_STATUS_DESIRED = (
         "Merging",
         IssueStatusCategory.STARTED,
         "#0F766E",
-        "Approved exact candidate is being merged",
+        "Independently reviewed pull request heads are being merged",
         600.0,
     ),
     StatusDefinition("", "Done", IssueStatusCategory.COMPLETED, "#16A34A", "Task completed", 700.0),

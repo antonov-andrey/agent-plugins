@@ -68,6 +68,15 @@ mutation LinearAgentWorkflowStateCreate($input: WorkflowStateCreateInput!) {
 }
 """
 
+_WORKFLOW_STATE_UPDATE = """
+mutation LinearAgentWorkflowStateUpdate($id: String!, $input: WorkflowStateUpdateInput!) {
+  workflowStateUpdate(id: $id, input: $input) {
+    success
+    workflowState { id name type color description position }
+  }
+}
+"""
+
 _PROJECT_STATUS_CREATE = """
 mutation LinearAgentProjectStatusCreate($input: ProjectStatusCreateInput!) {
   projectStatusCreate(input: $input) {
@@ -337,6 +346,7 @@ class LinearWorkflowConfigurationGraphQL:
         current_graphql_plan = ConfigurationPlan(
             destination=current_plan.destination,
             issue_status_create_list=current_plan.issue_status_create_list,
+            issue_status_update_list=current_plan.issue_status_update_list,
             project_status_create_list=current_plan.project_status_create_list,
             label_create_list=[],
             git_status_automation_delete_list=current_plan.git_status_automation_delete_list,
@@ -345,6 +355,7 @@ class LinearWorkflowConfigurationGraphQL:
         approved_graphql_plan = ConfigurationPlan(
             destination=approved_plan.destination,
             issue_status_create_list=approved_plan.issue_status_create_list,
+            issue_status_update_list=approved_plan.issue_status_update_list,
             project_status_create_list=approved_plan.project_status_create_list,
             label_create_list=[],
             git_status_automation_delete_list=approved_plan.git_status_automation_delete_list,
@@ -353,6 +364,8 @@ class LinearWorkflowConfigurationGraphQL:
         current_graphql_plan.subset_require(approved_graphql_plan)
         for automation in current_plan.git_status_automation_delete_list:
             self._delete_once(automation.id)
+        for status in current_plan.issue_status_update_list:
+            self._workflow_state_update_once(status)
         approved_issue_status_by_name_map = {item.name: item for item in approved_plan.issue_status_create_list}
         for status in current_plan.issue_status_create_list:
             approved_status = approved_issue_status_by_name_map[status.name]
@@ -407,6 +420,7 @@ class LinearWorkflowConfigurationGraphQL:
         if (
             readback.conflict_list
             or readback.issue_status_create_list
+            or readback.issue_status_update_list
             or readback.project_status_create_list
             or readback.git_status_automation_delete_list
         ):
@@ -425,6 +439,33 @@ class LinearWorkflowConfigurationGraphQL:
         result = _object_get(data, "gitAutomationStateDelete")
         if result.get("success") is not True or result.get("entityId") != identifier:
             raise LinearTransportError("Linear Git status automation deletion did not confirm exact success")
+
+    def _workflow_state_update_once(self, status: StatusDefinition) -> None:
+        """Update one exact legacy workflow state without replacing its identity.
+
+        Args:
+            status: Desired current definition carrying the legacy status ID.
+        """
+
+        uuid_validate(status.id, label="Workflow status update ID")
+        data = self._transport.execute(
+            operation_name="LinearAgentWorkflowStateUpdate",
+            document=_WORKFLOW_STATE_UPDATE,
+            variables={
+                "id": status.id,
+                "input": {
+                    "name": status.name,
+                    "color": status.color,
+                    "description": status.description,
+                    "position": status.position,
+                },
+            },
+            repeat_safe=False,
+        )
+        result = _object_get(data, "workflowStateUpdate")
+        workflow_state = _object_get(result, "workflowState")
+        if result.get("success") is not True or workflow_state.get("id") != status.id:
+            raise LinearTransportError("Linear workflow status update did not preserve the approved identity")
 
     def _create_once(
         self,

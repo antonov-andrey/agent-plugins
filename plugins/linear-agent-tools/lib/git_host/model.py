@@ -102,7 +102,7 @@ class RequiredCheck:
 
 @dataclass(frozen=True, slots=True)
 class PullRequestSnapshot:
-    """Contain all state used to bind one human approval and merge."""
+    """Contain all state used to bind one independent review and merge."""
 
     repository: RepositoryIdentity
     number: int
@@ -114,7 +114,6 @@ class PullRequestSnapshot:
     head_branch: str
     head_commit: str
     merge_state: str
-    review_decision: str
     merged_at: datetime | None
     merge_commit: str
     required_check_list: list[RequiredCheck]
@@ -133,7 +132,6 @@ class PullRequestSnapshot:
             ("base branch", self.base_branch),
             ("head branch", self.head_branch),
             ("merge state", self.merge_state),
-            ("review decision", self.review_decision),
         ):
             if not isinstance(value, str) or not value or any(character in value for character in ("\x00", "\n", "\r")):
                 raise GitHubContractError(f"Pull request {label} must be non-empty single-line text")
@@ -186,7 +184,6 @@ class PullRequestSnapshot:
             "headRefName",
             "headRefOid",
             "mergeStateStatus",
-            "reviewDecision",
             "mergedAt",
             "mergeCommit",
         }
@@ -220,7 +217,6 @@ class PullRequestSnapshot:
             head_branch=payload["headRefName"],
             head_commit=payload["headRefOid"],
             merge_state=payload["mergeStateStatus"],
-            review_decision=payload["reviewDecision"] or "REVIEW_REQUIRED",
             merged_at=merged_instant,
             merge_commit=merge_commit_value,
             required_check_list=required_check_list,
@@ -239,51 +235,49 @@ class PullRequestSnapshot:
             raise GitHubContractError("Pull request lacks the exact Linear issue title and branch identity")
 
     def target_require(self, *, base_branch: str, head_branch: str) -> None:
-        """Require the PR to target the exact approved Git refs.
+        """Require the PR to target the exact task Git refs.
 
         Args:
-            base_branch: Approved destination branch.
-            head_branch: Approved task branch.
+            base_branch: Declared destination branch.
+            head_branch: Deterministic task branch.
         """
 
         if self.base_branch != base_branch or self.head_branch != head_branch:
-            raise GitHubContractError("Pull request base or head differs from the approved repository target")
+            raise GitHubContractError("Pull request base or head differs from the declared repository target")
 
-    def merge_preconditions_require(self, *, approved_head_commit: str) -> None:
-        """Require the exact approved candidate and all provider merge gates.
+    def merge_preconditions_require(self, *, reviewed_head_commit: str) -> None:
+        """Require the exact independently reviewed head and provider merge gates.
 
         Args:
-            approved_head_commit: Human-approved PR head commit.
+            reviewed_head_commit: Exact PR head covered by independent review.
         """
 
-        if _COMMIT_PATTERN.fullmatch(approved_head_commit) is None:
-            raise GitHubContractError("Approved head must be one full lowercase commit")
-        if self.head_commit != approved_head_commit:
-            raise GitHubContractError("Pull request head changed after human approval")
+        if _COMMIT_PATTERN.fullmatch(reviewed_head_commit) is None:
+            raise GitHubContractError("Reviewed head must be one full lowercase commit")
+        if self.head_commit != reviewed_head_commit:
+            raise GitHubContractError("Pull request head changed after independent review")
         if self.state != "OPEN" or self.draft:
             raise GitHubContractError("Pull request must be open and ready for review")
         if self.merge_state not in {"CLEAN", "HAS_HOOKS"}:
             raise GitHubContractError(f"Pull request is not mergeable: {self.merge_state}")
-        if self.review_decision == "CHANGES_REQUESTED":
-            raise GitHubContractError("Pull request has requested changes")
         failed_check_name_list = [item.name for item in self.required_check_list if not item.is_passed()]
         if failed_check_name_list:
             raise GitHubContractError(f"Required GitHub checks are not passing: {sorted(failed_check_name_list)}")
 
-    def merged_result_require(self, *, approved_head_commit: str) -> None:
-        """Require one exact already-merged human-approved candidate.
+    def merged_result_require(self, *, reviewed_head_commit: str) -> None:
+        """Require one exact already-merged independently reviewed head.
 
         This is the crash-recovery read path after the provider may have accepted
         the merge while the local process had not yet persisted its read-back.
 
         Args:
-            approved_head_commit: Exact head covered by human approval.
+            reviewed_head_commit: Exact head covered by independent review.
         """
 
-        if _COMMIT_PATTERN.fullmatch(approved_head_commit) is None:
-            raise GitHubContractError("Approved head must be one full lowercase commit")
-        if self.head_commit != approved_head_commit:
-            raise GitHubContractError("Pull request head changed after human approval")
+        if _COMMIT_PATTERN.fullmatch(reviewed_head_commit) is None:
+            raise GitHubContractError("Reviewed head must be one full lowercase commit")
+        if self.head_commit != reviewed_head_commit:
+            raise GitHubContractError("Pull request head changed after independent review")
         if self.state != "MERGED" or self.merged_at is None or not self.merge_commit:
             raise GitHubContractError("Pull request does not expose one complete merged result")
         failed_check_name_list = [item.name for item in self.required_check_list if not item.is_passed()]

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from email.message import Message
-from dataclasses import asdict, replace
+from dataclasses import replace
 import importlib.util
 import io
 import json
@@ -25,6 +25,8 @@ from json_contract import JsonContractError, json_load_strict
 from linear_boundary.configuration.graphql import LinearWorkflowConfigurationGraphQL
 from linear_boundary.configuration.catalog import (
     ISSUE_STATUS_DESIRED,
+    ISSUE_STATUS_LEGACY_MERGING,
+    ISSUE_STATUS_LEGACY_REVIEW,
     LABEL_DESIRED,
     PROJECT_STATUS_DESIRED,
 )
@@ -391,6 +393,7 @@ def test_configuration_plan_is_exact_and_idempotent() -> None:
     plan = WorkflowConfigurationReconciler().plan_get(partial)
 
     assert [item.name for item in plan.issue_status_create_list] == [item.name for item in ISSUE_STATUS_DESIRED[3:]]
+    assert plan.issue_status_update_list == []
     assert plan.project_status_create_list == list(PROJECT_STATUS_DESIRED)
     assert plan.label_create_list == list(LABEL_DESIRED)
     assert plan.git_status_automation_delete_list == [_git_status_automation(1)]
@@ -441,6 +444,7 @@ def test_configuration_plan_roundtrip_and_fresh_subset_guard() -> None:
     current = ConfigurationPlan(
         destination=approved.destination,
         issue_status_create_list=[replace(item, id="") for item in approved.issue_status_create_list[1:]],
+        issue_status_update_list=[],
         project_status_create_list=[replace(item, id="") for item in approved.project_status_create_list],
         label_create_list=[],
         git_status_automation_delete_list=approved.git_status_automation_delete_list[:1],
@@ -470,6 +474,62 @@ def test_configuration_plan_roundtrip_and_fresh_subset_guard() -> None:
             current,
             git_status_automation_delete_list=[replace(current.git_status_automation_delete_list[0], event="review")],
         ).subset_require(approved)
+
+
+def test_configuration_migrates_exact_legacy_review_status_without_replacing_identity() -> None:
+    """Only the recognized legacy definition becomes an in-place Review update."""
+
+    legacy_review = _existing_status(ISSUE_STATUS_LEGACY_REVIEW, 4)
+    current_issue_status_list = [
+        _existing_status(item, index) for index, item in enumerate(ISSUE_STATUS_DESIRED, 1) if item.name != "Review"
+    ]
+    current_issue_status_list.append(legacy_review)
+
+    plan = WorkflowConfigurationReconciler().plan_get(
+        WorkflowConfigurationSnapshot(_destination(), current_issue_status_list, [], [], [])
+    )
+
+    assert plan.issue_status_create_list == []
+    assert plan.issue_status_update_list == [replace(ISSUE_STATUS_DESIRED[3], id=legacy_review.id)]
+    assert plan.issue_status_update_list[0].id == legacy_review.id
+    assert plan.can_mutate()
+    plan.subset_require(plan)
+    with pytest.raises(LinearContractError, match="status update plan changed"):
+        replace(
+            plan,
+            issue_status_update_list=[replace(plan.issue_status_update_list[0], color="#000000")],
+        ).subset_require(plan)
+
+    changed_legacy = replace(legacy_review, description="foreign lifecycle")
+    conflict = WorkflowConfigurationReconciler().plan_get(
+        WorkflowConfigurationSnapshot(_destination(), [changed_legacy], [], [], [])
+    )
+    assert not conflict.can_mutate()
+    assert conflict.issue_status_update_list == []
+    assert ("issue-status", "Review", "legacy status is not the exact provider definition") in {
+        (item.kind, item.name, item.reason) for item in conflict.conflict_list
+    }
+
+    current_review = _existing_status(ISSUE_STATUS_DESIRED[3], 5)
+    duplicate = WorkflowConfigurationReconciler().plan_get(
+        WorkflowConfigurationSnapshot(_destination(), [legacy_review, current_review], [], [], [])
+    )
+    assert not duplicate.can_mutate()
+    assert ("issue-status", "Review", "current and legacy review statuses coexist") in {
+        (item.kind, item.name, item.reason) for item in duplicate.conflict_list
+    }
+
+    legacy_merging = _existing_status(ISSUE_STATUS_LEGACY_MERGING, 6)
+    merging_status_list = [
+        _existing_status(item, index) for index, item in enumerate(ISSUE_STATUS_DESIRED, 1) if item.name != "Merging"
+    ]
+    merging_status_list.append(legacy_merging)
+    merging_plan = WorkflowConfigurationReconciler().plan_get(
+        WorkflowConfigurationSnapshot(_destination(), merging_status_list, [], [], [])
+    )
+    assert merging_plan.issue_status_update_list == [
+        replace(next(item for item in ISSUE_STATUS_DESIRED if item.name == "Merging"), id=legacy_merging.id)
+    ]
 
 
 def test_configuration_rejects_wrong_category_and_foreign_label() -> None:
@@ -516,8 +576,8 @@ def test_configuration_rejects_wrong_category_and_foreign_label() -> None:
     }
 
 
-def test_dispatchability_uses_exact_status_project_label_identity_and_blockers() -> None:
-    """Todo is not a hidden blocked state and Human Review never dispatches."""
+def test_dispatchability_distinguishes_codex_review_from_final_human_boundary() -> None:
+    """Review dispatches implementation only; final acceptance remains human-owned."""
 
     ready = TaskExecutionSnapshot(
         issue_status=IssueStatusName.TODO,
@@ -533,11 +593,17 @@ def test_dispatchability_uses_exact_status_project_label_identity_and_blockers()
     )
 
     assert ready.can_dispatch()
-    assert not replace(ready, unresolved_blocker_count=1).can_dispatch()
-    assert not replace(ready, issue_status=IssueStatusName.HUMAN_REVIEW).can_dispatch()
-    assert not replace(ready, project_status=ProjectStatusName.PLANNED).can_dispatch()
-    assert replace(ready, assignee_id="", delegate_id=VIEWER_ID).can_dispatch()
+    assert replace(ready, issue_status=IssueStatusName.REVIEW).can_dispatch()
     assert replace(ready, issue_status=IssueStatusName.MERGING).can_dispatch()
+    assert not replace(ready, unresolved_blocker_count=1).can_dispatch()
+    assert not replace(ready, project_status=ProjectStatusName.PLANNED).can_dispatch()
+    assert not replace(
+        ready,
+        issue_status=IssueStatusName.REVIEW,
+        role_label="task:acceptance",
+        delivery_kind="evidence",
+        label_name_list=["task:acceptance", "agent:codex"],
+    ).can_dispatch()
     assert not replace(
         ready,
         issue_status=IssueStatusName.MERGING,
@@ -549,20 +615,15 @@ def test_dispatchability_uses_exact_status_project_label_identity_and_blockers()
     with pytest.raises(LinearContractError, match="exactly one"):
         replace(ready, delegate_id=VIEWER_ID)
 
-    with pytest.raises(LinearContractError, match="exact single Linear role label"):
-        replace(ready, label_name_list=["task:human", "agent:codex"])
 
-
-def test_task_state_cli_exposes_closed_dispatch_and_transition_gates(
-    tmp_path: Path,
-) -> None:
-    """Every manual role skill can invoke the same deterministic state boundary."""
+def test_task_state_cli_accepts_legacy_review_text_as_current_semantic_review(tmp_path: Path) -> None:
+    """An active Project remains operable on either side of status migration."""
 
     tool = LIBRARY_ROOT / "linear_boundary" / "tool" / "task.py"
-    dispatch_input = tmp_path / "dispatch.json"
-    dispatch_payload = {
+    input_path = tmp_path / "dispatch.json"
+    payload = {
         "schema_version": 1,
-        "issue_status": "Todo",
+        "issue_status": "Human Review",
         "project_status": "In Progress",
         "role_label": "task:implementation",
         "delivery_kind": "code",
@@ -573,71 +634,21 @@ def test_task_state_cli_exposes_closed_dispatch_and_transition_gates(
         "unresolved_blocker_count": 0,
         "issue_contract_complete": True,
     }
-    dispatch_input.write_text(json.dumps(dispatch_payload), encoding="utf-8")
+    input_path.write_text(json.dumps(payload), encoding="utf-8")
 
-    ready = subprocess.run(
-        [sys.executable, str(tool), "dispatch", "--input", str(dispatch_input)],
+    result = subprocess.run(
+        [sys.executable, str(tool), "dispatch", "--input", str(input_path)],
         check=False,
         capture_output=True,
         text=True,
     )
-    assert ready.returncode == 0
-    assert json.loads(ready.stdout)["dispatchable"] is True
 
-    dispatch_payload["unresolved_blocker_count"] = 1
-    dispatch_input.write_text(json.dumps(dispatch_payload), encoding="utf-8")
-    blocked = subprocess.run(
-        [sys.executable, str(tool), "dispatch", "--input", str(dispatch_input)],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    assert blocked.returncode == 1
-    assert json.loads(blocked.stdout)["blocker_list"] == ["unresolved-blockers"]
-
-    transition_input = tmp_path / "transition.json"
-    transition_input.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "current_status": "Todo",
-                "target_status": "In Progress",
-                "project_status": "In Progress",
-                "role_label": "task:implementation",
-                "delivery_kind": "code",
-                "dispatchable": True,
-                "proof": {**asdict(TransitionProof()), "fresh_thread": True},
-            }
-        ),
-        encoding="utf-8",
-    )
-    transition = subprocess.run(
-        [sys.executable, str(tool), "transition", "--input", str(transition_input)],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    assert transition.returncode == 0
-    assert json.loads(transition.stdout)["transition_allowed"] is True
+    assert result.returncode == 0
+    assert json.loads(result.stdout)["dispatchable"] is True
 
 
-def test_transition_rejects_incompatible_role_delivery_pair_before_activation() -> None:
-    """A role label cannot activate using another role's delivery contract."""
-
-    with pytest.raises(LinearContractError, match="role and delivery kind are incompatible"):
-        _transition_require(
-            current=IssueStatusName.BACKLOG,
-            target=IssueStatusName.TODO,
-            project_status=ProjectStatusName.PLANNED,
-            role_label="task:human",
-            delivery_kind="code",
-            proof=TransitionProof(task_definition_ready=True),
-            dispatchable=False,
-        )
-
-
-def test_transition_contract_requires_fresh_rework_and_exact_human_candidate() -> None:
-    """Rework adopts state and merge approval cannot survive mutation."""
+def test_transition_requires_fresh_rework_and_complete_implementation_handoff() -> None:
+    """Rework adopts workspace while implementation Review requires direct evidence."""
 
     with pytest.raises(LinearContractError, match="fresh thread"):
         _transition_require(
@@ -658,51 +669,174 @@ def test_transition_contract_requires_fresh_rework_and_exact_human_candidate() -
         proof=TransitionProof(fresh_thread=True, workspace_preserved=True),
         dispatchable=True,
     )
-    with pytest.raises(LinearContractError, match="unchanged code candidate"):
+    complete = TransitionProof(
+        result_ready=True,
+        verification_ready=True,
+        publication_ready=True,
+        required_ci_ready=True,
+        evidence_ready=True,
+        handoff_ready=True,
+    )
+    _transition_require(
+        current=IssueStatusName.IN_PROGRESS,
+        target=IssueStatusName.REVIEW,
+        project_status=ProjectStatusName.IN_PROGRESS,
+        role_label="task:implementation",
+        delivery_kind="code",
+        proof=complete,
+        dispatchable=False,
+    )
+    with pytest.raises(LinearContractError, match="semantic handoff"):
         _transition_require(
-            current=IssueStatusName.HUMAN_REVIEW,
-            target=IssueStatusName.MERGING,
+            current=IssueStatusName.IN_PROGRESS,
+            target=IssueStatusName.REVIEW,
             project_status=ProjectStatusName.IN_PROGRESS,
             role_label="task:implementation",
             delivery_kind="code",
-            proof=TransitionProof(human_decision=True, candidate_unchanged=False),
+            proof=replace(complete, handoff_ready=False),
             dispatchable=False,
         )
 
 
-def test_transition_contract_uses_delivery_specific_evidence_and_remediation_paths() -> None:
-    """Evidence tasks need no fake PR/CI and findings use the exact remediation path."""
+def test_independent_review_owns_code_merging_and_rework_gate() -> None:
+    """Zero findings merge while findings rework without a human PR decision."""
 
+    review_passed = TransitionProof(
+        review_complete=True,
+        reviewed_state_current=True,
+        evidence_ready=True,
+        handoff_ready=True,
+    )
     _transition_require(
-        current=IssueStatusName.BACKLOG,
-        target=IssueStatusName.TODO,
-        project_status=ProjectStatusName.PLANNED,
-        role_label="task:review",
-        delivery_kind="evidence",
-        proof=TransitionProof(task_definition_ready=True),
+        current=IssueStatusName.REVIEW,
+        target=IssueStatusName.MERGING,
+        project_status=ProjectStatusName.IN_PROGRESS,
+        role_label="task:implementation",
+        delivery_kind="code",
+        proof=review_passed,
         dispatchable=False,
     )
     _transition_require(
-        current=IssueStatusName.IN_PROGRESS,
-        target=IssueStatusName.HUMAN_REVIEW,
+        current=IssueStatusName.REVIEW,
+        target=IssueStatusName.REWORK,
         project_status=ProjectStatusName.IN_PROGRESS,
-        role_label="task:review",
+        role_label="task:implementation",
+        delivery_kind="code",
+        proof=TransitionProof(review_finding_ready=True, evidence_ready=True, handoff_ready=True),
+        dispatchable=False,
+    )
+    with pytest.raises(LinearContractError, match="review handoff"):
+        _transition_require(
+            current=IssueStatusName.REVIEW,
+            target=IssueStatusName.MERGING,
+            project_status=ProjectStatusName.IN_PROGRESS,
+            role_label="task:implementation",
+            delivery_kind="code",
+            proof=replace(review_passed, handoff_ready=False),
+            dispatchable=False,
+        )
+    with pytest.raises(LinearContractError, match="zero-finding independent review"):
+        _transition_require(
+            current=IssueStatusName.REVIEW,
+            target=IssueStatusName.MERGING,
+            project_status=ProjectStatusName.IN_PROGRESS,
+            role_label="task:implementation",
+            delivery_kind="code",
+            proof=TransitionProof(
+                human_decision=True,
+                reviewed_state_current=True,
+                evidence_ready=True,
+                handoff_ready=True,
+            ),
+            dispatchable=False,
+        )
+
+
+def test_evidence_review_and_acceptance_keep_only_final_human_boundary() -> None:
+    """Evidence implementation is agent-reviewed while acceptance waits for a human."""
+
+    ready = TransitionProof(
+        result_ready=True,
+        verification_ready=True,
+        evidence_ready=True,
+        handoff_ready=True,
+    )
+    _transition_require(
+        current=IssueStatusName.IN_PROGRESS,
+        target=IssueStatusName.REVIEW,
+        project_status=ProjectStatusName.IN_PROGRESS,
+        role_label="task:implementation",
+        delivery_kind="evidence",
+        proof=ready,
+        dispatchable=False,
+    )
+    _transition_require(
+        current=IssueStatusName.REVIEW,
+        target=IssueStatusName.DONE,
+        project_status=ProjectStatusName.IN_PROGRESS,
+        role_label="task:implementation",
         delivery_kind="evidence",
         proof=TransitionProof(
-            result_ready=True,
-            verification_ready=True,
+            review_complete=True,
+            reviewed_state_current=True,
             evidence_ready=True,
-            candidate_fingerprint_ready=True,
+            handoff_ready=True,
         ),
         dispatchable=False,
     )
     _transition_require(
         current=IssueStatusName.IN_PROGRESS,
-        target=IssueStatusName.TODO,
+        target=IssueStatusName.REVIEW,
         project_status=ProjectStatusName.IN_PROGRESS,
         role_label="task:acceptance",
         delivery_kind="evidence",
-        proof=TransitionProof(remediation_blocker_ready=True),
+        proof=ready,
+        dispatchable=False,
+    )
+    _transition_require(
+        current=IssueStatusName.REVIEW,
+        target=IssueStatusName.DONE,
+        project_status=ProjectStatusName.IN_PROGRESS,
+        role_label="task:acceptance",
+        delivery_kind="evidence",
+        proof=TransitionProof(
+            human_decision=True,
+            reviewed_state_current=True,
+            evidence_ready=True,
+            handoff_ready=True,
+        ),
+        dispatchable=False,
+    )
+    _transition_require(
+        current=IssueStatusName.REVIEW,
+        target=IssueStatusName.REWORK,
+        project_status=ProjectStatusName.IN_PROGRESS,
+        role_label="task:acceptance",
+        delivery_kind="evidence",
+        proof=TransitionProof(human_decision=True, evidence_ready=True, handoff_ready=True),
+        dispatchable=False,
+    )
+
+
+def test_post_merge_review_completes_directly_or_returns_with_remediation() -> None:
+    """Graph review has an agent-owned zero-finding boundary and no hidden fix."""
+
+    _transition_require(
+        current=IssueStatusName.IN_PROGRESS,
+        target=IssueStatusName.DONE,
+        project_status=ProjectStatusName.IN_PROGRESS,
+        role_label="task:review",
+        delivery_kind="evidence",
+        proof=TransitionProof(review_complete=True, evidence_ready=True, handoff_ready=True),
+        dispatchable=False,
+    )
+    _transition_require(
+        current=IssueStatusName.IN_PROGRESS,
+        target=IssueStatusName.TODO,
+        project_status=ProjectStatusName.IN_PROGRESS,
+        role_label="task:review",
+        delivery_kind="evidence",
+        proof=TransitionProof(remediation_blocker_ready=True, evidence_ready=True, handoff_ready=True),
         dispatchable=False,
     )
     with pytest.raises(LinearContractError, match="review or acceptance"):
@@ -712,23 +846,13 @@ def test_transition_contract_uses_delivery_specific_evidence_and_remediation_pat
             project_status=ProjectStatusName.IN_PROGRESS,
             role_label="task:implementation",
             delivery_kind="code",
-            proof=TransitionProof(remediation_blocker_ready=True),
-            dispatchable=False,
-        )
-    with pytest.raises(LinearContractError, match="Rework -> Todo is forbidden"):
-        _transition_require(
-            current=IssueStatusName.REWORK,
-            target=IssueStatusName.TODO,
-            project_status=ProjectStatusName.IN_PROGRESS,
-            role_label="task:implementation",
-            delivery_kind="code",
-            proof=TransitionProof(remediation_blocker_ready=True),
+            proof=TransitionProof(remediation_blocker_ready=True, evidence_ready=True, handoff_ready=True),
             dispatchable=False,
         )
 
 
-def test_transition_contract_returns_mutated_merge_candidate_to_rework() -> None:
-    """A merge runner never changes an approved candidate in place."""
+def test_merge_returns_changed_reviewed_head_to_rework() -> None:
+    """Merge never fixes a PR whose independently reviewed head changed."""
 
     _transition_require(
         current=IssueStatusName.MERGING,
@@ -736,10 +860,10 @@ def test_transition_contract_returns_mutated_merge_candidate_to_rework() -> None
         project_status=ProjectStatusName.IN_PROGRESS,
         role_label="task:implementation",
         delivery_kind="code",
-        proof=TransitionProof(candidate_mutated=True),
+        proof=TransitionProof(reviewed_state_changed=True, evidence_ready=True, handoff_ready=True),
         dispatchable=False,
     )
-    with pytest.raises(LinearContractError, match="proven candidate mutation"):
+    with pytest.raises(LinearContractError, match="reviewed PR head changed"):
         _transition_require(
             current=IssueStatusName.MERGING,
             target=IssueStatusName.REWORK,
@@ -751,13 +875,64 @@ def test_transition_contract_returns_mutated_merge_candidate_to_rework() -> None
         )
 
 
-def test_transition_contract_rejects_lifecycle_progress_after_project_stop() -> None:
-    """Project-first cancellation prevents a racing task from publishing a later state."""
+def test_merge_and_cleanup_completion_require_semantic_handoffs() -> None:
+    """Merge and cleanup cannot reach terminal state before evidence readback."""
+
+    merge_complete = TransitionProof(
+        reviewed_state_current=True,
+        merge_complete=True,
+        evidence_ready=True,
+        handoff_ready=True,
+    )
+    _transition_require(
+        current=IssueStatusName.MERGING,
+        target=IssueStatusName.DONE,
+        project_status=ProjectStatusName.IN_PROGRESS,
+        role_label="task:implementation",
+        delivery_kind="code",
+        proof=merge_complete,
+        dispatchable=False,
+    )
+    with pytest.raises(LinearContractError, match="semantic handoff"):
+        _transition_require(
+            current=IssueStatusName.MERGING,
+            target=IssueStatusName.DONE,
+            project_status=ProjectStatusName.IN_PROGRESS,
+            role_label="task:implementation",
+            delivery_kind="code",
+            proof=replace(merge_complete, handoff_ready=False),
+            dispatchable=False,
+        )
+
+    cleanup_complete = TransitionProof(cleanup_complete=True, evidence_ready=True, handoff_ready=True)
+    _transition_require(
+        current=IssueStatusName.IN_PROGRESS,
+        target=IssueStatusName.DONE,
+        project_status=ProjectStatusName.IN_PROGRESS,
+        role_label="task:cleanup",
+        delivery_kind="cleanup",
+        proof=cleanup_complete,
+        dispatchable=False,
+    )
+    with pytest.raises(LinearContractError, match="Direct completion"):
+        _transition_require(
+            current=IssueStatusName.IN_PROGRESS,
+            target=IssueStatusName.DONE,
+            project_status=ProjectStatusName.IN_PROGRESS,
+            role_label="task:cleanup",
+            delivery_kind="cleanup",
+            proof=replace(cleanup_complete, evidence_ready=False),
+            dispatchable=False,
+        )
+
+
+def test_transition_rejects_lifecycle_progress_after_project_stop() -> None:
+    """Project-first cancellation prevents a racing task from publishing Review."""
 
     with pytest.raises(LinearContractError, match="active Project"):
         _transition_require(
             current=IssueStatusName.IN_PROGRESS,
-            target=IssueStatusName.HUMAN_REVIEW,
+            target=IssueStatusName.REVIEW,
             project_status=ProjectStatusName.CANCELED,
             role_label="task:implementation",
             delivery_kind="code",
@@ -767,11 +942,10 @@ def test_transition_contract_rejects_lifecycle_progress_after_project_stop() -> 
                 publication_ready=True,
                 required_ci_ready=True,
                 evidence_ready=True,
-                candidate_fingerprint_ready=True,
+                handoff_ready=True,
             ),
             dispatchable=False,
         )
-
     _transition_require(
         current=IssueStatusName.IN_PROGRESS,
         target=IssueStatusName.CANCELED,
@@ -781,7 +955,6 @@ def test_transition_contract_rejects_lifecycle_progress_after_project_stop() -> 
         proof=TransitionProof(human_decision=True),
         dispatchable=False,
     )
-
     with pytest.raises(LinearContractError, match="completed Project"):
         _transition_require(
             current=IssueStatusName.IN_PROGRESS,
@@ -1104,6 +1277,78 @@ def test_graphql_configuration_rereads_approved_destination_before_status_mutati
     assert project_create_call["variables"]["input"]["name"] == "Canceled"
     assert project_create_call["variables"]["input"]["id"] == approved.project_status_create_list[0].id
     assert "status { id name type color description position }" in project_create_call["document"]
+
+
+def test_graphql_configuration_updates_legacy_lifecycle_in_place_and_reads_back_identity() -> None:
+    """Native update mutations preserve review and Merging status identities."""
+
+    legacy_issue_status_list = [
+        (
+            ISSUE_STATUS_LEGACY_REVIEW
+            if item.name == "Review"
+            else ISSUE_STATUS_LEGACY_MERGING if item.name == "Merging" else item
+        )
+        for item in ISSUE_STATUS_DESIRED
+    ]
+    planning_transport = _ScriptedTransport(
+        [
+            _workflow_response(legacy_issue_status_list),
+            _git_status_automation_response([]),
+            _project_status_response(PROJECT_STATUS_DESIRED),
+        ]
+    )
+    approved = LinearWorkflowConfigurationGraphQL(planning_transport, WorkflowConfigurationReconciler()).plan(
+        expected_workspace_id=WORKSPACE_ID,
+        expected_viewer_id=VIEWER_ID,
+        expected_team_id=TEAM_ID,
+        label_list=list(_existing_label(item, index) for index, item in enumerate(LABEL_DESIRED, 1)),
+    )
+    assert [item.name for item in approved.issue_status_update_list] == ["Review", "Merging"]
+    review_update, merging_update = approved.issue_status_update_list
+
+    transport = _ScriptedTransport(
+        [
+            _workflow_response(legacy_issue_status_list),
+            _git_status_automation_response([]),
+            _project_status_response(PROJECT_STATUS_DESIRED),
+            {
+                "workflowStateUpdate": {
+                    "success": True,
+                    "workflowState": {"id": review_update.id},
+                }
+            },
+            {
+                "workflowStateUpdate": {
+                    "success": True,
+                    "workflowState": {"id": merging_update.id},
+                }
+            },
+            _workflow_response(ISSUE_STATUS_DESIRED),
+            _git_status_automation_response([]),
+            _project_status_response(PROJECT_STATUS_DESIRED),
+        ]
+    )
+
+    LinearWorkflowConfigurationGraphQL(transport, WorkflowConfigurationReconciler()).approved_configuration_apply(
+        expected_workspace_id=WORKSPACE_ID,
+        expected_viewer_id=VIEWER_ID,
+        expected_team_id=TEAM_ID,
+        approved_plan=approved,
+    )
+
+    review_call, merging_call = transport.call_list[3:5]
+    assert review_call["operation_name"] == "LinearAgentWorkflowStateUpdate"
+    assert review_call["repeat_safe"] is False
+    assert review_call["variables"]["id"] == review_update.id
+    assert review_call["variables"]["input"]["name"] == "Review"
+    assert "type" not in review_call["variables"]["input"]
+    assert "workflowStateUpdate(id: $id" in review_call["document"]
+    assert merging_call["operation_name"] == "LinearAgentWorkflowStateUpdate"
+    assert merging_call["variables"]["id"] == merging_update.id
+    assert merging_call["variables"]["input"]["description"] == (
+        "Independently reviewed pull request heads are being merged"
+    )
+    assert not any(item["operation_name"] == "LinearAgentWorkflowStateCreate" for item in transport.call_list)
 
 
 def test_graphql_configuration_deletes_every_exact_git_status_automation_before_readback() -> None:
