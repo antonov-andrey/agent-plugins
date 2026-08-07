@@ -58,7 +58,7 @@ Start a new Codex thread after reinstalling.
 
 ## Manual Linear Workflow
 
-1. Run `linear-agent-tools:workflow-configure` for the exact workspace and team.
+1. Run `linear-agent-tools:workflow-configure` for the exact workspace/team and every selected GitHub repository/base protection boundary.
 2. Run `linear-agent-tools:task-graph-create` for an agreed source and approve the complete preview before publication.
 3. Open a fresh thread for one ready issue and invoke its role skill: `task-implement`, `task-review`, `task-accept`, `task-merge`, or `task-cleanup`.
 4. A separate fresh Codex reviewer moves implementation from `Review` to `Merging`/`Done` on zero findings or to `Rework` on findings.

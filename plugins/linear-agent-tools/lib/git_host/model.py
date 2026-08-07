@@ -10,10 +10,32 @@ from urllib.parse import urlsplit
 _REPOSITORY_PATTERN = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 _COMMIT_PATTERN = re.compile(r"[0-9a-f]{40,64}")
 _ISSUE_IDENTIFIER_PATTERN = re.compile(r"[A-Z][A-Z0-9]*-[1-9][0-9]*")
+_BRANCH_FORBIDDEN_CHARACTER_SET = set(" ~^:?*[\\")
 
 
 class GitHubContractError(RuntimeError):
     """Report one unsafe or conflicting GitHub operation."""
+
+
+def branch_name_require(value: str, *, label: str) -> None:
+    """Reject text that cannot be one safe GitHub branch ref.
+
+    Args:
+        value: Candidate branch name.
+        label: Diagnostic branch role.
+    """
+
+    if (
+        not isinstance(value, str)
+        or not value
+        or value.startswith(("-", "."))
+        or value.endswith((".", "/", ".lock"))
+        or ".." in value
+        or "//" in value
+        or "@{" in value
+        or any(character in _BRANCH_FORBIDDEN_CHARACTER_SET or ord(character) < 32 for character in value)
+    ):
+        raise GitHubContractError(f"GitHub {label} branch has an unsafe ref shape")
 
 
 def issue_identifier_in_title_require(issue_identifier: str, title: str) -> None:
@@ -101,6 +123,109 @@ class RequiredCheck:
 
 
 @dataclass(frozen=True, slots=True)
+class BranchProtectionSnapshot:
+    """Bind effective base protection to one repository and executing identity."""
+
+    repository: RepositoryIdentity
+    base_branch: str
+    execution_login: str
+    execution_permission: str
+    protection_source_list: list[str]
+    ruleset_id_list: list[int]
+    required_check_name_list: list[str]
+    strict_required_status_checks: bool
+    non_fast_forward_protected: bool
+    deletion_protected: bool
+    execution_bypass: bool
+
+    def __post_init__(self) -> None:
+        """Validate a complete typed protection readback."""
+
+        if not isinstance(self.repository, RepositoryIdentity):
+            raise GitHubContractError("Branch-protection repository identity is unsupported")
+        branch_name_require(self.base_branch, label="protected base")
+        for label, value in (
+            ("execution login", self.execution_login),
+            ("execution permission", self.execution_permission),
+        ):
+            if not isinstance(value, str) or not value or any(character in value for character in ("\x00", "\n", "\r")):
+                raise GitHubContractError(f"Branch-protection {label} has another shape")
+        if self.execution_permission not in {"admin", "maintain", "write", "triage", "read"}:
+            raise GitHubContractError("Branch-protection execution permission is unsupported")
+        if not isinstance(self.protection_source_list, list) or any(
+            not isinstance(item, str) or not item for item in self.protection_source_list
+        ):
+            raise GitHubContractError("Branch-protection sources have another shape")
+        if not isinstance(self.ruleset_id_list, list) or any(
+            isinstance(item, bool) or not isinstance(item, int) or item < 1 for item in self.ruleset_id_list
+        ):
+            raise GitHubContractError("Branch-protection ruleset identities have another shape")
+        if not isinstance(self.required_check_name_list, list) or any(
+            not isinstance(item, str) or not item or any(character in item for character in ("\x00", "\n", "\r"))
+            for item in self.required_check_name_list
+        ):
+            raise GitHubContractError("Branch-protection required checks have another shape")
+        for label, value in (
+            ("strict required-check flag", self.strict_required_status_checks),
+            ("non-fast-forward flag", self.non_fast_forward_protected),
+            ("deletion flag", self.deletion_protected),
+            ("execution bypass flag", self.execution_bypass),
+        ):
+            if not isinstance(value, bool):
+                raise GitHubContractError(f"Branch-protection {label} must be boolean")
+        for label, value_list in (
+            ("sources", self.protection_source_list),
+            ("ruleset identities", self.ruleset_id_list),
+            ("required checks", self.required_check_name_list),
+        ):
+            if value_list != sorted(set(value_list)):
+                raise GitHubContractError(f"Branch-protection {label} must be sorted and unique")
+        object.__setattr__(self, "protection_source_list", list(self.protection_source_list))
+        object.__setattr__(self, "ruleset_id_list", list(self.ruleset_id_list))
+        object.__setattr__(self, "required_check_name_list", list(self.required_check_name_list))
+
+    def required_check_results_require(self, required_check_list: list[RequiredCheck]) -> None:
+        """Require typed check results for exactly the protected check definitions.
+
+        A legitimate empty protected set is accepted only when the provider returned
+        a typed empty result list; the transport parser owns that distinction.
+
+        Args:
+            required_check_list: Typed results from ``gh pr checks --required``.
+        """
+
+        if not isinstance(required_check_list, list) or any(
+            not isinstance(item, RequiredCheck) for item in required_check_list
+        ):
+            raise GitHubContractError("Required GitHub check results have another shape")
+        result_name_list = sorted(item.name for item in required_check_list)
+        if result_name_list != self.required_check_name_list:
+            raise GitHubContractError("Required GitHub check results differ from branch protection")
+
+    def merge_mechanism_require(self, merge_method: str) -> None:
+        """Require protection that enforces the selected atomic merge mechanism.
+
+        Args:
+            merge_method: Declared merge strategy.
+        """
+
+        if merge_method not in {"merge", "squash", "rebase"}:
+            raise GitHubContractError("Pull request merge method is unsupported")
+        if not self.protection_source_list:
+            raise GitHubContractError("Pull request base branch is unprotected")
+        if self.execution_bypass:
+            raise GitHubContractError("Executing GitHub identity can bypass base branch protection")
+        if merge_method == "merge":
+            if not self.non_fast_forward_protected or not self.deletion_protected:
+                raise GitHubContractError("Base protection does not enforce protected-ref CAS safety")
+            if self.required_check_name_list:
+                raise GitHubContractError("Protected-ref CAS requires an exact zero required-check definition set")
+            return
+        if not self.strict_required_status_checks or not self.required_check_name_list:
+            raise GitHubContractError("Base protection does not enforce strict up-to-date required checks")
+
+
+@dataclass(frozen=True, slots=True)
 class PullRequestSnapshot:
     """Contain all state used to bind one independent review and merge."""
 
@@ -118,6 +243,7 @@ class PullRequestSnapshot:
     merged_at: datetime | None
     merge_commit: str
     required_check_list: list[RequiredCheck]
+    required_checks_verified: bool = False
 
     def __post_init__(self) -> None:
         """Validate one provider snapshot."""
@@ -148,6 +274,8 @@ class PullRequestSnapshot:
             not isinstance(item, RequiredCheck) for item in self.required_check_list
         ):
             raise GitHubContractError("Pull request required checks have another shape")
+        if not isinstance(self.required_checks_verified, bool):
+            raise GitHubContractError("Pull request required-check verification flag must be boolean")
         check_name_list = [item.name for item in self.required_check_list]
         if len(check_name_list) != len(set(check_name_list)):
             raise GitHubContractError("Pull request repeats one required check name")
@@ -183,16 +311,33 @@ class PullRequestSnapshot:
             "title",
             "state",
             "isDraft",
+            "autoMergeRequest",
             "baseRefName",
             "baseRefOid",
             "headRefName",
             "headRefOid",
+            "headRepository",
+            "headRepositoryOwner",
+            "isCrossRepository",
             "mergeStateStatus",
             "mergedAt",
             "mergeCommit",
         }
         if not isinstance(payload, dict) or set(payload) != expected:
             raise GitHubContractError("GitHub PR response has another shape")
+        if payload["autoMergeRequest"] is not None:
+            raise GitHubContractError("Pull request has a deferred auto-merge request")
+        head_repository = payload["headRepository"]
+        head_repository_owner = payload["headRepositoryOwner"]
+        if (
+            not isinstance(head_repository, dict)
+            or not isinstance(head_repository.get("nameWithOwner"), str)
+            or RepositoryIdentity(head_repository["nameWithOwner"]) != repository
+            or not isinstance(head_repository_owner, dict)
+            or not isinstance(head_repository_owner.get("login"), str)
+            or payload["isCrossRepository"] is not False
+        ):
+            raise GitHubContractError("Pull request head repository differs from the exact base repository")
         merged_at = payload["mergedAt"]
         if merged_at is not None:
             if not isinstance(merged_at, str):
@@ -263,6 +408,8 @@ class PullRequestSnapshot:
             reviewed_head_commit: Exact PR head covered by independent review.
         """
 
+        if not self.required_checks_verified:
+            raise GitHubContractError("Pull request required checks were not read through the typed merge boundary")
         if _COMMIT_PATTERN.fullmatch(reviewed_base_commit) is None:
             raise GitHubContractError("Reviewed base must be one full lowercase commit")
         if _COMMIT_PATTERN.fullmatch(reviewed_head_commit) is None:
@@ -295,6 +442,8 @@ class PullRequestSnapshot:
             reviewed_head_commit: Exact head covered by independent review.
         """
 
+        if not self.required_checks_verified:
+            raise GitHubContractError("Pull request required checks were not read through the typed merge boundary")
         if _COMMIT_PATTERN.fullmatch(reviewed_base_commit) is None:
             raise GitHubContractError("Reviewed base must be one full lowercase commit")
         if _COMMIT_PATTERN.fullmatch(reviewed_head_commit) is None:

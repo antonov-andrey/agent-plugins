@@ -944,6 +944,36 @@ def test_merge_returns_changed_reviewed_identity_to_rework() -> None:
         )
 
 
+def test_atomic_merge_lease_rejection_requires_cleanup_before_rework() -> None:
+    """A preflight-to-mutation ref race is stale review state, never a merge retry."""
+
+    proof = TransitionProof(
+        reviewed_state_changed=True,
+        evidence_ready=True,
+        handoff_ready=True,
+        attempt_cleanup_complete=True,
+    )
+    _transition_require(
+        current=IssueStatusName.MERGING,
+        target=IssueStatusName.REWORK,
+        project_status=ProjectStatusName.IN_PROGRESS,
+        role_label="task:implementation",
+        delivery_kind="code",
+        proof=proof,
+        dispatchable=False,
+    )
+    with pytest.raises(LinearContractError, match="nested attempt-resource cleanup"):
+        _transition_require(
+            current=IssueStatusName.MERGING,
+            target=IssueStatusName.REWORK,
+            project_status=ProjectStatusName.IN_PROGRESS,
+            role_label="task:implementation",
+            delivery_kind="code",
+            proof=replace(proof, attempt_cleanup_complete=False),
+            dispatchable=False,
+        )
+
+
 @pytest.mark.parametrize(
     ("current", "target", "role_label", "delivery_kind", "proof"),
     (

@@ -25,7 +25,9 @@ def _parser_get() -> argparse.ArgumentParser:
         The argument parser.
     """
 
-    parser = argparse.ArgumentParser(description="Inspect or merge one exact reviewed GitHub pull request head.")
+    parser = argparse.ArgumentParser(
+        description="Inspect or atomically merge one exact reviewed GitHub pull request base and head."
+    )
     parser.add_argument("command", choices=("inspect", "merge"))
     parser.add_argument("--repository", required=True)
     parser.add_argument("--number", required=True, type=int)
@@ -34,7 +36,8 @@ def _parser_get() -> argparse.ArgumentParser:
     parser.add_argument("--head-branch", required=True)
     parser.add_argument("--reviewed-base-commit", required=True)
     parser.add_argument("--reviewed-head-commit", required=True)
-    parser.add_argument("--merge-method", choices=("merge", "squash", "rebase"))
+    parser.add_argument("--merge-method", required=True, choices=("merge", "squash", "rebase"))
+    parser.add_argument("--repository-path", type=Path)
     return parser
 
 
@@ -53,9 +56,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         repository = RepositoryIdentity(args.repository)
         if args.command == "merge":
-            if not args.merge_method:
-                raise GitHubContractError("Merge requires --merge-method")
-            snapshot = boundary.merge(
+            if args.merge_method == "merge" and args.repository_path is None:
+                raise GitHubContractError("Atomic merge requires --repository-path")
+            boundary.merge(
                 repository=repository,
                 number=args.number,
                 issue_identifier=args.issue_identifier,
@@ -64,28 +67,26 @@ def main(argv: list[str] | None = None) -> int:
                 reviewed_base_commit=args.reviewed_base_commit,
                 reviewed_head_commit=args.reviewed_head_commit,
                 merge_method=args.merge_method,
+                repository_path=args.repository_path,
             )
-        else:
-            snapshot = boundary.inspect(repository=repository, number=args.number)
-        snapshot.integration_identity_require(args.issue_identifier)
-        snapshot.target_require(base_branch=args.base_branch, head_branch=args.head_branch)
-        if args.command == "inspect":
-            if snapshot.state == "MERGED":
-                snapshot.merged_result_require(
-                    reviewed_base_commit=args.reviewed_base_commit,
-                    reviewed_head_commit=args.reviewed_head_commit,
-                )
-            else:
-                snapshot.merge_preconditions_require(
-                    reviewed_base_commit=args.reviewed_base_commit,
-                    reviewed_head_commit=args.reviewed_head_commit,
-                )
+        snapshot, protection = boundary.reviewed_inspect(
+            repository=repository,
+            number=args.number,
+            issue_identifier=args.issue_identifier,
+            base_branch=args.base_branch,
+            head_branch=args.head_branch,
+            reviewed_base_commit=args.reviewed_base_commit,
+            reviewed_head_commit=args.reviewed_head_commit,
+            merge_method=args.merge_method,
+        )
     except GitHubContractError as error:
         print(str(error), file=sys.stderr)
         return 2
     payload = asdict(snapshot)
     payload["repository"] = snapshot.repository.value
     payload["merged_at"] = snapshot.merged_at.isoformat().replace("+00:00", "Z") if snapshot.merged_at else ""
+    payload["branch_protection"] = asdict(protection)
+    payload["branch_protection"]["repository"] = protection.repository.value
     print(json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True))
     return 0
 

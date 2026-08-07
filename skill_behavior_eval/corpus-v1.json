@@ -272,7 +272,7 @@
       "semantic_invariant_list": [
         {
           "id": "exact-global-delta",
-          "text": "The response fully reads exact destination state, previews only missing statuses and labels, requires explicit approval, proves the no-echo in-memory admin credential and applies only proven GraphQL status gaps before any global mutation, uses official MCP for supported label operations, then performs exact read-back."
+          "text": "The response fully reads exact Linear destination state and exact selected GitHub repository/base classic plus effective-ruleset protection for the executing identity, previews only missing statuses, labels, automations and an absent-protection delta, requires explicit approval, proves the no-echo in-memory Linear admin credential, applies only proven GraphQL status gaps before other Linear mutations, uses official MCP for supported label operations, never weakens existing protection, then performs exact owner read-back."
         },
         {
           "id": "no-graph",
@@ -426,7 +426,11 @@
       "semantic_invariant_list": [
         {
           "id": "exact-reviewed-identities",
-          "text": "The response reads the complete PR URL/base-branch/base-commit/head map from the provider-read review handoff, inspects the current base OID and head, verifies branches, Linear links, branch protection and required checks without a per-PR human approval or fingerprint, and returns a reviewed base-branch, base-commit or head change to Rework instead of fixing it in merge."
+          "text": "The response reads the complete PR URL/base-branch/base-commit/head map from the provider-read review handoff, inspects the current base OID and same-repository head, rejects deferred auto-merge, verifies branches, Linear links, typed exact-repository/base classic or effective-ruleset protection, executing-identity bypass and typed required checks without a per-PR human approval or fingerprint, and returns a reviewed base-branch, base-commit or head change to Rework instead of fixing it in merge."
+        },
+        {
+          "id": "atomic-reviewed-mutation",
+          "text": "Every effective merge-queue rule is rejected as a deferred later-base mutation. Declared merge requires an exact zero required-check definition set and updates base plus deletes head in one server-atomic protected-ref transaction with explicit reviewed old-OID leases for both refs; either race mutates neither ref, then mandatory nested cleanup, a reread rework-required handoff and Rework occur. Squash or rebase instead requires exact head matching plus strict up-to-date no-bypass protection with at least one required check; generic exit 1, empty or malformed provider output is failure."
         },
         {
           "id": "ordered-recovery",
