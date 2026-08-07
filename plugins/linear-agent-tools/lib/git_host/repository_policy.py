@@ -1,13 +1,14 @@
-"""Strict principal-bound GitHub repository merge-policy inspection."""
+"""Strict principal-bound GitHub repository merge-policy configuration."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+import subprocess
 
 from json_contract import JsonContractError, json_load_strict
 
 from git_host.authentication import GitHubAuthenticationBoundary, GitHubPrincipal
-from git_host.command import CommandRunner, command_closed_run
+from git_host.command import CommandRunner, command_closed_run, command_run
 from git_host.model import GitHubContractError, RepositoryIdentity, branch_name_require
 
 _VISIBILITY_SET = {"public", "private", "internal"}
@@ -125,7 +126,7 @@ class GitHubRepositoryMergePolicy:
         if self.archived or self.disabled:
             raise GitHubContractError("GitHub repository policy is inactive")
 
-    def selected_method_require(self, merge_method: str) -> None:
+    def selected_method_enabled_require(self, merge_method: str) -> None:
         """Require the declared merge method to be enabled by this exact read."""
 
         if not isinstance(merge_method, str):
@@ -137,21 +138,26 @@ class GitHubRepositoryMergePolicy:
         }
         if merge_method not in enabled_by_method or not enabled_by_method[merge_method]:
             raise GitHubContractError("Declared repository merge method is not enabled")
-        if merge_method == "merge" and self.delete_branch_on_merge:
-            raise GitHubContractError("Exact merge requires GitHub automatic head-branch deletion to be disabled")
+
+    def selected_method_require(self, merge_method: str) -> None:
+        """Require the enabled method and workflow-safe automatic deletion policy."""
+
+        self.selected_method_enabled_require(merge_method)
+        if self.delete_branch_on_merge:
+            raise GitHubContractError("GitHub automatic head-branch deletion must be disabled")
 
 
 class GitHubRepositoryMergePolicyBoundary:
-    """Read complete relevant repository policy around fresh principal checks."""
+    """Read and narrowly configure repository policy around principal checks."""
 
-    def __init__(self, runner: CommandRunner) -> None:
+    def __init__(self, runner: CommandRunner | None = None) -> None:
         """Initialize one strict direct-command repository-policy reader.
 
         Args:
             runner: Shared deterministic or subprocess command runner.
         """
 
-        self._runner = runner
+        self._runner = runner or command_run
 
     def inspect(
         self,
@@ -171,6 +177,23 @@ class GitHubRepositoryMergePolicyBoundary:
             Complete relevant repository policy snapshot.
         """
 
+        policy = self.configuration_inspect(
+            repository=repository,
+            principal=principal,
+            merge_method=merge_method,
+        )
+        policy.selected_method_require(merge_method)
+        return policy
+
+    def configuration_inspect(
+        self,
+        *,
+        repository: RepositoryIdentity,
+        principal: GitHubPrincipal,
+        merge_method: str,
+    ) -> GitHubRepositoryMergePolicy:
+        """Read policy for configuration while permitting the one correctable field."""
+
         if not isinstance(repository, RepositoryIdentity) or not isinstance(principal, GitHubPrincipal):
             raise GitHubContractError("GitHub repository policy identity has another shape")
         authentication = GitHubAuthenticationBoundary(self._runner)
@@ -179,53 +202,137 @@ class GitHubRepositoryMergePolicyBoundary:
             self._runner,
             ["gh", "api", "--hostname", "github.com", f"repos/{repository.value}"],
         )
-        if completed_process.returncode != 0 or not completed_process.stdout:
-            raise GitHubContractError("GitHub repository merge-policy read failed")
-        try:
-            payload = json_load_strict(completed_process.stdout)
-        except JsonContractError as error:
-            raise GitHubContractError("GitHub repository merge-policy response is malformed") from error
-        if not isinstance(payload, dict) or not isinstance(payload.get("owner"), dict):
-            raise GitHubContractError("GitHub repository merge-policy response has another shape")
-        owner = payload["owner"]
-        try:
-            if payload["name"] != repository.value.split("/", 1)[1] or payload["full_name"] != repository.value:
-                raise GitHubContractError("GitHub repository policy identity differs from the declared repository")
-            policy = GitHubRepositoryMergePolicy(
-                repository=repository,
-                principal=principal,
-                repository_id=payload["id"],
-                repository_node_id=payload["node_id"],
-                owner_login=owner["login"],
-                owner_id=owner["id"],
-                owner_node_id=owner["node_id"],
-                owner_type=owner["type"],
-                owner_site_admin=owner["site_admin"],
-                private=payload["private"],
-                fork=payload["fork"],
-                archived=payload["archived"],
-                disabled=payload["disabled"],
-                visibility=payload["visibility"],
-                default_branch=payload["default_branch"],
-                mirror_url=payload["mirror_url"],
-                allow_forking=payload["allow_forking"],
-                is_template=payload["is_template"],
-                web_commit_signoff_required=payload["web_commit_signoff_required"],
-                has_discussions=payload["has_discussions"],
-                allow_squash_merge=payload["allow_squash_merge"],
-                allow_merge_commit=payload["allow_merge_commit"],
-                allow_rebase_merge=payload["allow_rebase_merge"],
-                allow_auto_merge=payload["allow_auto_merge"],
-                delete_branch_on_merge=payload["delete_branch_on_merge"],
-                use_squash_pr_title_as_default=payload["use_squash_pr_title_as_default"],
-                squash_merge_commit_title=payload["squash_merge_commit_title"],
-                squash_merge_commit_message=payload["squash_merge_commit_message"],
-                merge_commit_title=payload["merge_commit_title"],
-                merge_commit_message=payload["merge_commit_message"],
-                allow_update_branch=payload["allow_update_branch"],
-            )
-        except KeyError as error:
-            raise GitHubContractError("GitHub repository merge-policy response has another shape") from error
-        policy.selected_method_require(merge_method)
+        policy = _completed_policy_get(
+            completed_process,
+            repository=repository,
+            principal=principal,
+            label="GitHub repository merge-policy read",
+        )
+        policy.selected_method_enabled_require(merge_method)
         authentication.principal_require(principal)
         return policy
+
+    def automatic_branch_deletion_disable(
+        self,
+        *,
+        repository: RepositoryIdentity,
+        principal: GitHubPrincipal,
+        merge_method: str,
+        approved_policy: GitHubRepositoryMergePolicy,
+    ) -> GitHubRepositoryMergePolicy:
+        """Apply only ``delete_branch_on_merge=false`` from an exact approved policy.
+
+        A separate fresh pre-mutation read must equal the approved policy. The
+        mutation response and a subsequent fresh readback must equal the exact
+        desired policy, including repository and principal identities.
+        """
+
+        if (
+            not isinstance(repository, RepositoryIdentity)
+            or not isinstance(principal, GitHubPrincipal)
+            or not isinstance(approved_policy, GitHubRepositoryMergePolicy)
+        ):
+            raise GitHubContractError("Approved GitHub repository policy has another shape")
+        if approved_policy.repository != repository or approved_policy.principal != principal:
+            raise GitHubContractError("Approved GitHub repository policy names another destination or principal")
+        approved_policy.selected_method_enabled_require(merge_method)
+        before = self.configuration_inspect(
+            repository=repository,
+            principal=principal,
+            merge_method=merge_method,
+        )
+        if before != approved_policy:
+            raise GitHubContractError("Current GitHub repository policy differs from the approved policy")
+        desired_policy = replace(approved_policy, delete_branch_on_merge=False)
+        if before.delete_branch_on_merge:
+            completed_process = command_closed_run(
+                self._runner,
+                [
+                    "gh",
+                    "api",
+                    "--hostname",
+                    "github.com",
+                    "--method",
+                    "PATCH",
+                    f"repos/{repository.value}",
+                    "-F",
+                    "delete_branch_on_merge=false",
+                ],
+            )
+            response_policy = _completed_policy_get(
+                completed_process,
+                repository=repository,
+                principal=principal,
+                label="GitHub automatic branch-deletion configuration",
+            )
+            response_policy.selected_method_require(merge_method)
+            GitHubAuthenticationBoundary(self._runner).principal_require(principal)
+            if response_policy != desired_policy:
+                raise GitHubContractError("GitHub repository-policy mutation response differs from the approved result")
+        after = self.configuration_inspect(
+            repository=repository,
+            principal=principal,
+            merge_method=merge_method,
+        )
+        after.selected_method_require(merge_method)
+        if after != desired_policy:
+            raise GitHubContractError("Final GitHub repository-policy readback differs from the approved result")
+        return after
+
+
+def _completed_policy_get(
+    completed_process: subprocess.CompletedProcess[str],
+    *,
+    repository: RepositoryIdentity,
+    principal: GitHubPrincipal,
+    label: str,
+) -> GitHubRepositoryMergePolicy:
+    """Parse one complete relevant repository-policy provider response."""
+
+    if completed_process.returncode != 0 or not completed_process.stdout:
+        raise GitHubContractError(f"{label} failed")
+    try:
+        payload = json_load_strict(completed_process.stdout)
+    except JsonContractError as error:
+        raise GitHubContractError(f"{label} response is malformed") from error
+    if not isinstance(payload, dict) or not isinstance(payload.get("owner"), dict):
+        raise GitHubContractError(f"{label} response has another shape")
+    owner = payload["owner"]
+    try:
+        if payload["name"] != repository.value.split("/", 1)[1] or payload["full_name"] != repository.value:
+            raise GitHubContractError("GitHub repository policy identity differs from the declared repository")
+        return GitHubRepositoryMergePolicy(
+            repository=repository,
+            principal=principal,
+            repository_id=payload["id"],
+            repository_node_id=payload["node_id"],
+            owner_login=owner["login"],
+            owner_id=owner["id"],
+            owner_node_id=owner["node_id"],
+            owner_type=owner["type"],
+            owner_site_admin=owner["site_admin"],
+            private=payload["private"],
+            fork=payload["fork"],
+            archived=payload["archived"],
+            disabled=payload["disabled"],
+            visibility=payload["visibility"],
+            default_branch=payload["default_branch"],
+            mirror_url=payload["mirror_url"],
+            allow_forking=payload["allow_forking"],
+            is_template=payload["is_template"],
+            web_commit_signoff_required=payload["web_commit_signoff_required"],
+            has_discussions=payload["has_discussions"],
+            allow_squash_merge=payload["allow_squash_merge"],
+            allow_merge_commit=payload["allow_merge_commit"],
+            allow_rebase_merge=payload["allow_rebase_merge"],
+            allow_auto_merge=payload["allow_auto_merge"],
+            delete_branch_on_merge=payload["delete_branch_on_merge"],
+            use_squash_pr_title_as_default=payload["use_squash_pr_title_as_default"],
+            squash_merge_commit_title=payload["squash_merge_commit_title"],
+            squash_merge_commit_message=payload["squash_merge_commit_message"],
+            merge_commit_title=payload["merge_commit_title"],
+            merge_commit_message=payload["merge_commit_message"],
+            allow_update_branch=payload["allow_update_branch"],
+        )
+    except KeyError as error:
+        raise GitHubContractError(f"{label} response has another shape") from error

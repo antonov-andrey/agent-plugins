@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+from types import ModuleType
 from urllib.parse import urlsplit
 
 import pytest
@@ -27,8 +28,9 @@ from git_host.atomic_merge import GitHubAtomicMergeBoundary
 from git_host.authentication import GitHubPrincipal, git_credential_config_argument_list_get
 from git_host.branch_protection import GitHubBranchProtectionBoundary
 from git_host.command import command_closed_run, command_run
-from git_host.model import GitHubContractError, RepositoryIdentity
+from git_host.model import BranchProtectionSnapshot, GitHubContractError, RepositoryIdentity
 from git_host.pull_request import GitHubPullRequestBoundary
+from git_host.repository_policy import GitHubRepositoryMergePolicy, GitHubRepositoryMergePolicyBoundary
 from git_host.transport_runtime import GitTransportRuntime
 from verification._validation import EvidenceContractError, evidence_url_validate, instant_parse
 from verification.baseline import LocalPhaseBaseline, TaskWorkspaceBaseline
@@ -646,9 +648,16 @@ class _GhRunner:
         self.credential_user_id = 7
         self.credential_node_id = "U_octocat"
         self.repository_policy_read_count = 0
+        self.repository_policy_read_returncode = 0
+        self.repository_policy_read_stdout_override: str | None = None
         self.repository_policy_payload_override: object | None = None
+        self.repository_policy_payload_by_read_count_map: dict[int, object] = {}
         self.repository_policy_field_by_name_map: dict[str, object] = {}
         self.repository_policy_drift_field_by_name_map: dict[str, object] = {}
+        self.repository_policy_mutation_count = 0
+        self.repository_policy_mutation_returncode = 0
+        self.repository_policy_mutation_stdout_override: str | None = None
+        self.repository_policy_mutation_payload_override: object | None = None
         self.remote_commit_by_ref_map = {
             f"refs/heads/{base_branch}": base_commit,
             "refs/heads/linear/and-17": head_commit,
@@ -712,15 +721,54 @@ class _GhRunner:
                 "node_id": self.changed_execution_node_id if changed else self.execution_node_id,
             }
             return subprocess.CompletedProcess(argument_list, 0, json.dumps(payload), "")
+        if argument_list[1:] == [
+            "api",
+            "--hostname",
+            "github.com",
+            "--method",
+            "PATCH",
+            "repos/antonov-andrey/example",
+            "-F",
+            "delete_branch_on_merge=false",
+        ]:
+            self.repository_policy_mutation_count += 1
+            if self.repository_policy_mutation_returncode == 0:
+                self.repository_policy_field_by_name_map["delete_branch_on_merge"] = False
+            payload = (
+                self.repository_policy_mutation_payload_override
+                if self.repository_policy_mutation_payload_override is not None
+                else self._repository_policy_payload_get()
+            )
+            return subprocess.CompletedProcess(
+                argument_list,
+                self.repository_policy_mutation_returncode,
+                (
+                    self.repository_policy_mutation_stdout_override
+                    if self.repository_policy_mutation_stdout_override is not None
+                    else json.dumps(payload)
+                ),
+                "",
+            )
         if argument_list[1:5] == ["api", "--hostname", "github.com", "repos/antonov-andrey/example"]:
             self.repository_policy_read_count += 1
-            if self.repository_policy_payload_override is not None:
+            if self.repository_policy_read_count in self.repository_policy_payload_by_read_count_map:
+                payload = self.repository_policy_payload_by_read_count_map[self.repository_policy_read_count]
+            elif self.repository_policy_payload_override is not None:
                 payload = self.repository_policy_payload_override
             else:
                 payload = self._repository_policy_payload_get()
                 if self.repository_policy_read_count > 1:
                     payload.update(self.repository_policy_drift_field_by_name_map)
-            return subprocess.CompletedProcess(argument_list, 0, json.dumps(payload), "")
+            return subprocess.CompletedProcess(
+                argument_list,
+                self.repository_policy_read_returncode,
+                (
+                    self.repository_policy_read_stdout_override
+                    if self.repository_policy_read_stdout_override is not None
+                    else json.dumps(payload)
+                ),
+                "",
+            )
         if (
             argument_list[1:4] == ["api", "--hostname", "github.com"]
             and argument_list[4] == "repos/antonov-andrey/example/pulls/17"
@@ -1165,6 +1213,99 @@ def _included_response(
     reason = "OK" if status == 200 else "Not Found"
     stdout = f"HTTP/2.0 {status} {reason}\r\nContent-Type: application/json\r\n\r\n{json.dumps(payload)}"
     return subprocess.CompletedProcess(argument_list, 0 if status == 200 else 1, stdout, "")
+
+
+def _workflow_configuration_module_get() -> ModuleType:
+    """Load the workflow-configure GitHub transaction script."""
+
+    script = PLUGIN_ROOT / "skills" / "workflow-configure" / "scripts" / "branch_protection.py"
+    spec = importlib.util.spec_from_file_location("linear_workflow_github_configuration", script)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _configuration_snapshot_get(
+    runner: _GhRunner,
+) -> tuple[BranchProtectionSnapshot, GitHubRepositoryMergePolicy]:
+    """Read one matching protection and correctable repository-policy pair."""
+
+    protection = GitHubBranchProtectionBoundary(runner).inspect(
+        repository=RepositoryIdentity("antonov-andrey/example"),
+        base_branch="main",
+    )
+    principal = GitHubPrincipal(
+        login=protection.execution_login,
+        user_id=protection.execution_user_id,
+        node_id=protection.execution_node_id,
+    )
+    repository_policy = GitHubRepositoryMergePolicyBoundary(runner).configuration_inspect(
+        repository=RepositoryIdentity("antonov-andrey/example"),
+        principal=principal,
+        merge_method="merge",
+    )
+    return protection, repository_policy
+
+
+def _workflow_configuration_module_bind(
+    runner: _GhRunner,
+    monkeypatch: pytest.MonkeyPatch,
+) -> ModuleType:
+    """Load workflow-configure with both GitHub boundaries on one provider."""
+
+    module = _workflow_configuration_module_get()
+    monkeypatch.setattr(module, "GitHubBranchProtectionBoundary", lambda: GitHubBranchProtectionBoundary(runner))
+    monkeypatch.setattr(
+        module,
+        "GitHubRepositoryMergePolicyBoundary",
+        lambda: GitHubRepositoryMergePolicyBoundary(runner),
+    )
+    return module
+
+
+def _workflow_configuration_plan_write(
+    *,
+    module: ModuleType,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> tuple[dict[str, object], Path]:
+    """Run and persist the exact displayed plan for the apply transaction."""
+
+    assert (
+        module.main(
+            [
+                "plan",
+                "--repository",
+                "antonov-andrey/example",
+                "--base-branch",
+                "main",
+                "--merge-method",
+                "merge",
+            ]
+        )
+        == 0
+    )
+    plan = json.loads(capsys.readouterr().out)
+    plan_path = tmp_path / "github-configuration-plan.json"
+    plan_path.write_text(json.dumps(plan), encoding="utf-8")
+    return plan, plan_path
+
+
+def _workflow_configuration_apply_argument_list(plan_path: Path) -> list[str]:
+    """Return exact workflow-configure apply arguments for one approved plan."""
+
+    return [
+        "apply",
+        "--repository",
+        "antonov-andrey/example",
+        "--base-branch",
+        "main",
+        "--merge-method",
+        "merge",
+        "--approved-plan-input",
+        str(plan_path),
+    ]
 
 
 @dataclass(frozen=True, slots=True)
@@ -3075,23 +3216,208 @@ def test_exact_configuration_final_readback_requires_the_approved_principal() ->
     assert len(configure_command_list) == 1
 
 
+def test_workflow_configuration_already_correct_policy_plans_none_and_rereads_final_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Ready policy remains mutation-free but still receives a fresh final readback."""
+
+    runner = _GhRunner()
+    module = _workflow_configuration_module_bind(runner, monkeypatch)
+    plan, plan_path = _workflow_configuration_plan_write(module=module, tmp_path=tmp_path, capsys=capsys)
+
+    assert plan["repository_policy_action"] == "none"
+    assert plan["repository_policy_before"]["delete_branch_on_merge"] is False
+    assert plan["repository_policy_after"] == plan["repository_policy_before"]
+    assert module.main(_workflow_configuration_apply_argument_list(plan_path)) == 0
+    result = json.loads(capsys.readouterr().out)
+
+    assert result["status"] == "configured"
+    assert result["changed"] is False
+    assert result["repository_policy_changed"] is False
+    assert result["repository_policy_after"]["delete_branch_on_merge"] is False
+    assert runner.repository_policy_mutation_count == 0
+    assert runner.repository_policy_read_count == 5
+
+
+def test_workflow_configuration_plans_exact_automatic_branch_deletion_correction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The approved plan exposes exact current and desired repository settings."""
+
+    runner = _GhRunner()
+    runner.repository_policy_field_by_name_map["delete_branch_on_merge"] = True
+    module = _workflow_configuration_module_bind(runner, monkeypatch)
+    plan, _ = _workflow_configuration_plan_write(module=module, tmp_path=tmp_path, capsys=capsys)
+
+    assert plan["schema_version"] == 2
+    assert plan["repository"] == "antonov-andrey/example"
+    assert plan["repository_policy_action"] == "disable-automatic-branch-deletion"
+    assert plan["repository_policy_before"]["delete_branch_on_merge"] is True
+    assert plan["repository_policy_after"]["delete_branch_on_merge"] is False
+    assert plan["repository_policy_before"]["principal"] == {
+        "login": "octocat",
+        "node_id": "U_octocat",
+        "user_id": 7,
+    }
+    assert runner.repository_policy_mutation_count == 0
+
+
+def test_workflow_configuration_apply_mutates_only_automatic_branch_deletion_and_reads_back(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Approved correction sends one narrow PATCH and certifies exact final state."""
+
+    runner = _GhRunner()
+    runner.repository_policy_field_by_name_map["delete_branch_on_merge"] = True
+    module = _workflow_configuration_module_bind(runner, monkeypatch)
+    _, plan_path = _workflow_configuration_plan_write(module=module, tmp_path=tmp_path, capsys=capsys)
+
+    assert module.main(_workflow_configuration_apply_argument_list(plan_path)) == 0
+    result = json.loads(capsys.readouterr().out)
+
+    assert result["changed"] is True
+    assert result["protection_changed"] is False
+    assert result["repository_policy_changed"] is True
+    assert result["repository_policy_after"]["delete_branch_on_merge"] is False
+    assert runner.repository_policy_mutation_count == 1
+    assert runner.repository_policy_read_count == 5
+    assert [
+        command
+        for command in runner.command_list
+        if command[1:6] == ["api", "--hostname", "github.com", "--method", "PATCH"]
+    ] == [
+        [
+            "gh",
+            "api",
+            "--hostname",
+            "github.com",
+            "--method",
+            "PATCH",
+            "repos/antonov-andrey/example",
+            "-F",
+            "delete_branch_on_merge=false",
+        ]
+    ]
+
+
+def test_workflow_configuration_rejects_stale_second_policy_snapshot_before_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A post-approval compatible setting change stops the compare-and-set write."""
+
+    runner = _GhRunner()
+    runner.repository_policy_field_by_name_map["delete_branch_on_merge"] = True
+    module = _workflow_configuration_module_bind(runner, monkeypatch)
+    _, plan_path = _workflow_configuration_plan_write(module=module, tmp_path=tmp_path, capsys=capsys)
+    stale_payload = runner._repository_policy_payload_get()
+    stale_payload["delete_branch_on_merge"] = False
+    runner.repository_policy_payload_by_read_count_map[3] = stale_payload
+
+    assert module.main(_workflow_configuration_apply_argument_list(plan_path)) == 2
+    assert "differs from the approved policy" in capsys.readouterr().err
+    assert runner.repository_policy_mutation_count == 0
+
+
+@pytest.mark.parametrize("tampered_identity", ("repository", "principal"))
+def test_workflow_configuration_rejects_wrong_approved_repository_or_principal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tampered_identity: str,
+) -> None:
+    """Apply is bound to the exact approved repository and executing principal."""
+
+    runner = _GhRunner()
+    module = _workflow_configuration_module_bind(runner, monkeypatch)
+    plan, plan_path = _workflow_configuration_plan_write(module=module, tmp_path=tmp_path, capsys=capsys)
+    if tampered_identity == "repository":
+        plan["repository_policy_before"]["repository"] = "attacker/example"
+    else:
+        plan["repository_policy_before"]["principal"]["login"] = "mallory"
+    plan_path.write_text(json.dumps(plan), encoding="utf-8")
+
+    assert module.main(_workflow_configuration_apply_argument_list(plan_path)) == 2
+    assert "differs from the approved plan" in capsys.readouterr().err
+    assert runner.repository_policy_mutation_count == 0
+
+
+@pytest.mark.parametrize("provider_result", ("failure", "malformed"))
+def test_workflow_configuration_rejects_repository_policy_mutation_provider_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    provider_result: str,
+) -> None:
+    """Failed or malformed repository PATCH output can never certify readiness."""
+
+    runner = _GhRunner()
+    runner.repository_policy_field_by_name_map["delete_branch_on_merge"] = True
+    module = _workflow_configuration_module_bind(runner, monkeypatch)
+    _, plan_path = _workflow_configuration_plan_write(module=module, tmp_path=tmp_path, capsys=capsys)
+    if provider_result == "failure":
+        runner.repository_policy_mutation_returncode = 1
+    else:
+        runner.repository_policy_mutation_stdout_override = "{"
+
+    assert module.main(_workflow_configuration_apply_argument_list(plan_path)) == 2
+    error = capsys.readouterr().err
+    expected_message = "configuration failed" if provider_result == "failure" else "response is malformed"
+    assert expected_message in error
+    assert runner.repository_policy_mutation_count == 1
+
+
+@pytest.mark.parametrize("final_result", ("automatic-deletion-enabled", "unrelated-drift", "incomplete"))
+def test_workflow_configuration_rejects_inexact_final_repository_policy_readback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    final_result: str,
+) -> None:
+    """Final provider readback must be complete and equal the approved desired policy."""
+
+    runner = _GhRunner()
+    runner.repository_policy_field_by_name_map["delete_branch_on_merge"] = True
+    module = _workflow_configuration_module_bind(runner, monkeypatch)
+    _, plan_path = _workflow_configuration_plan_write(module=module, tmp_path=tmp_path, capsys=capsys)
+    final_payload = runner._repository_policy_payload_get()
+    final_payload["delete_branch_on_merge"] = False
+    if final_result == "automatic-deletion-enabled":
+        final_payload["delete_branch_on_merge"] = True
+    elif final_result == "unrelated-drift":
+        final_payload["has_discussions"] = True
+    else:
+        del final_payload["delete_branch_on_merge"]
+    runner.repository_policy_payload_by_read_count_map[4] = final_payload
+
+    assert module.main(_workflow_configuration_apply_argument_list(plan_path)) == 2
+    error = capsys.readouterr().err
+    expected_message_by_result = {
+        "automatic-deletion-enabled": "must be disabled",
+        "unrelated-drift": "differs from the approved result",
+        "incomplete": "response has another shape",
+    }
+    assert expected_message_by_result[final_result] in error
+    assert runner.repository_policy_mutation_count == 1
+
+
 def test_exact_configuration_plan_rejects_absent_protection_without_write_authority() -> None:
     """An absent branch rule cannot hide an executing identity that cannot create it."""
 
-    script = PLUGIN_ROOT / "skills" / "workflow-configure" / "scripts" / "branch_protection.py"
-    spec = importlib.util.spec_from_file_location("linear_branch_protection_configuration_authority", script)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    module = _workflow_configuration_module_get()
     runner = _GhRunner(protection_kind="none")
     runner.execution_permission = "read"
-    snapshot = GitHubBranchProtectionBoundary(runner).inspect(
-        repository=RepositoryIdentity("antonov-andrey/example"),
-        base_branch="main",
-    )
+    snapshot, repository_policy = _configuration_snapshot_get(runner)
 
     with pytest.raises(GitHubContractError, match="write authority"):
-        module._plan_payload(snapshot, merge_method="merge")
+        module._plan_payload(snapshot, repository_policy, merge_method="merge")
 
 
 def test_effective_ruleset_protection_enforces_strict_merge_and_has_typed_sources() -> None:
@@ -3220,20 +3546,13 @@ def test_effective_ruleset_rejects_unknown_compatible_rule_parameter_fail_closed
 def test_workflow_configuration_cannot_plan_none_for_incompatible_protection() -> None:
     """The canonical configuration owner reports conflict instead of action none."""
 
-    script = PLUGIN_ROOT / "skills" / "workflow-configure" / "scripts" / "branch_protection.py"
-    spec = importlib.util.spec_from_file_location("linear_branch_protection_configuration", script)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    module = _workflow_configuration_module_get()
     runner = _GhRunner()
     runner.required_signatures = True
-    snapshot = GitHubBranchProtectionBoundary(runner).inspect(
-        repository=RepositoryIdentity("antonov-andrey/example"),
-        base_branch="main",
-    )
+    snapshot, repository_policy = _configuration_snapshot_get(runner)
 
     with pytest.raises(GitHubContractError, match="incompatible.*required signatures"):
-        module._plan_payload(snapshot, merge_method="merge")
+        module._plan_payload(snapshot, repository_policy, merge_method="merge")
 
 
 @pytest.mark.parametrize("merge_method", ("squash", "rebase"))
