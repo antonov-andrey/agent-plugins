@@ -61,7 +61,7 @@ For cross-repository code delivery this section is an explicit ordered merge pla
 
 ## Evidence And Links
 
-Agent attempts append concise semantic handoffs with direct verification, commits, PRs, CI and exact exposed usage telemetry. Raw logs, prompts and credentials never appear here.
+Agent attempts reconcile nested attempt resources before appending concise semantic handoffs with direct verification, commits, exact reviewed PR base/head identities, CI and any exact exposed usage telemetry. Raw logs, prompts and credentials never appear here.
 ```
 
 The issue description is visible durable execution context, not executable shell input. Project-local commands remain requirements until the task skill validates them against current project instructions.

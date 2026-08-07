@@ -1518,6 +1518,7 @@ def test_cleanup_reconciles_complete_exact_pull_request_set(
         state=pull_request_state,
         draft=False,
         base_branch="main",
+        base_commit="c" * 40,
         head_branch="linear/and-121",
         head_commit="a" * 40,
         merge_state="CLEAN",

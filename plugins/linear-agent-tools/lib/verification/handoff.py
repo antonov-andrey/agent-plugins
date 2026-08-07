@@ -54,6 +54,15 @@ _DIRECT_EVIDENCE_OUTCOME_SET = {
     "rework-required",
     "cleanup-complete",
 }
+_CODEX_USAGE_FIELD_SET = frozenset(
+    {
+        "cached_input_tokens",
+        "cache_write_input_tokens",
+        "input_tokens",
+        "output_tokens",
+        "reasoning_output_tokens",
+    }
+)
 
 
 def _github_pull_request_url_validate(value: object) -> str:
@@ -85,49 +94,40 @@ def _github_pull_request_url_validate(value: object) -> str:
 class CodexUsage:
     """Preserve exact structured counters exposed by completed Codex turns."""
 
-    cached_input_tokens: int
-    cache_write_input_tokens: int
-    input_tokens: int
-    output_tokens: int
-    reasoning_output_tokens: int
+    cached_input_tokens: int | None = None
+    cache_write_input_tokens: int | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    reasoning_output_tokens: int | None = None
 
     def __post_init__(self) -> None:
         """Require every exposed counter to be an exact non-negative integer."""
 
-        for field_name in (
-            "cached_input_tokens",
-            "cache_write_input_tokens",
-            "input_tokens",
-            "output_tokens",
-            "reasoning_output_tokens",
-        ):
+        exposed_counter_count = 0
+        for field_name in sorted(_CODEX_USAGE_FIELD_SET):
             value = getattr(self, field_name)
+            if value is None:
+                continue
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
                 raise EvidenceContractError(f"Handoff Codex usage {field_name} must be a non-negative integer")
+            exposed_counter_count += 1
+        if not exposed_counter_count:
+            raise EvidenceContractError("Handoff Codex usage must contain at least one exposed counter")
 
     def payload(self) -> dict[str, int]:
         """Return the exact surface counter names in token units."""
 
         return {
-            "cached_input_tokens": self.cached_input_tokens,
-            "cache_write_input_tokens": self.cache_write_input_tokens,
-            "input_tokens": self.input_tokens,
-            "output_tokens": self.output_tokens,
-            "reasoning_output_tokens": self.reasoning_output_tokens,
+            field_name: value
+            for field_name in sorted(_CODEX_USAGE_FIELD_SET)
+            if (value := getattr(self, field_name)) is not None
         }
 
     @classmethod
     def from_payload(cls, payload: object) -> "CodexUsage":
         """Parse one closed structured Codex usage object."""
 
-        expected = {
-            "cached_input_tokens",
-            "cache_write_input_tokens",
-            "input_tokens",
-            "output_tokens",
-            "reasoning_output_tokens",
-        }
-        if not isinstance(payload, dict) or set(payload) != expected:
+        if not isinstance(payload, dict) or not payload or not set(payload).issubset(_CODEX_USAGE_FIELD_SET):
             raise EvidenceContractError("Handoff Codex usage has another shape")
         return cls(**payload)
 
@@ -145,7 +145,11 @@ class TaskHandoff:
     completed_at: datetime
     outcome: str
     summary: str
+    attempt_cleanup_complete: bool
     commit_by_repository_map: dict[str, str]
+    local_phase_baseline_evidence_url: str
+    pull_request_base_branch_by_url_map: dict[str, str]
+    pull_request_base_commit_by_url_map: dict[str, str]
     pull_request_head_by_url_map: dict[str, str]
     verification_summary_list: list[str]
     evidence_url_list: list[str]
@@ -183,6 +187,8 @@ class TaskHandoff:
         if not isinstance(self.outcome, str) or self.outcome not in _OUTCOME_BY_OPERATION[self.operation]:
             raise EvidenceContractError("Handoff operation and outcome are incompatible")
         single_line_validate(self.summary, label="Handoff semantic summary")
+        if not isinstance(self.attempt_cleanup_complete, bool) or not self.attempt_cleanup_complete:
+            raise EvidenceContractError("Handoff requires completed nested attempt-resource cleanup")
         if not isinstance(self.commit_by_repository_map, dict):
             raise EvidenceContractError("Handoff commit set must be a mapping")
         for repository, commit in self.commit_by_repository_map.items():
@@ -198,22 +204,39 @@ class TaskHandoff:
             raise EvidenceContractError("Non-code handoff cannot report Product commits")
         if self.operation == "review" and self.commit_by_repository_map:
             raise EvidenceContractError("Review handoff cannot report changed Product commits")
-        if not isinstance(self.pull_request_head_by_url_map, dict):
-            raise EvidenceContractError("Handoff pull-request heads must be a mapping")
+        for label, value in (
+            ("base branches", self.pull_request_base_branch_by_url_map),
+            ("base commits", self.pull_request_base_commit_by_url_map),
+            ("heads", self.pull_request_head_by_url_map),
+        ):
+            if not isinstance(value, dict):
+                raise EvidenceContractError(f"Handoff pull-request {label} must be a mapping")
+        pull_request_url_set = set(self.pull_request_head_by_url_map)
+        if (
+            set(self.pull_request_base_branch_by_url_map) != pull_request_url_set
+            or set(self.pull_request_base_commit_by_url_map) != pull_request_url_set
+        ):
+            raise EvidenceContractError("Handoff pull-request base branches, base commits and heads must align")
         pull_request_repository_list: list[str] = []
-        for url, commit in self.pull_request_head_by_url_map.items():
-            if not isinstance(commit, str):
-                raise EvidenceContractError("Handoff pull-request head must be a text identity")
+        for url in sorted(pull_request_url_set):
             pull_request_repository_list.append(_github_pull_request_url_validate(url))
-            if COMMIT_PATTERN.fullmatch(commit) is None:
+            single_line_validate(
+                self.pull_request_base_branch_by_url_map[url],
+                label="Handoff pull-request base branch",
+            )
+            base_commit = self.pull_request_base_commit_by_url_map[url]
+            head_commit = self.pull_request_head_by_url_map[url]
+            if not isinstance(base_commit, str) or COMMIT_PATTERN.fullmatch(base_commit) is None:
+                raise EvidenceContractError("Handoff pull-request base is not a full lowercase commit")
+            if not isinstance(head_commit, str) or COMMIT_PATTERN.fullmatch(head_commit) is None:
                 raise EvidenceContractError("Handoff pull-request head is not a full lowercase commit")
         if len(pull_request_repository_list) != len(set(pull_request_repository_list)):
             raise EvidenceContractError("Handoff repeats one pull-request repository")
         if self.delivery_kind == "code":
             if self.outcome in _DIRECT_EVIDENCE_OUTCOME_SET and not self.pull_request_head_by_url_map:
                 raise EvidenceContractError("Code handoff requires exact pull-request heads")
-        elif self.pull_request_head_by_url_map:
-            raise EvidenceContractError("Only code handoff may report pull-request heads")
+        elif pull_request_url_set:
+            raise EvidenceContractError("Only code handoff may report pull-request review identities")
         if (
             self.operation in {"implementation", "merge"}
             and self.delivery_kind == "code"
@@ -248,6 +271,14 @@ class TaskHandoff:
             raise EvidenceContractError("Handoff evidence links must be unique and sorted")
         for value in self.evidence_url_list:
             evidence_url_validate(value)
+        if self.operation == "acceptance" and self.outcome == "final-boundary":
+            evidence_url_validate(self.local_phase_baseline_evidence_url)
+            if self.local_phase_baseline_evidence_url not in self.evidence_url_list:
+                raise EvidenceContractError(
+                    "Final acceptance handoff must include its local phase baseline evidence URL"
+                )
+        elif self.local_phase_baseline_evidence_url != "":
+            raise EvidenceContractError("Local phase baseline evidence is valid only for final acceptance")
         if self.outcome in _DIRECT_EVIDENCE_OUTCOME_SET and (
             not self.verification_summary_list or not self.evidence_url_list
         ):
@@ -255,6 +286,16 @@ class TaskHandoff:
         if self.codex_usage is not None and not isinstance(self.codex_usage, CodexUsage):
             raise EvidenceContractError("Handoff Codex usage must be absent or exact structured counters")
         object.__setattr__(self, "commit_by_repository_map", dict(sorted(self.commit_by_repository_map.items())))
+        object.__setattr__(
+            self,
+            "pull_request_base_branch_by_url_map",
+            dict(sorted(self.pull_request_base_branch_by_url_map.items())),
+        )
+        object.__setattr__(
+            self,
+            "pull_request_base_commit_by_url_map",
+            dict(sorted(self.pull_request_base_commit_by_url_map.items())),
+        )
         object.__setattr__(
             self,
             "pull_request_head_by_url_map",
@@ -268,14 +309,18 @@ class TaskHandoff:
 
         payload: dict[str, object] = {
             "schema_version": 1,
+            "attempt_cleanup_complete": self.attempt_cleanup_complete,
             "commit_by_repository_map": dict(self.commit_by_repository_map),
             "completed_at": instant_render(self.completed_at),
             "delivery_kind": self.delivery_kind,
             "evidence_url_list": list(self.evidence_url_list),
             "handoff_id": self.handoff_id,
             "issue_identifier": self.issue_identifier,
+            "local_phase_baseline_evidence_url": self.local_phase_baseline_evidence_url,
             "operation": self.operation,
             "outcome": self.outcome,
+            "pull_request_base_branch_by_url_map": dict(self.pull_request_base_branch_by_url_map),
+            "pull_request_base_commit_by_url_map": dict(self.pull_request_base_commit_by_url_map),
             "pull_request_head_by_url_map": dict(self.pull_request_head_by_url_map),
             "role_label": self.role_label,
             "started_at": instant_render(self.started_at),
@@ -286,20 +331,49 @@ class TaskHandoff:
             payload["codex_usage"] = self.codex_usage.payload()
         return payload
 
+    def current_pull_request_identity_require(
+        self,
+        *,
+        base_branch_by_url_map: dict[str, str],
+        base_commit_by_url_map: dict[str, str],
+        head_commit_by_url_map: dict[str, str],
+    ) -> None:
+        """Require direct GitHub state to match every declared reviewed PR identity.
+
+        Args:
+            base_branch_by_url_map: Current PR base branch by canonical PR URL.
+            base_commit_by_url_map: Current PR base commit by canonical PR URL.
+            head_commit_by_url_map: Current PR head commit by canonical PR URL.
+        """
+
+        if (
+            not isinstance(base_branch_by_url_map, dict)
+            or not isinstance(base_commit_by_url_map, dict)
+            or not isinstance(head_commit_by_url_map, dict)
+            or base_branch_by_url_map != self.pull_request_base_branch_by_url_map
+            or base_commit_by_url_map != self.pull_request_base_commit_by_url_map
+            or head_commit_by_url_map != self.pull_request_head_by_url_map
+        ):
+            raise EvidenceContractError("Current pull-request identity changed from the semantic handoff")
+
     @classmethod
     def from_payload(cls, payload: object) -> "TaskHandoff":
         """Parse one strict semantic handoff payload."""
 
         required = {
             "schema_version",
+            "attempt_cleanup_complete",
             "commit_by_repository_map",
             "completed_at",
             "delivery_kind",
             "evidence_url_list",
             "handoff_id",
             "issue_identifier",
+            "local_phase_baseline_evidence_url",
             "operation",
             "outcome",
+            "pull_request_base_branch_by_url_map",
+            "pull_request_base_commit_by_url_map",
             "pull_request_head_by_url_map",
             "role_label",
             "started_at",
@@ -331,8 +405,16 @@ class TaskHandoff:
             completed_at=instant_parse(payload["completed_at"], label="Handoff completion"),
             outcome=payload["outcome"],
             summary=payload["summary"],
+            attempt_cleanup_complete=payload["attempt_cleanup_complete"],
             commit_by_repository_map=text_by_text_map_parse(
                 payload["commit_by_repository_map"], label="handoff commits"
+            ),
+            local_phase_baseline_evidence_url=payload["local_phase_baseline_evidence_url"],
+            pull_request_base_branch_by_url_map=text_by_text_map_parse(
+                payload["pull_request_base_branch_by_url_map"], label="handoff pull-request base branches"
+            ),
+            pull_request_base_commit_by_url_map=text_by_text_map_parse(
+                payload["pull_request_base_commit_by_url_map"], label="handoff pull-request base commits"
             ),
             pull_request_head_by_url_map=text_by_text_map_parse(
                 payload["pull_request_head_by_url_map"], label="handoff pull-request heads"

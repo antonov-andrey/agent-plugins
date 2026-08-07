@@ -18,8 +18,8 @@ Every preview or handoff response MUST state that one exact issue process-lifeti
 1. Set `LINEAR_AGENT_WORKSPACE_ROOT` to the explicit canonical multi-repository checkout container. It must not be a repository or task worktree. Start `../../lib/task_workspace/tool/attempt.py hold --issue-identifier <exact-identifier>`, require `status=held`, and keep that process alive through final readback. Never derive the namespace from CWD or selected repository and never explicitly unlock early.
 2. Fully reread the authenticated destination, exact issue, relations, comments and source. Save the transient snapshot and run `../../lib/linear_boundary/tool/task.py dispatch`; require role `task:implementation`, delivery `code` or `evidence`, and no blockers.
 3. For code delivery, run `scripts/workspace.py prepare` from the issue's exact origins/bases. On first dispatch its baseline is freshly fetched `origin/<base-branch>`, not local `HEAD`. Render and publish exactly one byte-identical `workspace-baseline` comment before Product mutation. Preparation creates/adopts only `.worktree/<issue>` and `linear/<issue>`; canonical checkouts remain untouched.
-4. On `Rework`, adopt the same worktrees, branches and PRs without reset. Before recovery, run nested `task-cleanup` for exact attempt-lifetime resources while reusing this attempt's live guard. Recover from semantic current source/Git/PR/evidence state; do not require the previous Codex version or unrelated orchestration equality.
-5. Validate `Todo`/`Rework -> In Progress`, mutate Linear and reread it. Evidence-only probes create no fake branch or PR.
+4. Before `Todo`/`Rework -> In Progress`, run nested `task-cleanup` for exact attempt-lifetime resources while reusing this attempt's live guard. On `Rework`, adopt the same worktrees, branches and PRs without reset and recover from semantic current source/Git/PR/evidence state; do not require the previous Codex version or unrelated orchestration equality.
+5. Validate the transition with completed attempt cleanup, mutate Linear and reread it. Evidence-only probes create no fake branch or PR.
 
 ## Delivery
 
@@ -31,7 +31,7 @@ Every preview or handoff response MUST state that one exact issue process-lifeti
 
 ## Handoff
 
-Reconcile attempt-lifetime resources first. Build one concise `handoff` input containing semantic current state, exact delivery-applicable commits, PR URL/head map, direct verification summaries and bounded evidence URLs. Include only exact structured `input_tokens`, `cached_input_tokens`, `cache_write_input_tokens`, `output_tokens` and `reasoning_output_tokens` counters directly exposed by Codex, aggregated independently across nested invocations. Omit unavailable usage and never estimate or derive it.
+Reconcile attempt-lifetime resources first. Build one concise `handoff` input containing completed attempt cleanup, semantic current state, exact delivery-applicable commits, the PR URL/base-branch/base-commit/head map, direct verification summaries and bounded evidence URLs. Include any nonempty subset of exact known structured `input_tokens`, `cached_input_tokens`, `cache_write_input_tokens`, `output_tokens` and `reasoning_output_tokens` counters directly exposed by Codex, aggregated independently across nested invocations. Omit the usage object only when no counters are exposed; never estimate or derive it.
 
 Render the handoff through `../../lib/verification/tool/evidence.py handoff`, publish it once, fully paginate and require one byte-identical provider readback. The handoff is recovery context, not an approval object or automatic verification cache. Exclude prompts, secrets and raw logs; delete transient inputs after readback.
 

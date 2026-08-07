@@ -1,6 +1,6 @@
 ---
 name: task-merge
-description: Merge exactly one independently reviewed Linear code task in Merging, enforcing current PR heads, declared bases, required checks, branch protection, ordered recovery and final links without hidden fix-forward.
+description: Merge exactly one independently reviewed Linear code task in Merging, enforcing reviewed PR base commits and heads, declared branches, required checks, branch protection, ordered recovery and final links without hidden fix-forward.
 ---
 
 # Merge Linear Task
@@ -11,10 +11,12 @@ Every preview or handoff MUST state that one canonical-root issue guard is acqui
 
 1. Set canonical `LINEAR_AGENT_WORKSPACE_ROOT`, start `../../lib/task_workspace/tool/attempt.py hold`, require `status=held`, and keep that process alive through the boundary.
 2. Fully reread Linear and run dispatch. Require active Project, exact issue `Merging`, implementation/code role, exact assignment and no blockers.
-3. Parse the latest byte-for-byte provider-read `review-passed` handoff and take its complete PR URL/head map as direct review evidence. For every PR run `scripts/pull_request.py inspect --base-branch <base> --head-branch <head> --reviewed-head-commit <commit>`. Separately prove current exact head, base/head, integration link, non-draft state, provider mergeability, required checks and branch protection. An already merged exact reviewed head is accepted only for crash recovery.
-4. If source, generated output, base update or PR head changed after review, publish and byte-for-byte reread a `rework-required` semantic handoff with direct stale-state evidence, then move `Merging -> Rework`. Do not fix or rebase in merge.
-5. Merge in declared repository order with `scripts/pull_request.py merge ... --reviewed-head-commit <commit> --merge-method <method>`. Retry only transient provider operations that do not change reviewed state. Never hide or roll back a partial cross-repository merge; publish completed merges and exact remaining recovery order.
+3. Reconcile attempt resources before recovering an interrupted or partial-merge path. Parse the latest byte-for-byte provider-read `review-passed` handoff and take its complete PR URL/base-branch/base-commit/head map as direct review evidence. For every PR run `scripts/pull_request.py inspect --base-branch <base> --head-branch <head> --reviewed-base-commit <commit> --reviewed-head-commit <commit>`. Separately prove current exact base commit, head, base/head branches, integration link, non-draft state, provider mergeability, required checks and branch protection. An already merged exact reviewed base and head is accepted only for crash recovery.
+4. If source, generated output, base branch, base commit or PR head changed after review, reconcile attempt resources, publish and byte-for-byte reread a `rework-required` semantic handoff with direct stale-state evidence, then move `Merging -> Rework`. Do not fix or rebase in merge.
+5. Merge in declared repository order with `scripts/pull_request.py merge ... --reviewed-base-commit <commit> --reviewed-head-commit <commit> --merge-method <method>`. Retry only transient provider operations that do not change reviewed identity. Never hide or roll back a partial cross-repository merge; reconcile attempt resources before publishing completed merges and exact remaining recovery order.
 6. Use native background-terminal waiting for provider operations. Do not create model polling, a Project supervisor, command timeouts, arbitrary thresholds or an alternate Codex home.
-7. After all merges are directly read back, reconcile attempt resources under the live guard and publish/reread one `merged` semantic handoff with reviewed PR heads, final commits, evidence URLs and only directly exposed exact Codex usage counters. Validate `Merging -> Done`, mutate/reread Linear, then run issue-owned cleanup under the same guard. Do not complete downstream graph review or acceptance automatically.
+7. After all merges are directly read back, reconcile attempt resources under the live guard and publish/reread one `merged` semantic handoff with reviewed PR base branches, base commits and heads, final commits, evidence URLs and any nonempty subset of directly exposed exact known Codex usage counters. Validate `Merging -> Done`, mutate/reread Linear, then run issue-owned cleanup under the same guard. Do not complete downstream graph review or acceptance automatically.
+
+Attempt-resource cleanup is a mandatory pre-handoff and pre-transition step for success, finding, stale-state, failed, canceled and controlled interrupted outcomes. No status mutation or handoff publication may precede it. An abrupt process loss publishes nothing; the next guarded attempt repeats the idempotent cleanup before recovery.
 
 No verification receipt, candidate fingerprint or generic invalidation gate is created. Delete transient inputs only after final provider readback; process exit releases the guard.

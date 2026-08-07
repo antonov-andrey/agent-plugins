@@ -32,6 +32,7 @@ def _parser_get() -> argparse.ArgumentParser:
     parser.add_argument("--issue-identifier", required=True)
     parser.add_argument("--base-branch", required=True)
     parser.add_argument("--head-branch", required=True)
+    parser.add_argument("--reviewed-base-commit", required=True)
     parser.add_argument("--reviewed-head-commit", required=True)
     parser.add_argument("--merge-method", choices=("merge", "squash", "rebase"))
     return parser
@@ -60,6 +61,7 @@ def main(argv: list[str] | None = None) -> int:
                 issue_identifier=args.issue_identifier,
                 base_branch=args.base_branch,
                 head_branch=args.head_branch,
+                reviewed_base_commit=args.reviewed_base_commit,
                 reviewed_head_commit=args.reviewed_head_commit,
                 merge_method=args.merge_method,
             )
@@ -69,9 +71,15 @@ def main(argv: list[str] | None = None) -> int:
         snapshot.target_require(base_branch=args.base_branch, head_branch=args.head_branch)
         if args.command == "inspect":
             if snapshot.state == "MERGED":
-                snapshot.merged_result_require(reviewed_head_commit=args.reviewed_head_commit)
+                snapshot.merged_result_require(
+                    reviewed_base_commit=args.reviewed_base_commit,
+                    reviewed_head_commit=args.reviewed_head_commit,
+                )
             else:
-                snapshot.merge_preconditions_require(reviewed_head_commit=args.reviewed_head_commit)
+                snapshot.merge_preconditions_require(
+                    reviewed_base_commit=args.reviewed_base_commit,
+                    reviewed_head_commit=args.reviewed_head_commit,
+                )
     except GitHubContractError as error:
         print(str(error), file=sys.stderr)
         return 2

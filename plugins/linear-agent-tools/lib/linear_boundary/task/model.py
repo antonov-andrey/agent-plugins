@@ -190,8 +190,10 @@ class TransitionProof:
     reviewed_state_changed: bool = False
     remediation_blocker_ready: bool = False
     review_finding_ready: bool = False
+    local_phase_baseline_readback_ready: bool = False
     merge_complete: bool = False
     cleanup_complete: bool = False
+    attempt_cleanup_complete: bool = False
 
     def __post_init__(self) -> None:
         """Require every proof flag to be a real boolean."""
@@ -212,8 +214,10 @@ class TransitionProof:
             "reviewed_state_changed": self.reviewed_state_changed,
             "remediation_blocker_ready": self.remediation_blocker_ready,
             "review_finding_ready": self.review_finding_ready,
+            "local_phase_baseline_readback_ready": self.local_phase_baseline_readback_ready,
             "merge_complete": self.merge_complete,
             "cleanup_complete": self.cleanup_complete,
+            "attempt_cleanup_complete": self.attempt_cleanup_complete,
         }
         for field_name, value in boolean_by_field_name_map.items():
             if not isinstance(value, bool):

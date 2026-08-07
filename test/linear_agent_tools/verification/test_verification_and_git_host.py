@@ -30,7 +30,9 @@ from verification.handoff import CodexUsage, TaskHandoff
 
 COMMIT_ONE = "a" * 40
 COMMIT_TWO = "b" * 40
+COMMIT_BASE = "c" * 40
 ISSUE_EVIDENCE_URL = "https://linear.app/acme/issue/AND-17/direct-evidence"
+BASELINE_EVIDENCE_URL = "https://linear.app/acme/issue/AND-17/local-phase-baseline"
 PULL_REQUEST_URL = "https://github.com/antonov-andrey/example/pull/17"
 
 
@@ -47,19 +49,17 @@ def _handoff(**replacement_by_name: object) -> TaskHandoff:
         "completed_at": datetime(2026, 8, 4, 12, 30, tzinfo=timezone.utc),
         "outcome": "review-ready",
         "summary": "Implemented the bounded provider owner and stopped at independent Review.",
+        "attempt_cleanup_complete": True,
         "commit_by_repository_map": {"antonov-andrey/example": COMMIT_ONE},
+        "local_phase_baseline_evidence_url": "",
+        "pull_request_base_branch_by_url_map": {PULL_REQUEST_URL: "main"},
+        "pull_request_base_commit_by_url_map": {PULL_REQUEST_URL: COMMIT_BASE},
         "pull_request_head_by_url_map": {PULL_REQUEST_URL: COMMIT_ONE},
         "verification_summary_list": [
             "pytest -q passed for unchanged source, command, environment, and semantic owner contract"
         ],
         "evidence_url_list": sorted([ISSUE_EVIDENCE_URL, PULL_REQUEST_URL]),
-        "codex_usage": CodexUsage(
-            cached_input_tokens=2,
-            cache_write_input_tokens=3,
-            input_tokens=5,
-            output_tokens=7,
-            reasoning_output_tokens=11,
-        ),
+        "codex_usage": CodexUsage(input_tokens=5, reasoning_output_tokens=11),
     }
     field_by_name.update(replacement_by_name)
     return TaskHandoff(**field_by_name)  # type: ignore[arg-type]
@@ -73,44 +73,80 @@ def test_semantic_handoff_round_trips_direct_state_and_exact_usage() -> None:
     parsed_payload = HANDOFF_COMMENT_CODEC.payload_parse(rendered)
 
     assert TaskHandoff.from_payload(parsed_payload) == handoff
+    assert parsed_payload["pull_request_base_branch_by_url_map"] == {PULL_REQUEST_URL: "main"}
+    assert parsed_payload["pull_request_base_commit_by_url_map"] == {PULL_REQUEST_URL: COMMIT_BASE}
     assert parsed_payload["pull_request_head_by_url_map"] == {PULL_REQUEST_URL: COMMIT_ONE}
-    assert parsed_payload["codex_usage"] == {
-        "cached_input_tokens": 2,
-        "cache_write_input_tokens": 3,
-        "input_tokens": 5,
-        "output_tokens": 7,
-        "reasoning_output_tokens": 11,
-    }
+    assert parsed_payload["codex_usage"] == {"input_tokens": 5, "reasoning_output_tokens": 11}
     assert "fingerprint" not in rendered
     assert "receipt" not in rendered
 
 
 @pytest.mark.parametrize(
-    ("field_name", "value"),
+    "field_name",
     (
-        ("input_tokens", -1),
-        ("output_tokens", 1.5),
-        ("reasoning_output_tokens", True),
+        "cached_input_tokens",
+        "cache_write_input_tokens",
+        "input_tokens",
+        "output_tokens",
+        "reasoning_output_tokens",
     ),
 )
-def test_handoff_usage_accepts_only_exact_surface_counters(field_name: str, value: object) -> None:
-    """Usage cannot be estimated, boolean, fractional or negative."""
-
-    argument_by_name = {
-        "cached_input_tokens": 0,
-        "cache_write_input_tokens": 0,
-        "input_tokens": 0,
-        "output_tokens": 0,
-        "reasoning_output_tokens": 0,
-    }
-    argument_by_name[field_name] = value
+def test_handoff_usage_validates_every_present_known_counter(field_name: str) -> None:
+    """Every supported counter is validated even when it is the only exposed value."""
 
     with pytest.raises(EvidenceContractError, match=field_name):
-        CodexUsage(**argument_by_name)  # type: ignore[arg-type]
+        CodexUsage(**{field_name: -1})  # type: ignore[arg-type]
 
 
-def test_review_handoff_binds_current_pr_heads_without_claiming_product_changes() -> None:
-    """An independent reviewer records direct head state but no changed commits."""
+@pytest.mark.parametrize("value", (True, 1.5, -1))
+def test_handoff_usage_rejects_nonexact_values(value: object) -> None:
+    """Usage cannot be boolean, fractional or negative."""
+
+    with pytest.raises(EvidenceContractError, match="input_tokens"):
+        CodexUsage(input_tokens=value)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "usage_payload",
+    (
+        {},
+        {"total_tokens": 1},
+        {"estimated_input_tokens": 1},
+        {"input_tokens": 1, "total_tokens": 1},
+    ),
+)
+def test_handoff_usage_rejects_empty_unknown_and_estimated_shapes(usage_payload: dict[str, object]) -> None:
+    """The telemetry object is one nonempty closed subset of known exact counters."""
+
+    payload = _handoff().payload()
+    payload["codex_usage"] = usage_payload
+
+    with pytest.raises(EvidenceContractError, match="another shape"):
+        TaskHandoff.from_payload(payload)
+
+
+def test_handoff_usage_rejects_estimated_value_for_known_counter() -> None:
+    """An estimate cannot masquerade under one otherwise known counter name."""
+
+    payload = _handoff().payload()
+    payload["codex_usage"] = {"input_tokens": "estimated: 100"}
+
+    with pytest.raises(EvidenceContractError, match="input_tokens"):
+        TaskHandoff.from_payload(payload)
+
+
+def test_handoff_omits_usage_only_when_no_counter_is_exposed() -> None:
+    """No telemetry object is emitted when Codex exposes no exact counter."""
+
+    payload = _handoff(codex_usage=None).payload()
+
+    assert "codex_usage" not in payload
+    with pytest.raises(EvidenceContractError, match="at least one exposed counter"):
+        CodexUsage()
+
+
+def test_review_handoff_binds_current_pr_identity_without_claiming_product_changes() -> None:
+    """An independent reviewer records direct base and head state but no changed commits."""
 
     review = _handoff(
         operation="review",
@@ -120,6 +156,17 @@ def test_review_handoff_binds_current_pr_heads_without_claiming_product_changes(
     )
 
     assert TaskHandoff.from_payload(review.payload()) == review
+    review.current_pull_request_identity_require(
+        base_branch_by_url_map={PULL_REQUEST_URL: "main"},
+        base_commit_by_url_map={PULL_REQUEST_URL: COMMIT_BASE},
+        head_commit_by_url_map={PULL_REQUEST_URL: COMMIT_ONE},
+    )
+    with pytest.raises(EvidenceContractError, match="identity changed"):
+        review.current_pull_request_identity_require(
+            base_branch_by_url_map={PULL_REQUEST_URL: "main"},
+            base_commit_by_url_map={PULL_REQUEST_URL: COMMIT_TWO},
+            head_commit_by_url_map={PULL_REQUEST_URL: COMMIT_ONE},
+        )
     with pytest.raises(EvidenceContractError, match="Review handoff cannot report changed"):
         replace(review, commit_by_repository_map={"antonov-andrey/example": COMMIT_ONE})
 
@@ -134,8 +181,11 @@ def test_noncode_handoff_requires_direct_evidence_but_rejects_product_state() ->
         outcome="final-boundary",
         summary="Whole deployed outcome passed and awaits the final human decision.",
         commit_by_repository_map={},
+        local_phase_baseline_evidence_url=BASELINE_EVIDENCE_URL,
+        pull_request_base_branch_by_url_map={},
+        pull_request_base_commit_by_url_map={},
         pull_request_head_by_url_map={},
-        evidence_url_list=[ISSUE_EVIDENCE_URL],
+        evidence_url_list=sorted([BASELINE_EVIDENCE_URL, ISSUE_EVIDENCE_URL]),
         codex_usage=None,
     )
 
@@ -144,6 +194,48 @@ def test_noncode_handoff_requires_direct_evidence_but_rejects_product_state() ->
         replace(acceptance, commit_by_repository_map={"antonov-andrey/example": COMMIT_ONE})
     with pytest.raises(EvidenceContractError, match="semantic verification and direct evidence"):
         replace(acceptance, verification_summary_list=[])
+    with pytest.raises(EvidenceContractError, match="evidence URL"):
+        replace(acceptance, local_phase_baseline_evidence_url="")
+    with pytest.raises(EvidenceContractError, match="include its local phase baseline"):
+        replace(acceptance, evidence_url_list=[ISSUE_EVIDENCE_URL])
+
+
+@pytest.mark.parametrize(
+    ("operation", "role_label", "delivery_kind", "outcome"),
+    (
+        ("review", "task:implementation", "code", "review-passed"),
+        ("review", "task:implementation", "code", "review-findings"),
+        ("review", "task:implementation", "code", "failed"),
+        ("review", "task:implementation", "code", "canceled"),
+        ("review", "task:implementation", "code", "interrupted"),
+        ("acceptance", "task:acceptance", "evidence", "final-boundary"),
+        ("acceptance", "task:acceptance", "evidence", "remediation-required"),
+        ("acceptance", "task:acceptance", "evidence", "failed"),
+        ("acceptance", "task:acceptance", "evidence", "canceled"),
+        ("acceptance", "task:acceptance", "evidence", "interrupted"),
+        ("merge", "task:implementation", "code", "merged"),
+        ("merge", "task:implementation", "code", "rework-required"),
+        ("merge", "task:implementation", "code", "failed"),
+        ("merge", "task:implementation", "code", "canceled"),
+        ("merge", "task:implementation", "code", "interrupted"),
+    ),
+)
+def test_review_accept_merge_handoffs_require_cleanup_for_every_outcome(
+    operation: str,
+    role_label: str,
+    delivery_kind: str,
+    outcome: str,
+) -> None:
+    """No review, acceptance or merge handoff may be rendered before nested cleanup."""
+
+    with pytest.raises(EvidenceContractError, match="nested attempt-resource cleanup"):
+        _handoff(
+            operation=operation,
+            role_label=role_label,
+            delivery_kind=delivery_kind,
+            outcome=outcome,
+            attempt_cleanup_complete=False,
+        )
 
 
 @pytest.mark.parametrize(
@@ -179,12 +271,24 @@ def test_implementation_handoff_binds_each_pr_head_to_its_current_repository_com
     with pytest.raises(EvidenceContractError, match="differs from current commit"):
         _handoff(commit_by_repository_map={"antonov-andrey/example": COMMIT_TWO})
     with pytest.raises(EvidenceContractError, match="repeats one pull-request repository"):
+        pull_request_url_list = [
+            PULL_REQUEST_URL,
+            "https://github.com/antonov-andrey/example/pull/18",
+        ]
         _handoff(
-            pull_request_head_by_url_map={
-                PULL_REQUEST_URL: COMMIT_ONE,
-                "https://github.com/antonov-andrey/example/pull/18": COMMIT_ONE,
-            }
+            pull_request_base_branch_by_url_map={url: "main" for url in pull_request_url_list},
+            pull_request_base_commit_by_url_map={url: COMMIT_BASE for url in pull_request_url_list},
+            pull_request_head_by_url_map={url: COMMIT_ONE for url in pull_request_url_list},
         )
+
+
+def test_handoff_requires_one_aligned_complete_pr_review_identity() -> None:
+    """Base branch, exact base commit and head are one closed reviewed PR identity."""
+
+    with pytest.raises(EvidenceContractError, match="must align"):
+        _handoff(pull_request_base_commit_by_url_map={})
+    with pytest.raises(EvidenceContractError, match="base is not a full lowercase commit"):
+        _handoff(pull_request_base_commit_by_url_map={PULL_REQUEST_URL: "main"})
 
 
 @pytest.mark.parametrize(
@@ -199,7 +303,11 @@ def test_handoff_rejects_noncanonical_pull_request_url_without_secret_echo(url: 
     """Unsafe PR identity is rejected without reflecting credential-bearing input."""
 
     with pytest.raises(EvidenceContractError, match="canonical GitHub PR") as captured:
-        _handoff(pull_request_head_by_url_map={url: COMMIT_ONE})
+        _handoff(
+            pull_request_base_branch_by_url_map={url: "main"},
+            pull_request_base_commit_by_url_map={url: COMMIT_BASE},
+            pull_request_head_by_url_map={url: COMMIT_ONE},
+        )
 
     assert "secret" not in str(captured.value)
 
@@ -338,7 +446,14 @@ def test_task_workspace_baseline_is_deterministic_migration_evidence() -> None:
 class _GhRunner:
     """Return deterministic gh responses and record exact command argv."""
 
-    def __init__(self, *, head_commit: str = COMMIT_ONE, base_branch: str = "main") -> None:
+    def __init__(
+        self,
+        *,
+        base_commit: str = COMMIT_BASE,
+        head_commit: str = COMMIT_ONE,
+        base_branch: str = "main",
+    ) -> None:
+        self.base_commit = base_commit
         self.head_commit = head_commit
         self.base_branch = base_branch
         self.check_bucket = "pass"
@@ -394,6 +509,7 @@ class _GhRunner:
                 "state": self.state,
                 "isDraft": False,
                 "baseRefName": self.base_branch,
+                "baseRefOid": self.base_commit,
                 "headRefName": "linear/and-17",
                 "headRefOid": self.head_commit,
                 "mergeStateStatus": "CLEAN",
@@ -404,8 +520,39 @@ class _GhRunner:
         raise AssertionError(f"Unexpected gh command: {argument_list}")
 
 
-def test_github_merge_binds_exact_independently_reviewed_head_and_required_checks() -> None:
-    """The merge boundary uses the reviewed head and verifies final state."""
+def test_github_inspect_reads_current_base_oid_for_review_identity() -> None:
+    """The provider inspector returns the exact base commit needed by review."""
+
+    runner = _GhRunner()
+    snapshot = GitHubPullRequestBoundary(runner).inspect(
+        repository=RepositoryIdentity("antonov-andrey/example"),
+        number=17,
+    )
+
+    assert snapshot.base_branch == "main"
+    assert snapshot.base_commit == COMMIT_BASE
+    assert snapshot.head_commit == COMMIT_ONE
+    view_command = next(item for item in runner.command_list if item[1:3] == ["pr", "view"])
+    assert "baseRefOid" in view_command[-1]
+
+
+def test_merge_cli_requires_reviewed_base_and_head_identity() -> None:
+    """The inspect/merge CLI cannot omit either independently reviewed commit."""
+
+    script = PLUGIN_ROOT / "skills" / "task-merge" / "scripts" / "pull_request.py"
+    result = subprocess.run(
+        [sys.executable, str(script), "--help"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "--reviewed-base-commit" in result.stdout
+    assert "--reviewed-head-commit" in result.stdout
+
+
+def test_github_merge_binds_exact_independently_reviewed_base_head_and_required_checks() -> None:
+    """The merge boundary uses the reviewed base and head and verifies final state."""
 
     runner = _GhRunner()
     merged = GitHubPullRequestBoundary(runner).merge(
@@ -414,6 +561,7 @@ def test_github_merge_binds_exact_independently_reviewed_head_and_required_check
         issue_identifier="AND-17",
         base_branch="main",
         head_branch="linear/and-17",
+        reviewed_base_commit=COMMIT_BASE,
         reviewed_head_commit=COMMIT_ONE,
         merge_method="merge",
     )
@@ -423,11 +571,12 @@ def test_github_merge_binds_exact_independently_reviewed_head_and_required_check
     merge_command = next(item for item in runner.command_list if item[1:3] == ["pr", "merge"])
     assert merge_command[-2:] == ["--match-head-commit", COMMIT_ONE]
     view_command = next(item for item in runner.command_list if item[1:3] == ["pr", "view"])
+    assert "baseRefOid" in view_command[-1]
     assert "reviewDecision" not in view_command[-1]
 
 
-def test_github_merge_retry_adopts_exact_already_merged_reviewed_head() -> None:
-    """A crash after provider merge recovers from exact merged-result readback."""
+def test_github_merge_retry_adopts_exact_already_merged_reviewed_identity() -> None:
+    """A crash after provider merge recovers from exact reviewed base/head readback."""
 
     runner = _GhRunner()
     runner.state = "MERGED"
@@ -437,6 +586,7 @@ def test_github_merge_retry_adopts_exact_already_merged_reviewed_head() -> None:
         issue_identifier="AND-17",
         base_branch="main",
         head_branch="linear/and-17",
+        reviewed_base_commit=COMMIT_BASE,
         reviewed_head_commit=COMMIT_ONE,
         merge_method="merge",
     )
@@ -509,6 +659,29 @@ def test_github_merge_rejects_head_change_after_independent_review() -> None:
             issue_identifier="AND-17",
             base_branch="main",
             head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+        )
+
+    assert not any(item[1:3] == ["pr", "merge"] for item in runner.command_list)
+
+
+@pytest.mark.parametrize("already_merged", (False, True))
+def test_github_merge_rejects_base_change_after_independent_review(already_merged: bool) -> None:
+    """A changed base forces Rework in both live merge and crash-recovery inspection."""
+
+    runner = _GhRunner(base_commit=COMMIT_TWO)
+    if already_merged:
+        runner.state = "MERGED"
+    with pytest.raises(GitHubContractError, match="base changed after independent review"):
+        GitHubPullRequestBoundary(runner).merge(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
             reviewed_head_commit=COMMIT_ONE,
             merge_method="merge",
         )
@@ -528,6 +701,7 @@ def test_github_merge_rejects_pending_required_check() -> None:
             issue_identifier="AND-17",
             base_branch="main",
             head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
             reviewed_head_commit=COMMIT_ONE,
             merge_method="merge",
         )
@@ -546,6 +720,7 @@ def test_github_merge_rejects_wrong_base_before_mutation() -> None:
             issue_identifier="AND-17",
             base_branch="main",
             head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
             reviewed_head_commit=COMMIT_ONE,
             merge_method="merge",
         )

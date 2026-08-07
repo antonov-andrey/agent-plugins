@@ -27,11 +27,11 @@ Every preview and handoff MUST say that only exact linked open canceled PRs are 
 
 ## Final Project Cleanup Node
 
-Run the sole `task:cleanup` issue in a fresh thread from `Todo`/`Rework` to `In Progress`. For an active Project, require terminal acceptance `Done`, every other Project node terminal and no unresolved remediation blocker. Reconcile all project-lifetime resources and remaining issue-owned local state.
+Run the sole `task:cleanup` issue in a fresh thread. Reconcile exact attempt resources before validating `Todo`/`Rework -> In Progress`, then mutate/reread the transition. For an active Project, require terminal acceptance `Done`, every other Project node terminal and no unresolved remediation blocker. Reconcile all project-lifetime resources and remaining issue-owned local state.
 
 Before the final request, rerun terminal-issue reconciliation for every terminal Project issue that still owns workspace state or deferred issue-lifetime resources; use each resource owner's issue identifier and its now-terminal declared consumers. The final request then carries the complete sorted identifier set of every Project issue and the union of every repository named by those issues. Before Project completion, the reconciler proves that no listed issue retains private workspace state, a registered worktree, a local deterministic branch or a remote deterministic branch in any participating repository. An incomplete issue set or repository union is not a valid completion proof.
 
-After exact cleanup read-back, render, publish and byte-for-byte reread one `cleanup-complete` semantic handoff with `../../lib/verification/tool/evidence.py handoff`. It contains concise current cleanup state, direct evidence and only exact Codex usage counters when exposed; it contains no verification receipt or candidate fingerprint.
+After exact cleanup read-back, render, publish and byte-for-byte reread one `cleanup-complete` semantic handoff with `../../lib/verification/tool/evidence.py handoff`. It contains completed nested attempt cleanup, concise current cleanup state, direct evidence and any nonempty subset of exact known Codex usage counters when exposed; it omits usage when none are exposed and contains no verification receipt or candidate fingerprint.
 
 Only after that handoff read-back, validate `In Progress -> Done` with `../../lib/linear_boundary/tool/task.py transition`, move the active cleanup issue, reread it, then move Project `In Progress -> Completed` and reread it. For a canceled Project, use its already terminal `Canceled` cleanup issue as deletion authority, perform the same exact reconciliation and handoff without reactivation, and keep both issue and Project `Canceled` even when cleanup succeeds.
 

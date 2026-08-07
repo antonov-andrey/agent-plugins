@@ -559,6 +559,8 @@ class TaskNode:
                 label="Human decision boundary",
                 multiline=True,
             )
+            if self.role not in {TaskRole.ACCEPTANCE, TaskRole.HUMAN}:
+                raise TaskGraphError("Human decision boundary is valid only for acceptance and human tasks")
         elif self.role in {TaskRole.ACCEPTANCE, TaskRole.HUMAN}:
             raise TaskGraphError("Acceptance and human tasks require the final human decision boundary")
         _text_list_validate(self.source_section_list, label="Source sections")

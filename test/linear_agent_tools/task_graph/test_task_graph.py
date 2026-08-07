@@ -14,7 +14,7 @@ if str(LIBRARY_ROOT) not in sys.path:
     sys.path.insert(0, str(LIBRARY_ROOT))
 
 from task_graph.delta import TaskGraphDelta
-from task_graph.model import TaskGraph, TaskGraphError
+from task_graph.model import TaskGraph, TaskGraphError, TaskNode
 from task_graph.publication import DeltaPublicationView, GraphPublicationView, linear_markdown_link
 from task_graph.reconciliation.delta import TaskGraphDeltaReconciler
 from task_graph.reconciliation.initial import TaskGraphReconciler
@@ -561,6 +561,37 @@ def test_graph_rejects_cycle_and_wrong_role_delivery_pair() -> None:
     wrong["node_list"][1]["delivery_kind"] = "code"
     with pytest.raises(TaskGraphError, match="unsupported enum|incompatible"):
         TaskGraph.from_payload(wrong)
+
+
+@pytest.mark.parametrize(
+    ("node_index", "role_label"),
+    (
+        (0, "task:implementation"),
+        (1, "task:review"),
+        (3, "task:cleanup"),
+    ),
+)
+def test_every_nonacceptance_agent_role_rejects_human_decision_boundary(
+    node_index: int,
+    role_label: str,
+) -> None:
+    """Implementation, review and cleanup cannot introduce an extra human gate."""
+
+    payload = _graph_payload()
+    assert payload["node_list"][node_index]["role"] == role_label
+    payload["node_list"][node_index]["human_decision_boundary"] = "A human must approve this agent result."
+
+    with pytest.raises(TaskGraphError, match="valid only for acceptance and human"):
+        TaskGraph.from_payload(payload)
+
+
+def test_human_role_accepts_its_required_decision_boundary() -> None:
+    """A genuinely human action remains the other permitted decision-boundary owner."""
+
+    payload = _node("human-decision", "task:human", "human", ["review"])
+    payload["human_decision_boundary"] = "Choose the exact external action to perform."
+
+    assert TaskNode.from_payload(payload).human_decision_boundary == payload["human_decision_boundary"]
 
 
 def test_direct_model_construction_requires_lists_and_detaches_caller_collections() -> None:

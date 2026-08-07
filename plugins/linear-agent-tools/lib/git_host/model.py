@@ -111,6 +111,7 @@ class PullRequestSnapshot:
     state: str
     draft: bool
     base_branch: str
+    base_commit: str
     head_branch: str
     head_commit: str
     merge_state: str
@@ -135,6 +136,8 @@ class PullRequestSnapshot:
         ):
             if not isinstance(value, str) or not value or any(character in value for character in ("\x00", "\n", "\r")):
                 raise GitHubContractError(f"Pull request {label} must be non-empty single-line text")
+        if _COMMIT_PATTERN.fullmatch(self.base_commit) is None:
+            raise GitHubContractError("Pull request base must be one full lowercase commit")
         if _COMMIT_PATTERN.fullmatch(self.head_commit) is None:
             raise GitHubContractError("Pull request head must be one full lowercase commit")
         if self.merge_commit and _COMMIT_PATTERN.fullmatch(self.merge_commit) is None:
@@ -181,6 +184,7 @@ class PullRequestSnapshot:
             "state",
             "isDraft",
             "baseRefName",
+            "baseRefOid",
             "headRefName",
             "headRefOid",
             "mergeStateStatus",
@@ -214,6 +218,7 @@ class PullRequestSnapshot:
             state=payload["state"],
             draft=payload["isDraft"],
             base_branch=payload["baseRefName"],
+            base_commit=payload["baseRefOid"],
             head_branch=payload["headRefName"],
             head_commit=payload["headRefOid"],
             merge_state=payload["mergeStateStatus"],
@@ -245,15 +250,25 @@ class PullRequestSnapshot:
         if self.base_branch != base_branch or self.head_branch != head_branch:
             raise GitHubContractError("Pull request base or head differs from the declared repository target")
 
-    def merge_preconditions_require(self, *, reviewed_head_commit: str) -> None:
-        """Require the exact independently reviewed head and provider merge gates.
+    def merge_preconditions_require(
+        self,
+        *,
+        reviewed_base_commit: str,
+        reviewed_head_commit: str,
+    ) -> None:
+        """Require the exact independently reviewed base, head and provider merge gates.
 
         Args:
+            reviewed_base_commit: Exact base commit covered by independent review.
             reviewed_head_commit: Exact PR head covered by independent review.
         """
 
+        if _COMMIT_PATTERN.fullmatch(reviewed_base_commit) is None:
+            raise GitHubContractError("Reviewed base must be one full lowercase commit")
         if _COMMIT_PATTERN.fullmatch(reviewed_head_commit) is None:
             raise GitHubContractError("Reviewed head must be one full lowercase commit")
+        if self.base_commit != reviewed_base_commit:
+            raise GitHubContractError("Pull request base changed after independent review")
         if self.head_commit != reviewed_head_commit:
             raise GitHubContractError("Pull request head changed after independent review")
         if self.state != "OPEN" or self.draft:
@@ -264,18 +279,28 @@ class PullRequestSnapshot:
         if failed_check_name_list:
             raise GitHubContractError(f"Required GitHub checks are not passing: {sorted(failed_check_name_list)}")
 
-    def merged_result_require(self, *, reviewed_head_commit: str) -> None:
-        """Require one exact already-merged independently reviewed head.
+    def merged_result_require(
+        self,
+        *,
+        reviewed_base_commit: str,
+        reviewed_head_commit: str,
+    ) -> None:
+        """Require one exact already-merged independently reviewed base and head.
 
         This is the crash-recovery read path after the provider may have accepted
         the merge while the local process had not yet persisted its read-back.
 
         Args:
+            reviewed_base_commit: Exact base commit covered by independent review.
             reviewed_head_commit: Exact head covered by independent review.
         """
 
+        if _COMMIT_PATTERN.fullmatch(reviewed_base_commit) is None:
+            raise GitHubContractError("Reviewed base must be one full lowercase commit")
         if _COMMIT_PATTERN.fullmatch(reviewed_head_commit) is None:
             raise GitHubContractError("Reviewed head must be one full lowercase commit")
+        if self.base_commit != reviewed_base_commit:
+            raise GitHubContractError("Pull request base changed after independent review")
         if self.head_commit != reviewed_head_commit:
             raise GitHubContractError("Pull request head changed after independent review")
         if self.state != "MERGED" or self.merged_at is None or not self.merge_commit:

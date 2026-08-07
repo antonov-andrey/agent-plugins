@@ -666,9 +666,23 @@ def test_transition_requires_fresh_rework_and_complete_implementation_handoff() 
         project_status=ProjectStatusName.IN_PROGRESS,
         role_label="task:implementation",
         delivery_kind="code",
-        proof=TransitionProof(fresh_thread=True, workspace_preserved=True),
+        proof=TransitionProof(
+            fresh_thread=True,
+            workspace_preserved=True,
+            attempt_cleanup_complete=True,
+        ),
         dispatchable=True,
     )
+    with pytest.raises(LinearContractError, match="nested attempt-resource cleanup"):
+        _transition_require(
+            current=IssueStatusName.REWORK,
+            target=IssueStatusName.IN_PROGRESS,
+            project_status=ProjectStatusName.IN_PROGRESS,
+            role_label="task:implementation",
+            delivery_kind="code",
+            proof=TransitionProof(fresh_thread=True, workspace_preserved=True),
+            dispatchable=True,
+        )
     complete = TransitionProof(
         result_ready=True,
         verification_ready=True,
@@ -676,6 +690,7 @@ def test_transition_requires_fresh_rework_and_complete_implementation_handoff() 
         required_ci_ready=True,
         evidence_ready=True,
         handoff_ready=True,
+        attempt_cleanup_complete=True,
     )
     _transition_require(
         current=IssueStatusName.IN_PROGRESS,
@@ -706,6 +721,7 @@ def test_independent_review_owns_code_merging_and_rework_gate() -> None:
         reviewed_state_current=True,
         evidence_ready=True,
         handoff_ready=True,
+        attempt_cleanup_complete=True,
     )
     _transition_require(
         current=IssueStatusName.REVIEW,
@@ -722,7 +738,26 @@ def test_independent_review_owns_code_merging_and_rework_gate() -> None:
         project_status=ProjectStatusName.IN_PROGRESS,
         role_label="task:implementation",
         delivery_kind="code",
-        proof=TransitionProof(review_finding_ready=True, evidence_ready=True, handoff_ready=True),
+        proof=TransitionProof(
+            review_finding_ready=True,
+            evidence_ready=True,
+            handoff_ready=True,
+            attempt_cleanup_complete=True,
+        ),
+        dispatchable=False,
+    )
+    _transition_require(
+        current=IssueStatusName.REVIEW,
+        target=IssueStatusName.REWORK,
+        project_status=ProjectStatusName.IN_PROGRESS,
+        role_label="task:implementation",
+        delivery_kind="code",
+        proof=TransitionProof(
+            reviewed_state_changed=True,
+            evidence_ready=True,
+            handoff_ready=True,
+            attempt_cleanup_complete=True,
+        ),
         dispatchable=False,
     )
     with pytest.raises(LinearContractError, match="review handoff"):
@@ -760,6 +795,8 @@ def test_evidence_review_and_acceptance_keep_only_final_human_boundary() -> None
         verification_ready=True,
         evidence_ready=True,
         handoff_ready=True,
+        local_phase_baseline_readback_ready=True,
+        attempt_cleanup_complete=True,
     )
     _transition_require(
         current=IssueStatusName.IN_PROGRESS,
@@ -770,6 +807,16 @@ def test_evidence_review_and_acceptance_keep_only_final_human_boundary() -> None
         proof=ready,
         dispatchable=False,
     )
+    with pytest.raises(LinearContractError, match="local phase baseline"):
+        _transition_require(
+            current=IssueStatusName.IN_PROGRESS,
+            target=IssueStatusName.REVIEW,
+            project_status=ProjectStatusName.IN_PROGRESS,
+            role_label="task:acceptance",
+            delivery_kind="evidence",
+            proof=replace(ready, local_phase_baseline_readback_ready=False),
+            dispatchable=False,
+        )
     _transition_require(
         current=IssueStatusName.REVIEW,
         target=IssueStatusName.DONE,
@@ -781,6 +828,7 @@ def test_evidence_review_and_acceptance_keep_only_final_human_boundary() -> None
             reviewed_state_current=True,
             evidence_ready=True,
             handoff_ready=True,
+            attempt_cleanup_complete=True,
         ),
         dispatchable=False,
     )
@@ -804,6 +852,7 @@ def test_evidence_review_and_acceptance_keep_only_final_human_boundary() -> None
             reviewed_state_current=True,
             evidence_ready=True,
             handoff_ready=True,
+            attempt_cleanup_complete=True,
         ),
         dispatchable=False,
     )
@@ -813,7 +862,12 @@ def test_evidence_review_and_acceptance_keep_only_final_human_boundary() -> None
         project_status=ProjectStatusName.IN_PROGRESS,
         role_label="task:acceptance",
         delivery_kind="evidence",
-        proof=TransitionProof(human_decision=True, evidence_ready=True, handoff_ready=True),
+        proof=TransitionProof(
+            human_decision=True,
+            evidence_ready=True,
+            handoff_ready=True,
+            attempt_cleanup_complete=True,
+        ),
         dispatchable=False,
     )
 
@@ -827,7 +881,12 @@ def test_post_merge_review_completes_directly_or_returns_with_remediation() -> N
         project_status=ProjectStatusName.IN_PROGRESS,
         role_label="task:review",
         delivery_kind="evidence",
-        proof=TransitionProof(review_complete=True, evidence_ready=True, handoff_ready=True),
+        proof=TransitionProof(
+            review_complete=True,
+            evidence_ready=True,
+            handoff_ready=True,
+            attempt_cleanup_complete=True,
+        ),
         dispatchable=False,
     )
     _transition_require(
@@ -836,7 +895,12 @@ def test_post_merge_review_completes_directly_or_returns_with_remediation() -> N
         project_status=ProjectStatusName.IN_PROGRESS,
         role_label="task:review",
         delivery_kind="evidence",
-        proof=TransitionProof(remediation_blocker_ready=True, evidence_ready=True, handoff_ready=True),
+        proof=TransitionProof(
+            remediation_blocker_ready=True,
+            evidence_ready=True,
+            handoff_ready=True,
+            attempt_cleanup_complete=True,
+        ),
         dispatchable=False,
     )
     with pytest.raises(LinearContractError, match="review or acceptance"):
@@ -851,8 +915,8 @@ def test_post_merge_review_completes_directly_or_returns_with_remediation() -> N
         )
 
 
-def test_merge_returns_changed_reviewed_head_to_rework() -> None:
-    """Merge never fixes a PR whose independently reviewed head changed."""
+def test_merge_returns_changed_reviewed_identity_to_rework() -> None:
+    """Merge never fixes a PR whose independently reviewed base or head changed."""
 
     _transition_require(
         current=IssueStatusName.MERGING,
@@ -860,10 +924,15 @@ def test_merge_returns_changed_reviewed_head_to_rework() -> None:
         project_status=ProjectStatusName.IN_PROGRESS,
         role_label="task:implementation",
         delivery_kind="code",
-        proof=TransitionProof(reviewed_state_changed=True, evidence_ready=True, handoff_ready=True),
+        proof=TransitionProof(
+            reviewed_state_changed=True,
+            evidence_ready=True,
+            handoff_ready=True,
+            attempt_cleanup_complete=True,
+        ),
         dispatchable=False,
     )
-    with pytest.raises(LinearContractError, match="reviewed PR head changed"):
+    with pytest.raises(LinearContractError, match="reviewed PR identity changed"):
         _transition_require(
             current=IssueStatusName.MERGING,
             target=IssueStatusName.REWORK,
@@ -871,6 +940,97 @@ def test_merge_returns_changed_reviewed_head_to_rework() -> None:
             role_label="task:implementation",
             delivery_kind="code",
             proof=TransitionProof(),
+            dispatchable=False,
+        )
+
+
+@pytest.mark.parametrize(
+    ("current", "target", "role_label", "delivery_kind", "proof"),
+    (
+        (
+            IssueStatusName.REVIEW,
+            IssueStatusName.MERGING,
+            "task:implementation",
+            "code",
+            TransitionProof(
+                review_complete=True,
+                reviewed_state_current=True,
+                evidence_ready=True,
+                handoff_ready=True,
+            ),
+        ),
+        (
+            IssueStatusName.REVIEW,
+            IssueStatusName.REWORK,
+            "task:implementation",
+            "code",
+            TransitionProof(review_finding_ready=True, evidence_ready=True, handoff_ready=True),
+        ),
+        (
+            IssueStatusName.REVIEW,
+            IssueStatusName.REWORK,
+            "task:implementation",
+            "code",
+            TransitionProof(reviewed_state_changed=True, evidence_ready=True, handoff_ready=True),
+        ),
+        (
+            IssueStatusName.IN_PROGRESS,
+            IssueStatusName.REVIEW,
+            "task:acceptance",
+            "evidence",
+            TransitionProof(
+                result_ready=True,
+                verification_ready=True,
+                evidence_ready=True,
+                handoff_ready=True,
+                local_phase_baseline_readback_ready=True,
+            ),
+        ),
+        (
+            IssueStatusName.IN_PROGRESS,
+            IssueStatusName.TODO,
+            "task:acceptance",
+            "evidence",
+            TransitionProof(remediation_blocker_ready=True, evidence_ready=True, handoff_ready=True),
+        ),
+        (
+            IssueStatusName.MERGING,
+            IssueStatusName.DONE,
+            "task:implementation",
+            "code",
+            TransitionProof(
+                reviewed_state_current=True,
+                merge_complete=True,
+                evidence_ready=True,
+                handoff_ready=True,
+            ),
+        ),
+        (
+            IssueStatusName.MERGING,
+            IssueStatusName.REWORK,
+            "task:implementation",
+            "code",
+            TransitionProof(reviewed_state_changed=True, evidence_ready=True, handoff_ready=True),
+        ),
+    ),
+)
+def test_review_accept_merge_transitions_require_prior_attempt_cleanup(
+    current: IssueStatusName,
+    target: IssueStatusName,
+    role_label: str,
+    delivery_kind: str,
+    proof: TransitionProof,
+) -> None:
+    """Success, finding and stale transitions cannot precede nested cleanup."""
+
+    with pytest.raises(LinearContractError, match="nested attempt-resource cleanup"):
+        _transition_require(
+            current=current,
+            target=target,
+            project_status=ProjectStatusName.IN_PROGRESS,
+            role_label=role_label,
+            delivery_kind=delivery_kind,
+            proof=proof,
             dispatchable=False,
         )
 
@@ -883,6 +1043,7 @@ def test_merge_and_cleanup_completion_require_semantic_handoffs() -> None:
         merge_complete=True,
         evidence_ready=True,
         handoff_ready=True,
+        attempt_cleanup_complete=True,
     )
     _transition_require(
         current=IssueStatusName.MERGING,
@@ -904,7 +1065,12 @@ def test_merge_and_cleanup_completion_require_semantic_handoffs() -> None:
             dispatchable=False,
         )
 
-    cleanup_complete = TransitionProof(cleanup_complete=True, evidence_ready=True, handoff_ready=True)
+    cleanup_complete = TransitionProof(
+        cleanup_complete=True,
+        evidence_ready=True,
+        handoff_ready=True,
+        attempt_cleanup_complete=True,
+    )
     _transition_require(
         current=IssueStatusName.IN_PROGRESS,
         target=IssueStatusName.DONE,
@@ -952,9 +1118,19 @@ def test_transition_rejects_lifecycle_progress_after_project_stop() -> None:
         project_status=ProjectStatusName.CANCELED,
         role_label="task:implementation",
         delivery_kind="code",
-        proof=TransitionProof(human_decision=True),
+        proof=TransitionProof(human_decision=True, attempt_cleanup_complete=True),
         dispatchable=False,
     )
+    with pytest.raises(LinearContractError, match="nested attempt-resource cleanup"):
+        _transition_require(
+            current=IssueStatusName.IN_PROGRESS,
+            target=IssueStatusName.CANCELED,
+            project_status=ProjectStatusName.CANCELED,
+            role_label="task:implementation",
+            delivery_kind="code",
+            proof=TransitionProof(human_decision=True),
+            dispatchable=False,
+        )
     with pytest.raises(LinearContractError, match="completed Project"):
         _transition_require(
             current=IssueStatusName.IN_PROGRESS,
