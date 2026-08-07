@@ -116,6 +116,7 @@ def main(argv: list[str] | None = None) -> int:
             after = boundary.configure_for_protected_ref_cas(
                 repository=repository,
                 base_branch=args.base_branch,
+                approved_snapshot=before,
             )
         else:
             after = before

@@ -144,7 +144,6 @@ class GitHubAtomicMergeBoundary:
             )
         )
         authentication.credential_validate(principal, repository)
-        authentication.git_http_proactive_authentication_require()
         network_config_argument_list = _network_config_argument_list(
             principal=principal,
             repository=repository,
@@ -155,7 +154,8 @@ class GitHubAtomicMergeBoundary:
         private_head_ref = "refs/provider/reviewed-head"
         policy_boundary = GitHubRepositoryMergePolicyBoundary(self._runner)
         with self._private_repository() as private_git_dir:
-            self._private_git_checked(
+            self._private_authenticated_git_checked(
+                authentication,
                 private_git_dir,
                 (
                     "fetch",
@@ -218,7 +218,8 @@ class GitHubAtomicMergeBoundary:
             )
             if policy_before_push != policy_before_construction:
                 raise GitHubContractError("GitHub repository merge policy changed during merge construction")
-            self._private_git_checked(
+            self._private_authenticated_git_checked(
+                authentication,
                 private_git_dir,
                 (
                     "push",
@@ -235,7 +236,8 @@ class GitHubAtomicMergeBoundary:
                 label="Atomic reviewed Git ref transaction",
                 config_argument_list=network_config_argument_list,
             )
-            remote_ref_process = self._private_git_checked(
+            remote_ref_process = self._private_authenticated_git_checked(
+                authentication,
                 private_git_dir,
                 ("ls-remote", "--refs", destination.explicit_url, base_ref, head_ref),
                 label="Atomic reviewed Git ref readback",
@@ -277,7 +279,6 @@ class GitHubAtomicMergeBoundary:
             node_id=snapshot.merged_by_node_id,
         )
         authentication.credential_validate(principal, repository)
-        authentication.git_http_proactive_authentication_require()
         network_config_argument_list = _network_config_argument_list(
             principal=principal,
             repository=repository,
@@ -286,7 +287,8 @@ class GitHubAtomicMergeBoundary:
         head_ref = f"refs/heads/{snapshot.head_branch}"
         private_merge_ref = "refs/provider/merged-base"
         with self._private_repository() as private_git_dir:
-            self._private_git_checked(
+            self._private_authenticated_git_checked(
+                authentication,
                 private_git_dir,
                 (
                     "fetch",
@@ -323,7 +325,8 @@ class GitHubAtomicMergeBoundary:
                 expected_tree=merge_tree,
                 expected_parent_list=[reviewed_base_commit, reviewed_head_commit],
             )
-            remote_ref_process = self._private_git_checked(
+            remote_ref_process = self._private_authenticated_git_checked(
+                authentication,
                 private_git_dir,
                 ("ls-remote", "--refs", destination.explicit_url, head_ref),
                 label="Merged Git ref readback",
@@ -466,6 +469,36 @@ class GitHubAtomicMergeBoundary:
         )
         _private_repository_state_require(private_git_dir)
         return completed_process
+
+    def _private_authenticated_git_checked(
+        self,
+        authentication: GitHubAuthenticationBoundary,
+        private_git_dir: Path,
+        argument_list: tuple[str, ...],
+        *,
+        label: str,
+        config_argument_list: tuple[str, ...],
+    ) -> subprocess.CompletedProcess[str]:
+        """Probe first-request authentication and run exactly one GitHub Git command.
+
+        Args:
+            authentication: Principal-bound authentication owner.
+            private_git_dir: Closed provider repository.
+            argument_list: Exact Git command arguments.
+            label: Safe failure label.
+            config_argument_list: Principal-bound network configuration.
+
+        Returns:
+            Successful Git command result.
+        """
+
+        authentication.git_http_proactive_authentication_require()
+        return self._private_git_checked(
+            private_git_dir,
+            argument_list,
+            label=label,
+            config_argument_list=config_argument_list,
+        )
 
     def _private_git_checked(
         self,

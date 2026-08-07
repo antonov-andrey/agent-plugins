@@ -22,8 +22,9 @@ LIBRARY_ROOT = PLUGIN_ROOT / "lib"
 if str(LIBRARY_ROOT) not in sys.path:
     sys.path.insert(0, str(LIBRARY_ROOT))
 
-from git_host.branch_protection import GitHubBranchProtectionBoundary
+from git_host.atomic_merge import GitHubAtomicMergeBoundary
 from git_host.authentication import GitHubPrincipal, git_credential_config_argument_list_get
+from git_host.branch_protection import GitHubBranchProtectionBoundary
 from git_host.command import command_closed_run, command_run
 from git_host.model import GitHubContractError, RepositoryIdentity
 from git_host.pull_request import GitHubPullRequestBoundary
@@ -579,8 +580,11 @@ class _GhRunner:
         self.changed_execution_login: str | None = None
         self.changed_execution_user_id: int | None = None
         self.changed_execution_node_id: str | None = None
+        self.changed_execution_permission: str | None = None
         self.execution_identity_change_after_read_count = 1
         self.execution_identity_read_count = 0
+        self.execution_permission_change_after_read_count = 1
+        self.execution_permission_read_count = 0
         self.enforce_admins = True
         self.allow_force_pushes = False
         self.allow_deletions = False
@@ -611,6 +615,7 @@ class _GhRunner:
         self.advance_head_on_push = False
         self.operation_mutation_count = 0
         self.http_proactive_authentication_supported = True
+        self.http_proactive_authentication_failure_probe_number: int | None = None
         self.http_proactive_authentication_probe_count = 0
         self.fetch_url_list = ["git@github.com:antonov-andrey/example.git"]
         self.push_url_list = ["git@github.com:antonov-andrey/example.git"]
@@ -774,16 +779,27 @@ class _GhRunner:
                 payload={"message": "Branch not protected", "status": "404"},
             )
         if argument_list[1] == "api" and "/collaborators/" in argument_list[-1]:
+            self.execution_permission_read_count += 1
+            identity_changed = (
+                self.execution_identity_read_count > self.execution_identity_change_after_read_count
+                and self.changed_execution_login is not None
+            )
+            permission_changed = (
+                self.execution_permission_read_count > self.execution_permission_change_after_read_count
+                and self.changed_execution_permission is not None
+            )
             return subprocess.CompletedProcess(
                 argument_list,
                 0,
                 json.dumps(
                     {
-                        "permission": self.execution_permission,
+                        "permission": (
+                            self.changed_execution_permission if permission_changed else self.execution_permission
+                        ),
                         "user": {
-                            "login": self.execution_login,
-                            "id": self.execution_user_id,
-                            "node_id": self.execution_node_id,
+                            "login": self.changed_execution_login if identity_changed else self.execution_login,
+                            "id": self.changed_execution_user_id if identity_changed else self.execution_user_id,
+                            "node_id": self.changed_execution_node_id if identity_changed else self.execution_node_id,
                         },
                     }
                 ),
@@ -1014,7 +1030,10 @@ class _GhRunner:
             parsed = urlsplit(probe_url)
             connection = HTTPConnection(parsed.hostname, parsed.port)
             header_by_name_map = {}
-            if self.http_proactive_authentication_supported:
+            if self.http_proactive_authentication_supported and (
+                self.http_proactive_authentication_failure_probe_number
+                != self.http_proactive_authentication_probe_count
+            ):
                 helper_argument = next(
                     argument for argument in argument_list if argument.startswith("credential.helper=!f()")
                 )
@@ -1934,17 +1953,24 @@ def test_github_merge_binds_exact_reviewed_base_head_and_typed_zero_required_che
     assert not any("ghp_" in argument for item in runner.command_list for argument in item)
     assert not any(item[1:3] == ["pr", "merge"] for item in runner.command_list)
     assert runner.operation_mutation_count == 1
-    assert runner.http_proactive_authentication_probe_count == 2
-    probe_index_list = [
+    assert runner.http_proactive_authentication_probe_count == 5
+    probe_index_set = {
         index
         for index, command in enumerate(runner.command_list)
         if any("/linear-agent-proactive-authentication-probe.git" in argument for argument in command)
+    }
+    github_network_index_list = [
+        index
+        for index, command in enumerate(runner.command_list)
+        if "https://github.com/antonov-andrey/example.git" in command
+        and any(verb in command for verb in ("fetch", "push", "ls-remote"))
     ]
-    fetch_index_list = [index for index, command in enumerate(runner.command_list) if "fetch" in command]
-    assert len(fetch_index_list) == 2
-    assert all(
-        probe_index < fetch_index for probe_index, fetch_index in zip(probe_index_list, fetch_index_list, strict=True)
-    )
+    github_network_verb_list = [
+        next(verb for verb in ("fetch", "push", "ls-remote") if verb in runner.command_list[index])
+        for index in github_network_index_list
+    ]
+    assert github_network_verb_list == ["fetch", "push", "ls-remote", "fetch", "ls-remote"]
+    assert all(index > 0 and index - 1 in probe_index_set for index in github_network_index_list)
     push_environment = runner.environment_list[runner.command_list.index(push_command)]
     assert push_environment["HOME"] == "/home/andrey"
     assert push_environment["GIT_CONFIG_GLOBAL"] == "/dev/null"
@@ -1985,6 +2011,91 @@ def test_atomic_merge_fails_before_remote_ref_access_when_git_cannot_prove_proac
     assert not any("fetch" in command or "push" in command for command in runner.command_list)
     assert not any("https://github.com/antonov-andrey/example.git" in command for command in runner.command_list)
     assert runner.remote_commit_by_ref_map == original_ref_map
+    assert runner.operation_mutation_count == 0
+
+
+@pytest.mark.parametrize("failure_probe_number", (1, 2, 3))
+def test_atomic_merge_probes_each_authenticated_git_command_and_stops_at_exact_failed_boundary(
+    tmp_path: Path,
+    failure_probe_number: int,
+) -> None:
+    """Fetch, push and ref readback each require their own immediately preceding probe."""
+
+    runner = _GhRunner()
+    snapshot = GitHubPullRequestBoundary(runner).inspect(
+        repository=RepositoryIdentity("antonov-andrey/example"),
+        number=17,
+    )
+    runner.command_list.clear()
+    runner.environment_list.clear()
+    runner.http_proactive_authentication_failure_probe_number = failure_probe_number
+    runner.http_proactive_authentication_probe_count = 0
+
+    with pytest.raises(GitHubContractError, match="cannot prove proactive invocation-helper authentication"):
+        GitHubAtomicMergeBoundary(runner).merge(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            repository_path=tmp_path,
+            snapshot=snapshot,
+            execution_login="octocat",
+            execution_user_id=7,
+            execution_node_id="U_octocat",
+            merge_method="merge",
+        )
+
+    github_network_verb_list = [
+        next(verb for verb in ("fetch", "push", "ls-remote") if verb in command)
+        for command in runner.command_list
+        if "https://github.com/antonov-andrey/example.git" in command
+        and any(verb in command for verb in ("fetch", "push", "ls-remote"))
+    ]
+    assert (
+        github_network_verb_list
+        == {
+            1: [],
+            2: ["fetch"],
+            3: ["fetch", "push"],
+        }[failure_probe_number]
+    )
+    assert runner.http_proactive_authentication_probe_count == failure_probe_number
+    assert runner.operation_mutation_count == (1 if failure_probe_number == 3 else 0)
+
+
+@pytest.mark.parametrize("failure_probe_number", (1, 2))
+def test_atomic_merge_recovery_probes_each_authenticated_git_command_and_stops_at_failed_boundary(
+    tmp_path: Path,
+    failure_probe_number: int,
+) -> None:
+    """Recovery fetch and deleted-ref readback each require a fresh adjacent probe."""
+
+    runner = _GhRunner()
+    runner.state = "MERGED"
+    runner.remote_commit_by_ref_map = {"refs/heads/main": COMMIT_TWO}
+    snapshot = GitHubPullRequestBoundary(runner).inspect(
+        repository=RepositoryIdentity("antonov-andrey/example"),
+        number=17,
+    )
+    runner.command_list.clear()
+    runner.environment_list.clear()
+    runner.http_proactive_authentication_failure_probe_number = failure_probe_number
+    runner.http_proactive_authentication_probe_count = 0
+
+    with pytest.raises(GitHubContractError, match="cannot prove proactive invocation-helper authentication"):
+        GitHubAtomicMergeBoundary(runner).merged_result_require(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            repository_path=tmp_path,
+            snapshot=snapshot,
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+        )
+
+    github_network_verb_list = [
+        next(verb for verb in ("fetch", "ls-remote") if verb in command)
+        for command in runner.command_list
+        if "https://github.com/antonov-andrey/example.git" in command
+        and any(verb in command for verb in ("fetch", "ls-remote"))
+    ]
+    assert github_network_verb_list == {1: [], 2: ["fetch"]}[failure_probe_number]
+    assert runner.http_proactive_authentication_probe_count == failure_probe_number
     assert runner.operation_mutation_count == 0
 
 
@@ -2782,9 +2893,15 @@ def test_exact_configuration_path_creates_only_absent_minimal_cas_protection() -
     """Approved configuration can close an absence without adding a human gate."""
 
     runner = _GhRunner(protection_kind="none", required_check_name_list=[])
-    protection = GitHubBranchProtectionBoundary(runner).configure_for_protected_ref_cas(
+    boundary = GitHubBranchProtectionBoundary(runner)
+    approved_snapshot = boundary.inspect(
         repository=RepositoryIdentity("antonov-andrey/example"),
         base_branch="main",
+    )
+    protection = boundary.configure_for_protected_ref_cas(
+        repository=RepositoryIdentity("antonov-andrey/example"),
+        base_branch="main",
+        approved_snapshot=approved_snapshot,
     )
 
     protection.merge_mechanism_require("merge")
@@ -2795,6 +2912,75 @@ def test_exact_configuration_path_creates_only_absent_minimal_cas_protection() -
     assert "enforce_admins=true" in configure_command
     assert "allow_force_pushes=false" in configure_command
     assert "allow_deletions=false" in configure_command
+
+
+def test_exact_configuration_rejects_compatible_second_snapshot_drift_before_mutation() -> None:
+    """The second pre-mutation snapshot must equal the approved snapshot."""
+
+    runner = _GhRunner(protection_kind="none", required_check_name_list=[])
+    boundary = GitHubBranchProtectionBoundary(runner)
+    approved_snapshot = boundary.inspect(
+        repository=RepositoryIdentity("antonov-andrey/example"),
+        base_branch="main",
+    )
+    runner.changed_execution_permission = "maintain"
+
+    with pytest.raises(GitHubContractError, match="differs from the approved snapshot"):
+        boundary.configure_for_protected_ref_cas(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            base_branch="main",
+            approved_snapshot=approved_snapshot,
+        )
+
+    assert not any(item[1:4] == ["api", "--method", "PUT"] for item in runner.command_list)
+
+
+def test_exact_configuration_rejects_changed_second_snapshot_principal_before_mutation() -> None:
+    """A compatible replacement principal cannot execute the approved transaction."""
+
+    runner = _GhRunner(protection_kind="none", required_check_name_list=[])
+    boundary = GitHubBranchProtectionBoundary(runner)
+    approved_snapshot = boundary.inspect(
+        repository=RepositoryIdentity("antonov-andrey/example"),
+        base_branch="main",
+    )
+    runner.changed_execution_login = "mallory"
+    runner.changed_execution_user_id = 8
+    runner.changed_execution_node_id = "U_mallory"
+
+    with pytest.raises(GitHubContractError, match="differs from the approved snapshot"):
+        boundary.configure_for_protected_ref_cas(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            base_branch="main",
+            approved_snapshot=approved_snapshot,
+        )
+
+    assert not any(item[1:4] == ["api", "--method", "PUT"] for item in runner.command_list)
+
+
+def test_exact_configuration_final_readback_requires_the_approved_principal() -> None:
+    """Final configured state cannot be certified through another compatible principal."""
+
+    runner = _GhRunner(protection_kind="none", required_check_name_list=[])
+    boundary = GitHubBranchProtectionBoundary(runner)
+    approved_snapshot = boundary.inspect(
+        repository=RepositoryIdentity("antonov-andrey/example"),
+        base_branch="main",
+    )
+    runner.changed_execution_login = "mallory"
+    runner.changed_execution_user_id = 8
+    runner.changed_execution_node_id = "U_mallory"
+    runner.execution_identity_change_after_read_count = 2
+
+    with pytest.raises(GitHubContractError, match="Final.*approved GitHub identity"):
+        boundary.configure_for_protected_ref_cas(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            base_branch="main",
+            approved_snapshot=approved_snapshot,
+        )
+
+    configure_command_list = [item for item in runner.command_list if item[1:4] == ["api", "--method", "PUT"]]
+    assert len(configure_command_list) == 1
 
 
 def test_exact_configuration_plan_rejects_absent_protection_without_write_authority() -> None:

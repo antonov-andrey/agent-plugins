@@ -253,8 +253,9 @@ class GitHubBranchProtectionBoundary:
         *,
         repository: RepositoryIdentity,
         base_branch: str,
+        approved_snapshot: BranchProtectionSnapshot,
     ) -> BranchProtectionSnapshot:
-        """Create minimal classic protection only when protection is absent.
+        """Create minimal classic protection from one exact approved snapshot.
 
         Existing unsafe protection is a conflict and is never weakened or
         overwritten by this exact configuration path.
@@ -262,15 +263,22 @@ class GitHubBranchProtectionBoundary:
         Args:
             repository: Exact GitHub repository.
             base_branch: Exact protected base branch.
+            approved_snapshot: Exact absent-protection snapshot approved for mutation.
 
         Returns:
             Fresh effective protection readback.
         """
 
+        if not isinstance(approved_snapshot, BranchProtectionSnapshot):
+            raise GitHubContractError("Approved branch-protection snapshot has another shape")
+        if approved_snapshot.repository != repository or approved_snapshot.base_branch != base_branch:
+            raise GitHubContractError("Approved branch-protection snapshot names another destination")
+        approved_snapshot.mutation_authority_require()
+        if approved_snapshot.protection_source_list:
+            raise GitHubContractError("Approved branch-protection mutation requires exact protection absence")
         before = self.inspect(repository=repository, base_branch=base_branch)
-        if before.protection_source_list:
-            before.merge_mechanism_require("merge")
-            return before
+        if before != approved_snapshot:
+            raise GitHubContractError("Current branch-protection snapshot differs from the approved snapshot")
         encoded_branch = quote(base_branch, safe="")
         completed_process = command_closed_run(
             self._runner,
@@ -306,6 +314,12 @@ class GitHubBranchProtectionBoundary:
         )
         _completed_json_require(completed_process, label="GitHub branch-protection configuration")
         after = self.inspect(repository=repository, base_branch=base_branch)
+        if (
+            after.execution_login != approved_snapshot.execution_login
+            or after.execution_user_id != approved_snapshot.execution_user_id
+            or after.execution_node_id != approved_snapshot.execution_node_id
+        ):
+            raise GitHubContractError("Final branch-protection readback differs from the approved GitHub identity")
         after.merge_mechanism_require("merge")
         return after
 
