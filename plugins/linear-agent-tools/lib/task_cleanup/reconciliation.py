@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from git_host.model import RepositoryIdentity
+from git_host.model import PullRequestSnapshot, RepositoryIdentity
 from git_host.pull_request import GitHubPullRequestBoundary
 from task_cleanup.model import CleanupRequest, PullRequestTarget, TaskCleanupError, cleanup_origin_identity_get
 from task_cleanup.resource import ResourceCleaner
@@ -141,8 +141,8 @@ class TaskCleanupReconciler:
         for reference in state.request.pull_request_list:
             before = self._github.inspect(repository=reference.repository, number=reference.number)
             target = state.pull_request_target_get(reference.repository)
-            before.integration_identity_require(state.request.issue_identifier)
             before.target_require(base_branch=target.base_branch, head_branch=target.head_branch)
+            before.task_branch_identity_require(state.request.issue_identifier)
             if canceled:
                 self._github.close_if_open(
                     repository=reference.repository,
@@ -282,22 +282,39 @@ class TaskCleanupReconciler:
         for reference in state.request.pull_request_list:
             if reference.repository not in repository_by_github_identity_map:
                 raise TaskCleanupError("Linked pull request is outside the participating GitHub repository set")
+        canceled = (
+            state.request.authority.issue_status == "Canceled" or state.request.authority.project_status == "Canceled"
+        )
         for identity, repository in repository_by_github_identity_map.items():
-            expected_number_list = self._github.matching_number_list(
+            matching_number_list = self._github.matching_number_list(
                 repository=identity,
                 base_branch=repository.request.base_branch,
                 head_branch=f"linear/{state.request.issue_identifier.lower()}",
             )
-            if len(expected_number_list) > 1:
-                raise TaskCleanupError("More than one pull request exists for the exact task branch and base")
-            provided = reference_by_repository_identity_map.get(identity)
-            provided_number_list = [] if provided is None else [provided.number]
-            if expected_number_list != provided_number_list:
-                raise TaskCleanupError("Cleanup request omits or substitutes the exact task pull request")
-            if provided is not None:
-                snapshot = self._github.inspect(repository=provided.repository, number=provided.number)
-                snapshot.integration_identity_require(state.request.issue_identifier)
+            active_snapshot_list: list[PullRequestSnapshot] = []
+            for number in matching_number_list:
+                snapshot = self._github.inspect(repository=identity, number=number)
                 snapshot.target_require(
                     base_branch=repository.request.base_branch,
                     head_branch=f"linear/{state.request.issue_identifier.lower()}",
                 )
+                snapshot.task_branch_identity_require(state.request.issue_identifier)
+                if snapshot.state != "CLOSED":
+                    active_snapshot_list.append(snapshot)
+            if len(active_snapshot_list) > 1:
+                raise TaskCleanupError("More than one active pull request exists for the exact task branch and base")
+            if active_snapshot_list:
+                active_snapshot = active_snapshot_list[0]
+                if active_snapshot.state == "OPEN":
+                    active_snapshot.integration_identity_require(state.request.issue_identifier)
+                expected_number_list = [active_snapshot.number]
+            elif matching_number_list and canceled:
+                expected_number_list = [max(matching_number_list)]
+            elif matching_number_list:
+                raise TaskCleanupError("Closed unmerged pull request is never successful merge evidence")
+            else:
+                expected_number_list = []
+            provided = reference_by_repository_identity_map.get(identity)
+            provided_number_list = [] if provided is None else [provided.number]
+            if expected_number_list != provided_number_list:
+                raise TaskCleanupError("Cleanup request omits or substitutes the exact task pull request")

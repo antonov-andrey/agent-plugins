@@ -430,7 +430,7 @@
         },
         {
           "id": "atomic-reviewed-mutation",
-          "text": "Every effective merge-queue rule is rejected as a deferred later-base mutation. Declared merge requires an exact zero required-check definition set and updates base plus deletes head in one server-atomic protected-ref transaction with explicit reviewed old-OID leases for both refs; either race mutates neither ref, then mandatory nested cleanup, a reread rework-required handoff and Rework occur. Squash or rebase instead requires exact head matching plus strict up-to-date no-bypass protection with at least one required check; generic exit 1, empty or malformed provider output is failure."
+          "text": "Every effective merge-queue rule is rejected as a deferred later-base mutation. Declared merge requires an exact zero required-check definition set, prepares the exact two-parent merge commit, and uses a protected base-only CAS leased to the reviewed old base OID; the PR head is never updated or deleted and immediate ref readback must keep it at the reviewed head. A rejected base lease or any reviewed base or head drift mutates no unreviewed ref, then mandatory nested cleanup, a reread rework-required handoff and Rework occur. Success additionally requires GitHub MERGED state plus immutable exact tree, ordered-parent, terminal-principal and retained-head proof. Only terminal issue cleanup may delete the retained task branch after that proof and transition. Declared squash or rebase fails closed until an equally exact immutable proof exists; generic exit 1, empty or malformed provider output is failure."
         },
         {
           "id": "ordered-recovery",

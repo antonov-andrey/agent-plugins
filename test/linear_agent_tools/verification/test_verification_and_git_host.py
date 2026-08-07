@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+from types import ModuleType
 from urllib.parse import urlsplit
 
 import pytest
@@ -27,8 +28,9 @@ from git_host.atomic_merge import GitHubAtomicMergeBoundary
 from git_host.authentication import GitHubPrincipal, git_credential_config_argument_list_get
 from git_host.branch_protection import GitHubBranchProtectionBoundary
 from git_host.command import command_closed_run, command_run
-from git_host.model import GitHubContractError, RepositoryIdentity
+from git_host.model import BranchProtectionSnapshot, GitHubContractError, RepositoryIdentity
 from git_host.pull_request import GitHubPullRequestBoundary
+from git_host.repository_policy import GitHubRepositoryMergePolicy, GitHubRepositoryMergePolicyBoundary
 from git_host.transport_runtime import GitTransportRuntime
 from verification._validation import EvidenceContractError, evidence_url_validate, instant_parse
 from verification.baseline import LocalPhaseBaseline, TaskWorkspaceBaseline
@@ -613,6 +615,9 @@ class _GhRunner:
         self.state = "OPEN"
         self.defer_merge_readback = False
         self.pr_exists = False
+        self.historical_closed_number_list: list[int] = []
+        self.pull_request_state_by_number_map: dict[int, str] = {}
+        self.pull_request_title_by_number_map: dict[int, str] = {}
         self.advance_base_on_push = False
         self.advance_head_on_push = False
         self.operation_mutation_count = 0
@@ -645,9 +650,16 @@ class _GhRunner:
         self.credential_user_id = 7
         self.credential_node_id = "U_octocat"
         self.repository_policy_read_count = 0
+        self.repository_policy_read_returncode = 0
+        self.repository_policy_read_stdout_override: str | None = None
         self.repository_policy_payload_override: object | None = None
+        self.repository_policy_payload_by_read_count_map: dict[int, object] = {}
         self.repository_policy_field_by_name_map: dict[str, object] = {}
         self.repository_policy_drift_field_by_name_map: dict[str, object] = {}
+        self.repository_policy_mutation_count = 0
+        self.repository_policy_mutation_returncode = 0
+        self.repository_policy_mutation_stdout_override: str | None = None
+        self.repository_policy_mutation_payload_override: object | None = None
         self.remote_commit_by_ref_map = {
             f"refs/heads/{base_branch}": base_commit,
             "refs/heads/linear/and-17": head_commit,
@@ -711,15 +723,54 @@ class _GhRunner:
                 "node_id": self.changed_execution_node_id if changed else self.execution_node_id,
             }
             return subprocess.CompletedProcess(argument_list, 0, json.dumps(payload), "")
+        if argument_list[1:] == [
+            "api",
+            "--hostname",
+            "github.com",
+            "--method",
+            "PATCH",
+            "repos/antonov-andrey/example",
+            "-F",
+            "delete_branch_on_merge=false",
+        ]:
+            self.repository_policy_mutation_count += 1
+            if self.repository_policy_mutation_returncode == 0:
+                self.repository_policy_field_by_name_map["delete_branch_on_merge"] = False
+            payload = (
+                self.repository_policy_mutation_payload_override
+                if self.repository_policy_mutation_payload_override is not None
+                else self._repository_policy_payload_get()
+            )
+            return subprocess.CompletedProcess(
+                argument_list,
+                self.repository_policy_mutation_returncode,
+                (
+                    self.repository_policy_mutation_stdout_override
+                    if self.repository_policy_mutation_stdout_override is not None
+                    else json.dumps(payload)
+                ),
+                "",
+            )
         if argument_list[1:5] == ["api", "--hostname", "github.com", "repos/antonov-andrey/example"]:
             self.repository_policy_read_count += 1
-            if self.repository_policy_payload_override is not None:
+            if self.repository_policy_read_count in self.repository_policy_payload_by_read_count_map:
+                payload = self.repository_policy_payload_by_read_count_map[self.repository_policy_read_count]
+            elif self.repository_policy_payload_override is not None:
                 payload = self.repository_policy_payload_override
             else:
                 payload = self._repository_policy_payload_get()
                 if self.repository_policy_read_count > 1:
                     payload.update(self.repository_policy_drift_field_by_name_map)
-            return subprocess.CompletedProcess(argument_list, 0, json.dumps(payload), "")
+            return subprocess.CompletedProcess(
+                argument_list,
+                self.repository_policy_read_returncode,
+                (
+                    self.repository_policy_read_stdout_override
+                    if self.repository_policy_read_stdout_override is not None
+                    else json.dumps(payload)
+                ),
+                "",
+            )
         if (
             argument_list[1:4] == ["api", "--hostname", "github.com"]
             and argument_list[4] == "repos/antonov-andrey/example/pulls/17"
@@ -870,19 +921,19 @@ class _GhRunner:
                 "",
             )
         if argument_list[1:3] == ["api", "--method"] and any("/pulls" in item for item in argument_list):
-            payload = (
+            number_list = [*self.historical_closed_number_list, *self.pull_request_state_by_number_map]
+            if self.pr_exists:
+                number_list.append(17)
+            payload = [
                 [
-                    [
-                        {
-                            "number": 17,
-                            "base": {"ref": self.base_branch},
-                            "head": {"ref": "linear/and-17"},
-                        }
-                    ]
+                    {
+                        "number": number,
+                        "base": {"ref": self.base_branch},
+                        "head": {"ref": "linear/and-17"},
+                    }
+                    for number in sorted(set(number_list))
                 ]
-                if self.pr_exists
-                else [[]]
-            )
+            ]
             return subprocess.CompletedProcess(argument_list, 0, json.dumps(payload), "")
         if argument_list[1:3] == ["pr", "create"]:
             self.pr_exists = True
@@ -910,11 +961,16 @@ class _GhRunner:
                     ),
                     "",
                 )
+            number = int(argument_list[3])
+            state = self.pull_request_state_by_number_map.get(
+                number,
+                "CLOSED" if number in self.historical_closed_number_list else self.state,
+            )
             payload = {
-                "number": 17,
-                "url": PULL_REQUEST_URL,
-                "title": self.pr_title,
-                "state": self.state,
+                "number": number,
+                "url": f"https://github.com/antonov-andrey/example/pull/{number}",
+                "title": self.pull_request_title_by_number_map.get(number, self.pr_title),
+                "state": state,
                 "isDraft": False,
                 "autoMergeRequest": self.auto_merge_request,
                 "baseRefName": self.base_branch,
@@ -929,8 +985,8 @@ class _GhRunner:
                 "headRepositoryOwner": {"id": "U_octocat", "name": "Octocat", "login": "octocat"},
                 "isCrossRepository": self.cross_repository,
                 "mergeStateStatus": "CLEAN",
-                "mergedAt": "2026-08-04T12:30:00Z" if self.state == "MERGED" else None,
-                "mergeCommit": {"oid": self.merge_commit} if self.state == "MERGED" else None,
+                "mergedAt": "2026-08-04T12:30:00Z" if state == "MERGED" else None,
+                "mergeCommit": {"oid": self.merge_commit} if state == "MERGED" else None,
                 "mergedBy": (
                     {
                         "id": self.merged_by_node_id,
@@ -938,7 +994,7 @@ class _GhRunner:
                         "name": "Octocat",
                         "is_bot": False,
                     }
-                    if self.state == "MERGED"
+                    if state == "MERGED"
                     else None
                 ),
             }
@@ -1131,9 +1187,7 @@ class _GhRunner:
                 return subprocess.CompletedProcess(argument_list, 1, "", "stale info")
             assert "--atomic" in argument_list
             base_ref = f"refs/heads/{self.base_branch}"
-            head_ref = "refs/heads/linear/and-17"
             self.remote_commit_by_ref_map[base_ref] = self.merge_commit
-            del self.remote_commit_by_ref_map[head_ref]
             self.operation_mutation_count += 1
             if not self.defer_merge_readback:
                 self.state = "MERGED"
@@ -1164,6 +1218,99 @@ def _included_response(
     reason = "OK" if status == 200 else "Not Found"
     stdout = f"HTTP/2.0 {status} {reason}\r\nContent-Type: application/json\r\n\r\n{json.dumps(payload)}"
     return subprocess.CompletedProcess(argument_list, 0 if status == 200 else 1, stdout, "")
+
+
+def _workflow_configuration_module_get() -> ModuleType:
+    """Load the workflow-configure GitHub transaction script."""
+
+    script = PLUGIN_ROOT / "skills" / "workflow-configure" / "scripts" / "branch_protection.py"
+    spec = importlib.util.spec_from_file_location("linear_workflow_github_configuration", script)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _configuration_snapshot_get(
+    runner: _GhRunner,
+) -> tuple[BranchProtectionSnapshot, GitHubRepositoryMergePolicy]:
+    """Read one matching protection and correctable repository-policy pair."""
+
+    protection = GitHubBranchProtectionBoundary(runner).inspect(
+        repository=RepositoryIdentity("antonov-andrey/example"),
+        base_branch="main",
+    )
+    principal = GitHubPrincipal(
+        login=protection.execution_login,
+        user_id=protection.execution_user_id,
+        node_id=protection.execution_node_id,
+    )
+    repository_policy = GitHubRepositoryMergePolicyBoundary(runner).configuration_inspect(
+        repository=RepositoryIdentity("antonov-andrey/example"),
+        principal=principal,
+        merge_method="merge",
+    )
+    return protection, repository_policy
+
+
+def _workflow_configuration_module_bind(
+    runner: _GhRunner,
+    monkeypatch: pytest.MonkeyPatch,
+) -> ModuleType:
+    """Load workflow-configure with both GitHub boundaries on one provider."""
+
+    module = _workflow_configuration_module_get()
+    monkeypatch.setattr(module, "GitHubBranchProtectionBoundary", lambda: GitHubBranchProtectionBoundary(runner))
+    monkeypatch.setattr(
+        module,
+        "GitHubRepositoryMergePolicyBoundary",
+        lambda: GitHubRepositoryMergePolicyBoundary(runner),
+    )
+    return module
+
+
+def _workflow_configuration_plan_write(
+    *,
+    module: ModuleType,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> tuple[dict[str, object], Path]:
+    """Run and persist the exact displayed plan for the apply transaction."""
+
+    assert (
+        module.main(
+            [
+                "plan",
+                "--repository",
+                "antonov-andrey/example",
+                "--base-branch",
+                "main",
+                "--merge-method",
+                "merge",
+            ]
+        )
+        == 0
+    )
+    plan = json.loads(capsys.readouterr().out)
+    plan_path = tmp_path / "github-configuration-plan.json"
+    plan_path.write_text(json.dumps(plan), encoding="utf-8")
+    return plan, plan_path
+
+
+def _workflow_configuration_apply_argument_list(plan_path: Path) -> list[str]:
+    """Return exact workflow-configure apply arguments for one approved plan."""
+
+    return [
+        "apply",
+        "--repository",
+        "antonov-andrey/example",
+        "--base-branch",
+        "main",
+        "--merge-method",
+        "merge",
+        "--approved-plan-input",
+        str(plan_path),
+    ]
 
 
 @dataclass(frozen=True, slots=True)
@@ -1836,7 +1983,7 @@ def test_real_git_private_repository_constructs_and_recovers_exact_head_tree(tmp
     assert merged.state == "MERGED"
     assert f"tree {history.head_tree}\n" in commit_payload
     assert f"parent {history.base_commit}\nparent {history.head_commit}\n" in commit_payload
-    assert ref_output == "refs/heads/main"
+    assert ref_output.splitlines() == ["refs/heads/linear/and-17", "refs/heads/main"]
     assert runner.git_push_count == 1
     assert runner.provider.repository_policy_read_count == 2
     assert not any("merge-tree" in command for command in runner.git_command_list)
@@ -1941,7 +2088,7 @@ def test_merge_cli_requires_reviewed_base_and_head_identity() -> None:
 
 
 def test_github_merge_binds_exact_reviewed_base_head_and_typed_zero_required_checks(tmp_path: Path) -> None:
-    """The protected transaction leases both refs after a typed zero-check read."""
+    """The protected transaction CASes only base and retains the exact open head."""
 
     runner = _GhRunner()
     merged = GitHubPullRequestBoundary(runner).merge(
@@ -1961,9 +2108,10 @@ def test_github_merge_binds_exact_reviewed_base_head_and_typed_zero_required_che
     push_command = next(item for item in runner.command_list if "push" in item)
     assert "--atomic" in push_command
     assert f"--force-with-lease=refs/heads/main:{COMMIT_BASE}" in push_command
-    assert f"--force-with-lease=refs/heads/linear/and-17:{COMMIT_ONE}" in push_command
+    assert not any(argument.startswith("--force-with-lease=refs/heads/linear/and-17:") for argument in push_command)
     assert f"{COMMIT_TWO}:refs/heads/main" in push_command
-    assert ":refs/heads/linear/and-17" in push_command
+    assert ":refs/heads/linear/and-17" not in push_command
+    assert runner.remote_commit_by_ref_map["refs/heads/linear/and-17"] == COMMIT_ONE
     assert "https://github.com/antonov-andrey/example.git" in push_command
     assert "origin" not in push_command
     assert "credential.helper=" in push_command
@@ -2116,11 +2264,14 @@ def test_atomic_merge_recovery_probes_each_authenticated_git_command_and_stops_a
     tmp_path: Path,
     failure_probe_number: int,
 ) -> None:
-    """Recovery fetch and deleted-ref readback each require a fresh adjacent probe."""
+    """Recovery fetch and retained-ref readback each require a fresh adjacent probe."""
 
     runner = _GhRunner()
     runner.state = "MERGED"
-    runner.remote_commit_by_ref_map = {"refs/heads/main": COMMIT_TWO}
+    runner.remote_commit_by_ref_map = {
+        "refs/heads/main": COMMIT_TWO,
+        "refs/heads/linear/and-17": COMMIT_ONE,
+    }
     snapshot = GitHubPullRequestBoundary(runner).inspect(
         repository=RepositoryIdentity("antonov-andrey/example"),
         number=17,
@@ -2268,7 +2419,7 @@ def test_atomic_merge_rejects_repository_policy_drift_after_construction_without
     """Any relevant metadata change between the two reads stops before push."""
 
     runner = _GhRunner()
-    runner.repository_policy_drift_field_by_name_map["delete_branch_on_merge"] = True
+    runner.repository_policy_drift_field_by_name_map["has_discussions"] = True
 
     with pytest.raises(GitHubContractError, match="policy changed during merge construction"):
         GitHubPullRequestBoundary(runner).merge(
@@ -2286,6 +2437,29 @@ def test_atomic_merge_rejects_repository_policy_drift_after_construction_without
     assert any("commit-tree" in command for command in runner.command_list)
     assert runner.operation_mutation_count == 0
     assert not any("push" in command for command in runner.command_list)
+
+
+def test_atomic_merge_rejects_automatic_head_deletion_before_construction(tmp_path: Path) -> None:
+    """GitHub cannot own head deletion before terminal merged readback and cleanup."""
+
+    runner = _GhRunner()
+    runner.repository_policy_field_by_name_map["delete_branch_on_merge"] = True
+
+    with pytest.raises(GitHubContractError, match="automatic head-branch deletion.*disabled"):
+        GitHubPullRequestBoundary(runner).merge(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+            repository_path=tmp_path,
+        )
+
+    assert runner.operation_mutation_count == 0
+    assert not any("commit-tree" in command or "push" in command for command in runner.command_list)
 
 
 def test_atomic_merge_rejects_principal_change_around_repository_policy_without_ref_mutation(tmp_path: Path) -> None:
@@ -2627,19 +2801,12 @@ def test_atomic_merge_rejects_matching_foreign_fetch_and_push_destination_withou
     assert runner.operation_mutation_count == 0
 
 
-@pytest.mark.parametrize("racing_ref", ("base", "head"))
-def test_github_atomic_merge_rejects_ref_advance_in_preflight_mutation_window_without_ref_mutation(
-    tmp_path: Path,
-    racing_ref: str,
-) -> None:
-    """A racing base or head advance rejects both ref updates as one transaction."""
+def test_github_base_only_cas_rejects_base_advance_without_merge_mutation(tmp_path: Path) -> None:
+    """The sole reviewed-base lease rejects a concurrent base advance."""
 
     runner = _GhRunner()
-    if racing_ref == "base":
-        runner.advance_base_on_push = True
-    else:
-        runner.advance_head_on_push = True
-    with pytest.raises(GitHubContractError, match="Atomic reviewed Git ref transaction failed"):
+    runner.advance_base_on_push = True
+    with pytest.raises(GitHubContractError, match="Reviewed base Git CAS transaction failed"):
         GitHubPullRequestBoundary(runner).merge(
             repository=RepositoryIdentity("antonov-andrey/example"),
             number=17,
@@ -2653,23 +2820,42 @@ def test_github_atomic_merge_rejects_ref_advance_in_preflight_mutation_window_wi
         )
 
     # The injected external base advance is observable, but the merge boundary
-    # changed neither ref and did not delete the reviewed head.
+    # changed neither ref and retained the reviewed head.
     assert runner.operation_mutation_count == 0
-    assert runner.remote_commit_by_ref_map == (
-        {
-            "refs/heads/main": "d" * 40,
-            "refs/heads/linear/and-17": COMMIT_ONE,
-        }
-        if racing_ref == "base"
-        else {
-            "refs/heads/main": COMMIT_BASE,
-            "refs/heads/linear/and-17": "e" * 40,
-        }
-    )
+    assert runner.remote_commit_by_ref_map == {
+        "refs/heads/main": "d" * 40,
+        "refs/heads/linear/and-17": COMMIT_ONE,
+    }
     push_command = next(item for item in runner.command_list if "push" in item)
     assert "--atomic" in push_command
     assert f"--force-with-lease=refs/heads/main:{COMMIT_BASE}" in push_command
-    assert f"--force-with-lease=refs/heads/linear/and-17:{COMMIT_ONE}" in push_command
+    assert not any(argument.startswith("--force-with-lease=refs/heads/linear/and-17:") for argument in push_command)
+
+
+def test_github_base_only_cas_rejects_changed_head_at_exact_post_push_readback(tmp_path: Path) -> None:
+    """A concurrent head change cannot pass retained-head terminal proof."""
+
+    runner = _GhRunner()
+    runner.advance_head_on_push = True
+
+    with pytest.raises(GitHubContractError, match="did not retain the exact reviewed head ref"):
+        GitHubPullRequestBoundary(runner).merge(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+            repository_path=tmp_path,
+        )
+
+    assert runner.operation_mutation_count == 1
+    assert runner.remote_commit_by_ref_map == {
+        "refs/heads/main": COMMIT_TWO,
+        "refs/heads/linear/and-17": "e" * 40,
+    }
 
 
 def test_atomic_merge_terminal_read_lag_routes_to_exact_recovery_not_another_mutation(tmp_path: Path) -> None:
@@ -2677,7 +2863,7 @@ def test_atomic_merge_terminal_read_lag_routes_to_exact_recovery_not_another_mut
 
     runner = _GhRunner()
     runner.defer_merge_readback = True
-    with pytest.raises(GitHubContractError, match="transaction completed.*retry exact recovery"):
+    with pytest.raises(GitHubContractError, match="base CAS completed.*retry exact recovery"):
         GitHubPullRequestBoundary(runner).merge(
             repository=RepositoryIdentity("antonov-andrey/example"),
             number=17,
@@ -2706,6 +2892,7 @@ def test_atomic_merge_terminal_read_lag_routes_to_exact_recovery_not_another_mut
 
     assert recovered.state == "MERGED"
     assert runner.operation_mutation_count == 1
+    assert runner.remote_commit_by_ref_map["refs/heads/linear/and-17"] == COMMIT_ONE
 
 
 def test_classic_protection_accepts_typed_legitimate_zero_required_checks() -> None:
@@ -3034,23 +3221,208 @@ def test_exact_configuration_final_readback_requires_the_approved_principal() ->
     assert len(configure_command_list) == 1
 
 
+def test_workflow_configuration_already_correct_policy_plans_none_and_rereads_final_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Ready policy remains mutation-free but still receives a fresh final readback."""
+
+    runner = _GhRunner()
+    module = _workflow_configuration_module_bind(runner, monkeypatch)
+    plan, plan_path = _workflow_configuration_plan_write(module=module, tmp_path=tmp_path, capsys=capsys)
+
+    assert plan["repository_policy_action"] == "none"
+    assert plan["repository_policy_before"]["delete_branch_on_merge"] is False
+    assert plan["repository_policy_after"] == plan["repository_policy_before"]
+    assert module.main(_workflow_configuration_apply_argument_list(plan_path)) == 0
+    result = json.loads(capsys.readouterr().out)
+
+    assert result["status"] == "configured"
+    assert result["changed"] is False
+    assert result["repository_policy_changed"] is False
+    assert result["repository_policy_after"]["delete_branch_on_merge"] is False
+    assert runner.repository_policy_mutation_count == 0
+    assert runner.repository_policy_read_count == 5
+
+
+def test_workflow_configuration_plans_exact_automatic_branch_deletion_correction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The approved plan exposes exact current and desired repository settings."""
+
+    runner = _GhRunner()
+    runner.repository_policy_field_by_name_map["delete_branch_on_merge"] = True
+    module = _workflow_configuration_module_bind(runner, monkeypatch)
+    plan, _ = _workflow_configuration_plan_write(module=module, tmp_path=tmp_path, capsys=capsys)
+
+    assert plan["schema_version"] == 2
+    assert plan["repository"] == "antonov-andrey/example"
+    assert plan["repository_policy_action"] == "disable-automatic-branch-deletion"
+    assert plan["repository_policy_before"]["delete_branch_on_merge"] is True
+    assert plan["repository_policy_after"]["delete_branch_on_merge"] is False
+    assert plan["repository_policy_before"]["principal"] == {
+        "login": "octocat",
+        "node_id": "U_octocat",
+        "user_id": 7,
+    }
+    assert runner.repository_policy_mutation_count == 0
+
+
+def test_workflow_configuration_apply_mutates_only_automatic_branch_deletion_and_reads_back(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Approved correction sends one narrow PATCH and certifies exact final state."""
+
+    runner = _GhRunner()
+    runner.repository_policy_field_by_name_map["delete_branch_on_merge"] = True
+    module = _workflow_configuration_module_bind(runner, monkeypatch)
+    _, plan_path = _workflow_configuration_plan_write(module=module, tmp_path=tmp_path, capsys=capsys)
+
+    assert module.main(_workflow_configuration_apply_argument_list(plan_path)) == 0
+    result = json.loads(capsys.readouterr().out)
+
+    assert result["changed"] is True
+    assert result["protection_changed"] is False
+    assert result["repository_policy_changed"] is True
+    assert result["repository_policy_after"]["delete_branch_on_merge"] is False
+    assert runner.repository_policy_mutation_count == 1
+    assert runner.repository_policy_read_count == 5
+    assert [
+        command
+        for command in runner.command_list
+        if command[1:6] == ["api", "--hostname", "github.com", "--method", "PATCH"]
+    ] == [
+        [
+            "gh",
+            "api",
+            "--hostname",
+            "github.com",
+            "--method",
+            "PATCH",
+            "repos/antonov-andrey/example",
+            "-F",
+            "delete_branch_on_merge=false",
+        ]
+    ]
+
+
+def test_workflow_configuration_rejects_stale_second_policy_snapshot_before_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A post-approval compatible setting change stops the compare-and-set write."""
+
+    runner = _GhRunner()
+    runner.repository_policy_field_by_name_map["delete_branch_on_merge"] = True
+    module = _workflow_configuration_module_bind(runner, monkeypatch)
+    _, plan_path = _workflow_configuration_plan_write(module=module, tmp_path=tmp_path, capsys=capsys)
+    stale_payload = runner._repository_policy_payload_get()
+    stale_payload["delete_branch_on_merge"] = False
+    runner.repository_policy_payload_by_read_count_map[3] = stale_payload
+
+    assert module.main(_workflow_configuration_apply_argument_list(plan_path)) == 2
+    assert "differs from the approved policy" in capsys.readouterr().err
+    assert runner.repository_policy_mutation_count == 0
+
+
+@pytest.mark.parametrize("tampered_identity", ("repository", "principal"))
+def test_workflow_configuration_rejects_wrong_approved_repository_or_principal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tampered_identity: str,
+) -> None:
+    """Apply is bound to the exact approved repository and executing principal."""
+
+    runner = _GhRunner()
+    module = _workflow_configuration_module_bind(runner, monkeypatch)
+    plan, plan_path = _workflow_configuration_plan_write(module=module, tmp_path=tmp_path, capsys=capsys)
+    if tampered_identity == "repository":
+        plan["repository_policy_before"]["repository"] = "attacker/example"
+    else:
+        plan["repository_policy_before"]["principal"]["login"] = "mallory"
+    plan_path.write_text(json.dumps(plan), encoding="utf-8")
+
+    assert module.main(_workflow_configuration_apply_argument_list(plan_path)) == 2
+    assert "differs from the approved plan" in capsys.readouterr().err
+    assert runner.repository_policy_mutation_count == 0
+
+
+@pytest.mark.parametrize("provider_result", ("failure", "malformed"))
+def test_workflow_configuration_rejects_repository_policy_mutation_provider_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    provider_result: str,
+) -> None:
+    """Failed or malformed repository PATCH output can never certify readiness."""
+
+    runner = _GhRunner()
+    runner.repository_policy_field_by_name_map["delete_branch_on_merge"] = True
+    module = _workflow_configuration_module_bind(runner, monkeypatch)
+    _, plan_path = _workflow_configuration_plan_write(module=module, tmp_path=tmp_path, capsys=capsys)
+    if provider_result == "failure":
+        runner.repository_policy_mutation_returncode = 1
+    else:
+        runner.repository_policy_mutation_stdout_override = "{"
+
+    assert module.main(_workflow_configuration_apply_argument_list(plan_path)) == 2
+    error = capsys.readouterr().err
+    expected_message = "configuration failed" if provider_result == "failure" else "response is malformed"
+    assert expected_message in error
+    assert runner.repository_policy_mutation_count == 1
+
+
+@pytest.mark.parametrize("final_result", ("automatic-deletion-enabled", "unrelated-drift", "incomplete"))
+def test_workflow_configuration_rejects_inexact_final_repository_policy_readback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    final_result: str,
+) -> None:
+    """Final provider readback must be complete and equal the approved desired policy."""
+
+    runner = _GhRunner()
+    runner.repository_policy_field_by_name_map["delete_branch_on_merge"] = True
+    module = _workflow_configuration_module_bind(runner, monkeypatch)
+    _, plan_path = _workflow_configuration_plan_write(module=module, tmp_path=tmp_path, capsys=capsys)
+    final_payload = runner._repository_policy_payload_get()
+    final_payload["delete_branch_on_merge"] = False
+    if final_result == "automatic-deletion-enabled":
+        final_payload["delete_branch_on_merge"] = True
+    elif final_result == "unrelated-drift":
+        final_payload["has_discussions"] = True
+    else:
+        del final_payload["delete_branch_on_merge"]
+    runner.repository_policy_payload_by_read_count_map[4] = final_payload
+
+    assert module.main(_workflow_configuration_apply_argument_list(plan_path)) == 2
+    error = capsys.readouterr().err
+    expected_message_by_result = {
+        "automatic-deletion-enabled": "must be disabled",
+        "unrelated-drift": "differs from the approved result",
+        "incomplete": "response has another shape",
+    }
+    assert expected_message_by_result[final_result] in error
+    assert runner.repository_policy_mutation_count == 1
+
+
 def test_exact_configuration_plan_rejects_absent_protection_without_write_authority() -> None:
     """An absent branch rule cannot hide an executing identity that cannot create it."""
 
-    script = PLUGIN_ROOT / "skills" / "workflow-configure" / "scripts" / "branch_protection.py"
-    spec = importlib.util.spec_from_file_location("linear_branch_protection_configuration_authority", script)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    module = _workflow_configuration_module_get()
     runner = _GhRunner(protection_kind="none")
     runner.execution_permission = "read"
-    snapshot = GitHubBranchProtectionBoundary(runner).inspect(
-        repository=RepositoryIdentity("antonov-andrey/example"),
-        base_branch="main",
-    )
+    snapshot, repository_policy = _configuration_snapshot_get(runner)
 
     with pytest.raises(GitHubContractError, match="write authority"):
-        module._plan_payload(snapshot, merge_method="merge")
+        module._plan_payload(snapshot, repository_policy, merge_method="merge")
 
 
 def test_effective_ruleset_protection_enforces_strict_merge_and_has_typed_sources() -> None:
@@ -3179,20 +3551,13 @@ def test_effective_ruleset_rejects_unknown_compatible_rule_parameter_fail_closed
 def test_workflow_configuration_cannot_plan_none_for_incompatible_protection() -> None:
     """The canonical configuration owner reports conflict instead of action none."""
 
-    script = PLUGIN_ROOT / "skills" / "workflow-configure" / "scripts" / "branch_protection.py"
-    spec = importlib.util.spec_from_file_location("linear_branch_protection_configuration", script)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    module = _workflow_configuration_module_get()
     runner = _GhRunner()
     runner.required_signatures = True
-    snapshot = GitHubBranchProtectionBoundary(runner).inspect(
-        repository=RepositoryIdentity("antonov-andrey/example"),
-        base_branch="main",
-    )
+    snapshot, repository_policy = _configuration_snapshot_get(runner)
 
     with pytest.raises(GitHubContractError, match="incompatible.*required signatures"):
-        module._plan_payload(snapshot, merge_method="merge")
+        module._plan_payload(snapshot, repository_policy, merge_method="merge")
 
 
 @pytest.mark.parametrize("merge_method", ("squash", "rebase"))
@@ -3393,7 +3758,10 @@ def test_github_merge_retry_adopts_exact_already_merged_reviewed_identity(tmp_pa
 
     runner = _GhRunner()
     runner.state = "MERGED"
-    runner.remote_commit_by_ref_map = {"refs/heads/main": COMMIT_TWO}
+    runner.remote_commit_by_ref_map = {
+        "refs/heads/main": COMMIT_TWO,
+        "refs/heads/linear/and-17": COMMIT_ONE,
+    }
     merged = GitHubPullRequestBoundary(runner).merge(
         repository=RepositoryIdentity("antonov-andrey/example"),
         number=17,
@@ -3412,11 +3780,14 @@ def test_github_merge_retry_adopts_exact_already_merged_reviewed_identity(tmp_pa
 
 
 def test_public_reviewed_inspection_proves_terminal_merge_before_reporting_success(tmp_path: Path) -> None:
-    """Public terminal inspection performs REST identity, tree, parent and deletion proof."""
+    """Public terminal inspection proves REST identity, tree, parents and retained head."""
 
     runner = _GhRunner()
     runner.state = "MERGED"
-    runner.remote_commit_by_ref_map = {"refs/heads/main": COMMIT_TWO}
+    runner.remote_commit_by_ref_map = {
+        "refs/heads/main": COMMIT_TWO,
+        "refs/heads/linear/and-17": COMMIT_ONE,
+    }
 
     inspection = GitHubPullRequestBoundary(runner).reviewed_inspect(
         repository=RepositoryIdentity("antonov-andrey/example"),
@@ -3540,7 +3911,10 @@ def test_atomic_merge_recovery_ignores_current_protection_and_check_definition_d
     runner = _GhRunner(protection_kind=protection_kind, required_check_name_list=required_check_name_list)
     runner.state = "MERGED"
     runner.base_commit = "d" * 40
-    runner.remote_commit_by_ref_map = {"refs/heads/main": "d" * 40}
+    runner.remote_commit_by_ref_map = {
+        "refs/heads/main": "d" * 40,
+        "refs/heads/linear/and-17": COMMIT_ONE,
+    }
     runner.status_rollup_returncode = 1
     runner.check_returncode = 1
     runner.pr_title = "Mutable title edited after merge"
@@ -3605,12 +3979,20 @@ def test_atomic_merge_recovery_rejects_inexact_immutable_terminal_identity(
     assert runner.operation_mutation_count == 0
 
 
-def test_atomic_merge_recovery_rejects_merged_pr_without_atomic_head_deletion(tmp_path: Path) -> None:
-    """A foreign provider merge cannot masquerade as a recovered two-ref transaction."""
+@pytest.mark.parametrize("retained_head_commit", (None, COMMIT_TWO))
+def test_atomic_merge_recovery_rejects_missing_or_changed_reviewed_head(
+    tmp_path: Path,
+    retained_head_commit: str | None,
+) -> None:
+    """Terminal recovery requires the reviewed head until issue cleanup owns deletion."""
 
     runner = _GhRunner()
     runner.state = "MERGED"
-    with pytest.raises(GitHubContractError, match="did not delete"):
+    runner.remote_commit_by_ref_map = {"refs/heads/main": COMMIT_TWO}
+    if retained_head_commit is not None:
+        runner.remote_commit_by_ref_map["refs/heads/linear/and-17"] = retained_head_commit
+
+    with pytest.raises(GitHubContractError, match="did not retain the exact reviewed head ref"):
         GitHubPullRequestBoundary(runner).merge(
             repository=RepositoryIdentity("antonov-andrey/example"),
             number=17,
@@ -3622,6 +4004,29 @@ def test_atomic_merge_recovery_rejects_merged_pr_without_atomic_head_deletion(tm
             merge_method="merge",
             repository_path=tmp_path,
         )
+
+
+def test_github_merge_rejects_closed_unmerged_as_success_evidence(tmp_path: Path) -> None:
+    """CLOSED without GitHub merged state never enters mutation or recovery."""
+
+    runner = _GhRunner()
+    runner.state = "CLOSED"
+
+    with pytest.raises(GitHubContractError, match="Closed unmerged.*never successful merge evidence"):
+        GitHubPullRequestBoundary(runner).merge(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+            repository_path=tmp_path,
+        )
+
+    assert runner.operation_mutation_count == 0
+    assert runner.remote_commit_by_ref_map["refs/heads/linear/and-17"] == COMMIT_ONE
 
 
 def test_github_pr_create_is_idempotent_for_exact_issue_branch(tmp_path: Path) -> None:
@@ -3648,6 +4053,95 @@ def test_github_pr_create_is_idempotent_for_exact_issue_branch(tmp_path: Path) -
     lookup_command = next(item for item in runner.command_list if item[1:3] == ["api", "--method"])
     assert "--paginate" in lookup_command
     assert "--slurp" in lookup_command
+
+
+def test_github_pr_create_ignores_closed_unmerged_history_for_replacement(tmp_path: Path) -> None:
+    """A prior closed-unmerged PR does not block one new exact open candidate."""
+
+    runner = _GhRunner()
+    runner.historical_closed_number_list = [8]
+    runner.pull_request_title_by_number_map[8] = "Historical candidate title was edited"
+    boundary = GitHubPullRequestBoundary(runner)
+    body = tmp_path / "body.md"
+    body.write_text("# Replacement\n", encoding="utf-8")
+
+    created = boundary.create(
+        repository=RepositoryIdentity("antonov-andrey/example"),
+        issue_identifier="AND-17",
+        base_branch="main",
+        head_branch="linear/and-17",
+        title="AND-17 Replace closed-unmerged candidate",
+        body_file=body,
+    )
+
+    assert created.number == 17
+    assert created.state == "OPEN"
+    assert sum(item[1:3] == ["pr", "create"] for item in runner.command_list) == 1
+
+
+def test_github_pr_create_rejects_current_open_candidate_without_issue_title(tmp_path: Path) -> None:
+    """The one current open candidate remains bound to its issue title token."""
+
+    runner = _GhRunner()
+    runner.pr_exists = True
+    runner.pr_title = "Current candidate title was edited"
+    body = tmp_path / "body.md"
+    body.write_text("# Candidate\n", encoding="utf-8")
+
+    with pytest.raises(GitHubContractError, match="title omits the exact Linear issue token"):
+        GitHubPullRequestBoundary(runner).create(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            title="AND-17 Keep exact current candidate",
+            body_file=body,
+        )
+
+    assert not any(item[1:3] == ["pr", "create"] for item in runner.command_list)
+
+
+def test_github_pr_create_rejects_duplicate_open_candidates(tmp_path: Path) -> None:
+    """Two exact open candidates remain an active-identity conflict."""
+
+    runner = _GhRunner()
+    runner.pr_exists = True
+    runner.pull_request_state_by_number_map[16] = "OPEN"
+    body = tmp_path / "body.md"
+    body.write_text("# Candidate\n", encoding="utf-8")
+
+    with pytest.raises(GitHubContractError, match="More than one active pull request"):
+        GitHubPullRequestBoundary(runner).create(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            title="AND-17 Keep one exact candidate",
+            body_file=body,
+        )
+
+    assert not any(item[1:3] == ["pr", "create"] for item in runner.command_list)
+
+
+def test_github_pr_create_rejects_foreign_base_from_matching_lookup(tmp_path: Path) -> None:
+    """A provider response cannot include one PR from another base."""
+
+    runner = _GhRunner(base_branch="release")
+    runner.historical_closed_number_list = [8]
+    body = tmp_path / "body.md"
+    body.write_text("# Candidate\n", encoding="utf-8")
+
+    with pytest.raises(GitHubContractError, match="lookup response has another shape"):
+        GitHubPullRequestBoundary(runner).create(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            title="AND-17 Keep exact target",
+            body_file=body,
+        )
+
+    assert not any(item[1:3] == ["pr", "create"] for item in runner.command_list)
 
 
 @pytest.mark.parametrize(
@@ -3777,6 +4271,25 @@ def test_canceled_pull_request_close_is_idempotent_and_exact() -> None:
     assert boundary.close_if_open(**arguments).state == "CLOSED"
     assert boundary.close_if_open(**arguments).state == "CLOSED"
     assert sum(item[1:3] == ["pr", "close"] for item in runner.command_list) == 1
+
+
+def test_canceled_pull_request_close_accepts_closed_history_without_issue_title() -> None:
+    """A terminal historical title does not block idempotent cancellation cleanup."""
+
+    runner = _GhRunner()
+    runner.state = "CLOSED"
+    runner.pr_title = "Historical candidate title was edited"
+
+    snapshot = GitHubPullRequestBoundary(runner).close_if_open(
+        repository=RepositoryIdentity("antonov-andrey/example"),
+        number=17,
+        issue_identifier="AND-17",
+        base_branch="main",
+        head_branch="linear/and-17",
+    )
+
+    assert snapshot.state == "CLOSED"
+    assert not any(item[1:3] == ["pr", "close"] for item in runner.command_list)
 
 
 def test_canceled_pull_request_close_rejects_foreign_target() -> None:
