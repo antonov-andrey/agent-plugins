@@ -144,6 +144,7 @@ class GitHubAtomicMergeBoundary:
             )
         )
         authentication.credential_validate(principal, repository)
+        authentication.git_http_proactive_authentication_require()
         network_config_argument_list = _network_config_argument_list(
             principal=principal,
             repository=repository,
@@ -276,6 +277,7 @@ class GitHubAtomicMergeBoundary:
             node_id=snapshot.merged_by_node_id,
         )
         authentication.credential_validate(principal, repository)
+        authentication.git_http_proactive_authentication_require()
         network_config_argument_list = _network_config_argument_list(
             principal=principal,
             repository=repository,
@@ -718,7 +720,7 @@ def _network_config_argument_list(
     principal: GitHubPrincipal,
     repository: RepositoryIdentity,
 ) -> tuple[str, ...]:
-    """Return the one principal- and destination-bound credential helper."""
+    """Return proactive authentication and the principal-bound helper."""
 
     return git_credential_config_argument_list_get(principal, repository)
 

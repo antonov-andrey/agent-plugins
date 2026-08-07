@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+from base64 import b64encode
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
+from http.client import HTTPConnection
 import importlib.util
 import json
 from pathlib import Path
 import subprocess
 import sys
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -525,6 +528,8 @@ class _GhRunner:
         self.advance_base_on_push = False
         self.advance_head_on_push = False
         self.operation_mutation_count = 0
+        self.http_proactive_authentication_supported = True
+        self.http_proactive_authentication_probe_count = 0
         self.fetch_url_list = ["git@github.com:antonov-andrey/example.git"]
         self.push_url_list = ["git@github.com:antonov-andrey/example.git"]
         self.explicit_fetch_url_list = ["https://github.com/antonov-andrey/example.git"]
@@ -913,6 +918,38 @@ class _GhRunner:
         assert environment_by_name_map["GIT_CONFIG_GLOBAL"] == "/dev/null"
         assert environment_by_name_map["GIT_CONFIG_SYSTEM"] == "/dev/null"
         assert "GIT_CONFIG" not in environment_by_name_map
+        probe_url = next(
+            (
+                argument
+                for argument in argument_list
+                if argument.startswith("http://127.0.0.1:")
+                and argument.endswith("/linear-agent-proactive-authentication-probe.git")
+            ),
+            None,
+        )
+        if probe_url is not None:
+            self.http_proactive_authentication_probe_count += 1
+            parsed = urlsplit(probe_url)
+            connection = HTTPConnection(parsed.hostname, parsed.port)
+            header_by_name_map = {}
+            if self.http_proactive_authentication_supported:
+                helper_argument = next(
+                    argument for argument in argument_list if argument.startswith("credential.helper=!f()")
+                )
+                probe_password = helper_argument.split("'password=", 1)[1].split("'", 1)[0]
+                credential = b64encode(
+                    f"linear-agent-proactive-authentication-probe:{probe_password}".encode("utf-8")
+                ).decode("ascii")
+                header_by_name_map["Authorization"] = f"Basic {credential}"
+            connection.request(
+                "GET",
+                f"{parsed.path}/info/refs?service=git-upload-pack",
+                headers=header_by_name_map,
+            )
+            response = connection.getresponse()
+            response.read()
+            connection.close()
+            return subprocess.CompletedProcess(argument_list, 128, "", "probe rejected")
         if "init" in argument_list:
             assert input_text is None
             private_git_dir = Path(argument_list[-1])
@@ -1072,6 +1109,12 @@ class _RealGitBoundaryRunner:
 
         argument_list = list(argument_list)
         if argument_list[0] != "git":
+            return self.provider(
+                argument_list,
+                environment_by_name_map=environment_by_name_map,
+                input_text=input_text,
+            )
+        if any("/linear-agent-proactive-authentication-probe.git" in argument for argument in argument_list):
             return self.provider(
                 argument_list,
                 environment_by_name_map=environment_by_name_map,
@@ -1774,11 +1817,32 @@ def test_github_merge_binds_exact_reviewed_base_head_and_typed_zero_required_che
     assert "credential.helper=" in push_command
     helper_argument = next(item for item in push_command if item.startswith("credential.helper=!"))
     assert "/usr/bin/gh auth token --hostname github.com --user octocat" in helper_argument
-    assert "/usr/bin/gh api --hostname github.com /user" in helper_argument
+    assert (
+        "/usr/bin/curl -q --fail --silent --show-error --proto '=https' --netrc-file /dev/null --config -"
+        in helper_argument
+    )
+    assert "/usr/bin/jq -er" in helper_argument
+    assert "Authorization: Bearer %s" in helper_argument
+    assert "GH_TOKEN" not in helper_argument
     assert "7" in helper_argument
     assert "U_octocat" in helper_argument
+    assert helper_argument.index("response=") < helper_argument.index("/usr/bin/curl")
+    assert helper_argument.index("/usr/bin/curl") < helper_argument.index("actual=")
+    assert helper_argument.index("actual=") < helper_argument.index("/usr/bin/jq")
     assert helper_argument.index("/user") < helper_argument.index("username=x-access-token")
     assert "credential.useHttpPath=true" in push_command
+    assert "http.proactiveAuth=basic" in push_command
+    github_network_command_list = [
+        command for command in runner.command_list if "https://github.com/antonov-andrey/example.git" in command
+    ]
+    assert {
+        verb for command in github_network_command_list for verb in ("fetch", "push", "ls-remote") if verb in command
+    } == {
+        "fetch",
+        "push",
+        "ls-remote",
+    }
+    assert all("http.proactiveAuth=basic" in command for command in github_network_command_list)
     assert "core.hooksPath=/dev/null" in push_command
     assert "http.extraHeader=" in push_command
     assert "http.followRedirects=false" in push_command
@@ -1788,6 +1852,17 @@ def test_github_merge_binds_exact_reviewed_base_head_and_typed_zero_required_che
     assert not any("ghp_" in argument for item in runner.command_list for argument in item)
     assert not any(item[1:3] == ["pr", "merge"] for item in runner.command_list)
     assert runner.operation_mutation_count == 1
+    assert runner.http_proactive_authentication_probe_count == 2
+    probe_index_list = [
+        index
+        for index, command in enumerate(runner.command_list)
+        if any("/linear-agent-proactive-authentication-probe.git" in argument for argument in command)
+    ]
+    fetch_index_list = [index for index, command in enumerate(runner.command_list) if "fetch" in command]
+    assert len(fetch_index_list) == 2
+    assert all(
+        probe_index < fetch_index for probe_index, fetch_index in zip(probe_index_list, fetch_index_list, strict=True)
+    )
     push_environment = runner.environment_list[runner.command_list.index(push_command)]
     assert push_environment["HOME"] == "/home/andrey"
     assert push_environment["GIT_CONFIG_GLOBAL"] == "/dev/null"
@@ -1800,6 +1875,35 @@ def test_github_merge_binds_exact_reviewed_base_head_and_typed_zero_required_che
     view_command = next(item for item in runner.command_list if item[1:3] == ["pr", "view"])
     assert "baseRefOid" in view_command[-1]
     assert "reviewDecision" not in view_command[-1]
+
+
+def test_atomic_merge_fails_before_remote_ref_access_when_git_cannot_prove_proactive_authentication(
+    tmp_path: Path,
+) -> None:
+    """An ignored proactive-auth key cannot fall through to fetch or mutation."""
+
+    runner = _GhRunner()
+    runner.http_proactive_authentication_supported = False
+    original_ref_map = dict(runner.remote_commit_by_ref_map)
+
+    with pytest.raises(GitHubContractError, match="cannot prove proactive invocation-helper authentication"):
+        GitHubPullRequestBoundary(runner).merge(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+            repository_path=tmp_path,
+        )
+
+    assert runner.http_proactive_authentication_probe_count == 1
+    assert not any("fetch" in command or "push" in command for command in runner.command_list)
+    assert not any("https://github.com/antonov-andrey/example.git" in command for command in runner.command_list)
+    assert runner.remote_commit_by_ref_map == original_ref_map
+    assert runner.operation_mutation_count == 0
 
 
 def test_atomic_merge_reads_exact_principal_bound_repository_policy_before_construction_and_push(
