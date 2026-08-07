@@ -715,6 +715,16 @@ def test_transition_contract_uses_delivery_specific_evidence_and_remediation_pat
             proof=TransitionProof(remediation_blocker_ready=True),
             dispatchable=False,
         )
+    with pytest.raises(LinearContractError, match="Rework -> Todo is forbidden"):
+        _transition_require(
+            current=IssueStatusName.REWORK,
+            target=IssueStatusName.TODO,
+            project_status=ProjectStatusName.IN_PROGRESS,
+            role_label="task:implementation",
+            delivery_kind="code",
+            proof=TransitionProof(remediation_blocker_ready=True),
+            dispatchable=False,
+        )
 
 
 def test_transition_contract_returns_mutated_merge_candidate_to_rework() -> None:

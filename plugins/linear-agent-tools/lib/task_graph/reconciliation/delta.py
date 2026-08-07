@@ -54,6 +54,7 @@ class TaskGraphDeltaReconciler:
         remote_issue_by_node_key_map = remote.issue_by_node_key_map()
         self._referenced_nodes_require(remote_issue_by_node_key_map)
         self._relation_scope_require(remote_issue_by_node_key_map)
+        self._existing_target_validate(remote_issue_by_node_key_map)
 
         document_plan = self._transaction_document_plan(remote)
         if document_plan is not None:
@@ -162,6 +163,48 @@ class TaskGraphDeltaReconciler:
             )
         return None
 
+    def _existing_target_validate(self, remote_issue_by_node_key_map: dict[str, RemoteIssue]) -> None:
+        """Reject unsafe existing targets before returning any mutation action.
+
+        Args:
+            remote_issue_by_node_key_map: Fully read Project issues by stable node key.
+        """
+
+        reverification_key_set = set(self._delta.reverification_node_key_list)
+        new_node_key_set = {item.node_key for item in self._delta.node_list}
+        existing_node_key_set = set(self._delta.existing_node_key_list)
+        existing_target_key_set = {
+            edge.blocked_node_key
+            for edge in self._delta.blocker_edge_list
+            if edge.blocker_node_key in new_node_key_set and edge.blocked_node_key in existing_node_key_set
+        }
+        for node_key in sorted(existing_target_key_set):
+            current = remote_issue_by_node_key_map[node_key]
+            role = current.role_get()
+            if node_key in reverification_key_set and role not in {TaskRole.REVIEW, TaskRole.ACCEPTANCE}:
+                raise TaskGraphError(
+                    f"Delta may add a blocker to existing node {node_key} only when it is review or acceptance"
+                )
+            if role is TaskRole.IMPLEMENTATION:
+                if current.status_name == "Rework":
+                    continue
+                raise TaskGraphError(
+                    f"Delta implementation target {node_key} must already be Rework and absent from reverification"
+                )
+            if role not in {TaskRole.REVIEW, TaskRole.ACCEPTANCE}:
+                raise TaskGraphError(
+                    f"Delta target {node_key} must be review, acceptance, or implementation already in Rework"
+                )
+            if current.status_name == "Todo":
+                continue
+            if current.status_name == "In Progress" and node_key in reverification_key_set:
+                continue
+            raise TaskGraphError(
+                f"Delta target {node_key} must already be Todo or explicitly return from In Progress to Todo"
+            )
+        if reverification_key_set - existing_target_key_set:
+            raise TaskGraphError("Graph delta reverification node has no new incoming blocker")
+
     def _relation_reconciliation_plan(
         self,
         remote_issue_by_node_key_map: dict[str, RemoteIssue],
@@ -208,24 +251,9 @@ class TaskGraphDeltaReconciler:
         """Return affected existing review gates to Todo before new work runs."""
 
         reverification_action_list: list[PublicationAction] = []
-        reverification_key_set = set(self._delta.reverification_node_key_list)
-        new_node_key_set = {item.node_key for item in self._delta.node_list}
-        existing_node_key_set = set(self._delta.existing_node_key_list)
-        existing_target_key_set = {
-            edge.blocked_node_key
-            for edge in self._delta.blocker_edge_list
-            if edge.blocker_node_key in new_node_key_set and edge.blocked_node_key in existing_node_key_set
-        }
-        for node_key in sorted(existing_target_key_set):
+        for node_key in sorted(self._delta.reverification_node_key_list):
             current = remote_issue_by_node_key_map[node_key]
-            role = current.role_get()
-            if role not in {TaskRole.REVIEW, TaskRole.ACCEPTANCE}:
-                raise TaskGraphError(
-                    f"Delta may add a blocker to existing node {node_key} only when it is review or acceptance"
-                )
-            if current.status_name == "Todo":
-                continue
-            if current.status_name == "In Progress" and node_key in reverification_key_set:
+            if current.status_name == "In Progress":
                 reverification_action_list.append(
                     PublicationAction(
                         kind="issue-status-update",
@@ -233,12 +261,6 @@ class TaskGraphDeltaReconciler:
                         payload={"issue_id": current.id, "status_name": "Todo"},
                     )
                 )
-                continue
-            raise TaskGraphError(
-                f"Delta target {node_key} must already be Todo or explicitly return from In Progress to Todo"
-            )
-        if reverification_key_set - existing_target_key_set:
-            raise TaskGraphError("Graph delta reverification node has no new incoming blocker")
         if reverification_action_list:
             return ReconciliationPlan(
                 PublicationPhase.DELTA_REVERIFICATION,
