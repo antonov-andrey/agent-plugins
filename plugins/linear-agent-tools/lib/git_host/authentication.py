@@ -103,18 +103,20 @@ class GitHubAuthenticationBoundary:
             raise GitHubContractError("Authenticated GitHub identity differs from merged provider identity")
         return current
 
-    def credential_validate(self, principal: GitHubPrincipal) -> None:
+    def credential_validate(self, principal: GitHubPrincipal, repository: RepositoryIdentity) -> None:
         """Validate the helper's actual token principal without returning its token.
 
         Args:
             principal: Exact protection and write-authority principal.
+            repository: Sole HTTPS credential destination.
         """
 
-        if not isinstance(principal, GitHubPrincipal):
-            raise GitHubContractError("Git credential principal has another shape")
+        if not isinstance(principal, GitHubPrincipal) or not isinstance(repository, RepositoryIdentity):
+            raise GitHubContractError("Git credential identity has another shape")
         completed_process = command_closed_run(
             self._runner,
-            ["/bin/sh", "-c", f"{_credential_helper_shell_get(principal)} get >/dev/null"],
+            ["/bin/sh", "-c", f"{_credential_helper_shell_get(principal, repository)} get >/dev/null"],
+            input_text=_credential_request_get(repository),
         )
         if completed_process.returncode != 0 or completed_process.stdout:
             raise GitHubContractError("Git credential token differs from the approved GitHub principal")
@@ -170,7 +172,10 @@ class GitHubAuthenticationBoundary:
             raise GitHubContractError(f"{label} response is malformed") from error
 
 
-def git_credential_config_argument_list_get(principal: GitHubPrincipal) -> tuple[str, ...]:
+def git_credential_config_argument_list_get(
+    principal: GitHubPrincipal,
+    repository: RepositoryIdentity,
+) -> tuple[str, ...]:
     """Return the sole invocation-local helper for an exact approved principal.
 
     The helper resolves and validates the token entirely within its subprocess.
@@ -178,16 +183,19 @@ def git_credential_config_argument_list_get(principal: GitHubPrincipal) -> tuple
 
     Args:
         principal: Exact authenticated account selected for the operation.
+        repository: Sole HTTPS destination allowed to receive the credential.
 
     Returns:
         Direct Git ``-c`` arguments that add one account-bound helper.
     """
 
-    if not isinstance(principal, GitHubPrincipal):
-        raise GitHubContractError("Git credential principal has another shape")
+    if not isinstance(principal, GitHubPrincipal) or not isinstance(repository, RepositoryIdentity):
+        raise GitHubContractError("Git credential identity has another shape")
     return (
         "-c",
-        f"credential.helper=!{_credential_helper_shell_get(principal)}",
+        "credential.helper=",
+        "-c",
+        f"credential.helper=!{_credential_helper_shell_get(principal, repository)}",
         "-c",
         "credential.useHttpPath=true",
         "-c",
@@ -195,15 +203,24 @@ def git_credential_config_argument_list_get(principal: GitHubPrincipal) -> tuple
     )
 
 
-def _credential_helper_shell_get(principal: GitHubPrincipal) -> str:
+def _credential_helper_shell_get(principal: GitHubPrincipal, repository: RepositoryIdentity) -> str:
     """Build one helper that proves the actual token identity before emitting it."""
 
     login = shlex.quote(principal.login)
     user_id = shlex.quote(str(principal.user_id))
     node_id = shlex.quote(principal.node_id)
+    repository_path = shlex.quote(f"{repository.value}.git")
     jq_filter = shlex.quote("[.login, (.id|tostring), .node_id] | @tsv")
     return (
         'f() { if [ "$1" = get ]; then '
+        "protocol=; host=; path=; protocol_seen=; host_seen=; path_seen=; "
+        "while IFS='=' read -r key value; do [ -n \"$key\" ] || break; "
+        'case "$key" in '
+        'protocol) [ -z "$protocol_seen" ] || exit 1; protocol_seen=1; protocol=$value ;; '
+        'host) [ -z "$host_seen" ] || exit 1; host_seen=1; host=$value ;; '
+        'path) [ -z "$path_seen" ] || exit 1; path_seen=1; path=$value ;; '
+        "esac; done; "
+        f'[ "$protocol" = https ] && [ "$host" = github.com ] && [ "$path" = {repository_path} ] || exit 1; '
         f'token="$(/usr/bin/gh auth token --hostname github.com --user {login} 2>/dev/null)" || exit 1; '
         '[ -n "$token" ] || exit 1; '
         f'actual="$(GH_TOKEN="$token" /usr/bin/gh api --hostname github.com /user --jq {jq_filter} '
@@ -214,3 +231,9 @@ def _credential_helper_shell_get(principal: GitHubPrincipal) -> str:
         "printf '%s\\n' \"password=$token\"; "
         "fi; }; f"
     )
+
+
+def _credential_request_get(repository: RepositoryIdentity) -> str:
+    """Return one exact Git credential protocol request for validation."""
+
+    return f"protocol=https\nhost=github.com\npath={repository.value}.git\n\n"

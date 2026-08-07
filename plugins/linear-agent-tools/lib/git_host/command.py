@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 import os
-from pathlib import Path
 import pwd
 import subprocess
 from typing import Protocol
@@ -83,7 +82,6 @@ def command_closed_run(
     argument_list: Sequence[str],
     *,
     input_text: str | None = None,
-    git_config_path: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run one command after rejecting ambient process-control inputs.
 
@@ -91,8 +89,6 @@ def command_closed_run(
         runner: Deterministic or subprocess-backed command runner.
         argument_list: Complete direct argument vector.
         input_text: Optional standard-input text.
-        git_config_path: Exact config file for a read-only config audit. All
-            ordinary Git and GitHub operations instead read ``/dev/null``.
 
     Returns:
         Completed command without raising for its exit status.
@@ -100,12 +96,12 @@ def command_closed_run(
 
     return runner(
         argument_list,
-        environment_by_name_map=_closed_environment_get(git_config_path=git_config_path),
+        environment_by_name_map=_closed_environment_get(),
         input_text=input_text,
     )
 
 
-def _closed_environment_get(*, git_config_path: Path | None) -> dict[str, str]:
+def _closed_environment_get() -> dict[str, str]:
     """Build the complete standard-user environment for one provider command."""
 
     account = pwd.getpwuid(os.getuid())
@@ -115,18 +111,13 @@ def _closed_environment_get(*, git_config_path: Path | None) -> dict[str, str]:
     )
     if unsafe_name_list:
         raise GitHubContractError("Closed GitHub command environment contains unsafe inputs")
-    if git_config_path is not None:
-        if not git_config_path.is_absolute():
-            raise GitHubContractError("Git config audit path must be absolute")
-        git_config_value = str(git_config_path)
-    else:
-        git_config_value = "/dev/null"
     return {
         "GCM_INTERACTIVE": "never",
         "GH_PROMPT_DISABLED": "1",
         "GIT_ATTR_NOSYSTEM": "1",
-        "GIT_CONFIG": git_config_value,
+        "GIT_CONFIG_GLOBAL": "/dev/null",
         "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_SYSTEM": "/dev/null",
         "GIT_NO_REPLACE_OBJECTS": "1",
         "GIT_TERMINAL_PROMPT": "0",
         "HOME": account.pw_dir,

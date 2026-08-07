@@ -359,6 +359,7 @@ class GitHubPullRequestBoundary:
             execution_login=protection.execution_login,
             execution_user_id=protection.execution_user_id,
             execution_node_id=protection.execution_node_id,
+            merge_method=merge_method,
         )
         after = self.inspect(repository=repository, number=number)
         after.target_require(base_branch=base_branch, head_branch=head_branch)

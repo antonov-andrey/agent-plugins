@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 import importlib.util
 import json
@@ -20,6 +20,8 @@ if str(LIBRARY_ROOT) not in sys.path:
     sys.path.insert(0, str(LIBRARY_ROOT))
 
 from git_host.branch_protection import GitHubBranchProtectionBoundary
+from git_host.authentication import GitHubPrincipal, git_credential_config_argument_list_get
+from git_host.command import command_closed_run, command_run
 from git_host.model import GitHubContractError, RepositoryIdentity
 from git_host.pull_request import GitHubPullRequestBoundary
 from verification._validation import EvidenceContractError, evidence_url_validate, instant_parse
@@ -37,6 +39,24 @@ COMMIT_BASE = "c" * 40
 ISSUE_EVIDENCE_URL = "https://linear.app/acme/issue/AND-17/direct-evidence"
 BASELINE_EVIDENCE_URL = "https://linear.app/acme/issue/AND-17/local-phase-baseline"
 PULL_REQUEST_URL = "https://github.com/antonov-andrey/example/pull/17"
+
+
+@pytest.fixture(autouse=True)
+def _ordinary_task_repository_create(tmp_path: Path) -> None:
+    """Give every repository-bound test one ordinary local audit source."""
+
+    git_dir = tmp_path / ".git"
+    (git_dir / "hooks").mkdir(parents=True)
+    (git_dir / "objects" / "info").mkdir(parents=True)
+    (git_dir / "info").mkdir(parents=True)
+    (git_dir / "refs").mkdir(parents=True)
+    (git_dir / "HEAD").write_text("ref: refs/heads/linear/and-17\n", encoding="utf-8")
+    (git_dir / "config").write_text(
+        "[core]\n\trepositoryformatversion = 0\n"
+        '[remote "origin"]\n\turl = git@github.com:antonov-andrey/example.git\n'
+        "\tfetch = +refs/heads/*:refs/remotes/origin/*\n",
+        encoding="utf-8",
+    )
 
 
 def _handoff(**replacement_by_name: object) -> TaskHandoff:
@@ -474,6 +494,7 @@ class _GhRunner:
         self.changed_execution_login: str | None = None
         self.changed_execution_user_id: int | None = None
         self.changed_execution_node_id: str | None = None
+        self.execution_identity_change_after_read_count = 1
         self.execution_identity_read_count = 0
         self.enforce_admins = True
         self.allow_force_pushes = False
@@ -517,8 +538,10 @@ class _GhRunner:
         self.alternate_object_store = False
         self.replace_ref_list: list[str] = []
         self.shallow_repository = False
+        self.reviewed_base_is_ancestor = True
         self.merge_base_commit = base_commit
         self.merge_head_commit = head_commit
+        self.merge_commit = COMMIT_TWO
         self.constructed_merge_tree = "f" * 40
         self.merge_commit_tree = "f" * 40
         self.merged_by_login = "octocat"
@@ -527,6 +550,10 @@ class _GhRunner:
         self.credential_login = "octocat"
         self.credential_user_id = 7
         self.credential_node_id = "U_octocat"
+        self.repository_policy_read_count = 0
+        self.repository_policy_payload_override: object | None = None
+        self.repository_policy_field_by_name_map: dict[str, object] = {}
+        self.repository_policy_drift_field_by_name_map: dict[str, object] = {}
         self.remote_commit_by_ref_map = {
             f"refs/heads/{base_branch}": base_commit,
             "refs/heads/linear/and-17": head_commit,
@@ -546,8 +573,8 @@ class _GhRunner:
         argument_list = list(argument_list)
         self.command_list.append(argument_list)
         self.environment_list.append(dict(environment_by_name_map))
-        assert input_text is None
         if argument_list[0] == "/bin/sh":
+            assert input_text == "protocol=https\nhost=github.com\npath=antonov-andrey/example.git\n\n"
             expected_identity = (self.execution_login, self.execution_user_id, self.execution_node_id)
             credential_identity = (self.credential_login, self.credential_user_id, self.credential_node_id)
             return subprocess.CompletedProcess(
@@ -557,7 +584,12 @@ class _GhRunner:
                 "",
             )
         if argument_list[0] == "git":
-            return self._git_call(argument_list, environment_by_name_map=environment_by_name_map)
+            return self._git_call(
+                argument_list,
+                environment_by_name_map=environment_by_name_map,
+                input_text=input_text,
+            )
+        assert input_text is None
         if argument_list[1:3] == ["pr", "checks"]:
             payload = [
                 {"name": name, "bucket": self.check_bucket, "link": "https://example.test/check"}
@@ -575,12 +607,24 @@ class _GhRunner:
             )
         if argument_list[1:5] == ["api", "--hostname", "github.com", "user"]:
             self.execution_identity_read_count += 1
-            changed = self.execution_identity_read_count > 1 and self.changed_execution_login is not None
+            changed = (
+                self.execution_identity_read_count > self.execution_identity_change_after_read_count
+                and self.changed_execution_login is not None
+            )
             payload = {
                 "login": self.changed_execution_login if changed else self.execution_login,
                 "id": self.changed_execution_user_id if changed else self.execution_user_id,
                 "node_id": self.changed_execution_node_id if changed else self.execution_node_id,
             }
+            return subprocess.CompletedProcess(argument_list, 0, json.dumps(payload), "")
+        if argument_list[1:5] == ["api", "--hostname", "github.com", "repos/antonov-andrey/example"]:
+            self.repository_policy_read_count += 1
+            if self.repository_policy_payload_override is not None:
+                payload = self.repository_policy_payload_override
+            else:
+                payload = self._repository_policy_payload_get()
+                if self.repository_policy_read_count > 1:
+                    payload.update(self.repository_policy_drift_field_by_name_map)
             return subprocess.CompletedProcess(argument_list, 0, json.dumps(payload), "")
         if (
             argument_list[1:4] == ["api", "--hostname", "github.com"]
@@ -781,7 +825,7 @@ class _GhRunner:
                 "isCrossRepository": self.cross_repository,
                 "mergeStateStatus": "CLEAN",
                 "mergedAt": "2026-08-04T12:30:00Z" if self.state == "MERGED" else None,
-                "mergeCommit": {"oid": COMMIT_TWO} if self.state == "MERGED" else None,
+                "mergeCommit": {"oid": self.merge_commit} if self.state == "MERGED" else None,
                 "mergedBy": (
                     {
                         "id": self.merged_by_node_id,
@@ -816,42 +860,71 @@ class _GhRunner:
         rule_list.extend({"type": rule_type} for rule_type in self.ruleset_additional_rule_type_list)
         return rule_list
 
+    def _repository_policy_payload_get(self) -> dict[str, object]:
+        """Return one complete strict repository-policy response."""
+
+        payload: dict[str, object] = {
+            "id": 123,
+            "node_id": "R_example",
+            "name": "example",
+            "full_name": "antonov-andrey/example",
+            "owner": {
+                "login": "antonov-andrey",
+                "id": 13316422,
+                "node_id": "U_owner",
+                "type": "User",
+                "site_admin": False,
+            },
+            "private": False,
+            "fork": False,
+            "archived": False,
+            "disabled": False,
+            "visibility": "public",
+            "default_branch": "main",
+            "mirror_url": None,
+            "allow_forking": True,
+            "is_template": False,
+            "web_commit_signoff_required": False,
+            "has_discussions": False,
+            "allow_squash_merge": True,
+            "allow_merge_commit": True,
+            "allow_rebase_merge": True,
+            "allow_auto_merge": False,
+            "delete_branch_on_merge": False,
+            "use_squash_pr_title_as_default": False,
+            "squash_merge_commit_title": "COMMIT_OR_PR_TITLE",
+            "squash_merge_commit_message": "COMMIT_MESSAGES",
+            "merge_commit_title": "MERGE_MESSAGE",
+            "merge_commit_message": "PR_TITLE",
+            "allow_update_branch": False,
+        }
+        payload.update(self.repository_policy_field_by_name_map)
+        return payload
+
     def _git_call(
         self,
         argument_list: list[str],
         *,
         environment_by_name_map: Mapping[str, str],
+        input_text: str | None,
     ) -> subprocess.CompletedProcess[str]:
         """Model local object creation and one atomic remote ref transaction."""
 
-        if "rev-parse" in argument_list:
-            root = Path(argument_list[argument_list.index("-C") + 1])
-            if "--absolute-git-dir" in argument_list or "--git-common-dir" in argument_list:
-                git_dir = root / ".git"
-                (git_dir / "hooks").mkdir(parents=True, exist_ok=True)
-                (git_dir / "objects" / "info").mkdir(parents=True, exist_ok=True)
-                (git_dir / "info").mkdir(parents=True, exist_ok=True)
-                (git_dir / "config").write_text("[core]\n\trepositoryformatversion = 0\n", encoding="utf-8")
-                if self.pre_push_hook:
-                    hook_path = git_dir / "hooks" / "pre-push"
-                    hook_path.write_text(
-                        f"#!/bin/sh\nprintf attacked > {root / 'hook-mutated'}\nexit 1\n",
-                        encoding="utf-8",
-                    )
-                    hook_path.chmod(0o755)
-                if self.alternate_object_store:
-                    (git_dir / "objects" / "info" / "alternates").write_text("/tmp/foreign\n", encoding="utf-8")
-                return subprocess.CompletedProcess(argument_list, 0, str(git_dir) + "\n", "")
-            if "--is-shallow-repository" in argument_list:
-                return subprocess.CompletedProcess(
-                    argument_list,
-                    0,
-                    ("true" if self.shallow_repository else "false") + "\n",
-                    "",
-                )
-            return subprocess.CompletedProcess(argument_list, 0, str(root) + "\n", "")
+        assert environment_by_name_map["GIT_CONFIG_GLOBAL"] == "/dev/null"
+        assert environment_by_name_map["GIT_CONFIG_SYSTEM"] == "/dev/null"
+        assert "GIT_CONFIG" not in environment_by_name_map
+        if "init" in argument_list:
+            assert input_text is None
+            private_git_dir = Path(argument_list[-1])
+            (private_git_dir / "hooks").mkdir(parents=True)
+            (private_git_dir / "objects" / "info").mkdir(parents=True)
+            (private_git_dir / "info").mkdir(parents=True)
+            (private_git_dir / "refs").mkdir(parents=True)
+            (private_git_dir / "config").write_text("[core]\n\tbare = true\n", encoding="utf-8")
+            return subprocess.CompletedProcess(argument_list, 0, "", "")
         if argument_list[:2] == ["git", "config"]:
-            assert environment_by_name_map["GIT_CONFIG"] != "/dev/null"
+            assert input_text is not None
+            assert argument_list[2:4] == ["--file", "-"]
             if "--name-only" in argument_list:
                 return subprocess.CompletedProcess(
                     argument_list,
@@ -871,15 +944,22 @@ class _GhRunner:
                 "".join(f"{value}\x00" for value in value_list),
                 "",
             )
-        if "for-each-ref" in argument_list:
-            return subprocess.CompletedProcess(
-                argument_list,
-                0,
-                "".join(f"{ref_name}\n" for ref_name in self.replace_ref_list),
-                "",
-            )
+        assert input_text is None
         if "fetch" in argument_list:
             return subprocess.CompletedProcess(argument_list, 0, "", "")
+        if "merge-base" in argument_list:
+            return subprocess.CompletedProcess(argument_list, 0 if self.reviewed_base_is_ancestor else 1, "", "")
+        if "rev-parse" in argument_list:
+            revision = argument_list[-1]
+            if revision.endswith("^{tree}"):
+                return subprocess.CompletedProcess(argument_list, 0, self.constructed_merge_tree + "\n", "")
+            if revision == "refs/provider/reviewed-base^{commit}":
+                commit = self.base_commit
+            elif revision == "refs/provider/reviewed-head^{commit}":
+                commit = self.head_commit
+            else:
+                commit = revision.removesuffix("^{commit}")
+            return subprocess.CompletedProcess(argument_list, 0, commit + "\n", "")
         if "cat-file" in argument_list and "-p" in argument_list:
             payload = (
                 f"tree {self.merge_commit_tree}\n"
@@ -890,12 +970,8 @@ class _GhRunner:
                 "Merge reviewed pull request\n"
             )
             return subprocess.CompletedProcess(argument_list, 0, payload, "")
-        if "cat-file" in argument_list:
-            return subprocess.CompletedProcess(argument_list, 0, "", "")
-        if "merge-tree" in argument_list:
-            return subprocess.CompletedProcess(argument_list, 0, self.constructed_merge_tree + "\n", "")
         if "commit-tree" in argument_list:
-            return subprocess.CompletedProcess(argument_list, 0, COMMIT_TWO + "\n", "")
+            return subprocess.CompletedProcess(argument_list, 0, self.merge_commit + "\n", "")
         if "push" in argument_list:
             if self.advance_base_on_push:
                 self.remote_commit_by_ref_map[f"refs/heads/{self.base_branch}"] = "d" * 40
@@ -916,7 +992,7 @@ class _GhRunner:
             assert "--atomic" in argument_list
             base_ref = f"refs/heads/{self.base_branch}"
             head_ref = "refs/heads/linear/and-17"
-            self.remote_commit_by_ref_map[base_ref] = COMMIT_TWO
+            self.remote_commit_by_ref_map[base_ref] = self.merge_commit
             del self.remote_commit_by_ref_map[head_ref]
             self.operation_mutation_count += 1
             if not self.defer_merge_readback:
@@ -948,6 +1024,627 @@ def _included_response(
     reason = "OK" if status == 200 else "Not Found"
     stdout = f"HTTP/2.0 {status} {reason}\r\nContent-Type: application/json\r\n\r\n{json.dumps(payload)}"
     return subprocess.CompletedProcess(argument_list, 0 if status == 200 else 1, stdout, "")
+
+
+@dataclass(frozen=True, slots=True)
+class _RealGitHistory:
+    """Carry one local remote and exact commits for real-subprocess tests."""
+
+    remote_path: Path
+    task_path: Path
+    base_commit: str
+    head_commit: str
+    head_tree: str
+    merge_commit: str
+
+
+class _RealGitBoundaryRunner:
+    """Run Git as a real subprocess while keeping GitHub reads deterministic."""
+
+    def __init__(
+        self,
+        *,
+        provider: _GhRunner,
+        remote_path: Path,
+        isolated_home: Path,
+        mutate_task_config_path: Path | None = None,
+        inject_private_attributes: bool = False,
+        adopt_successful_push: bool = False,
+    ) -> None:
+        self.provider = provider
+        self.remote_path = remote_path
+        self.isolated_home = isolated_home
+        self.mutate_task_config_path = mutate_task_config_path
+        self.inject_private_attributes = inject_private_attributes
+        self.adopt_successful_push = adopt_successful_push
+        self.git_command_list: list[list[str]] = []
+        self.git_push_count = 0
+        self.task_config_mutated = False
+
+    def __call__(
+        self,
+        argument_list: Sequence[str],
+        *,
+        environment_by_name_map: Mapping[str, str],
+        input_text: str | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        """Delegate Git to the executable and GitHub/token reads to the fake provider."""
+
+        argument_list = list(argument_list)
+        if argument_list[0] != "git":
+            return self.provider(
+                argument_list,
+                environment_by_name_map=environment_by_name_map,
+                input_text=input_text,
+            )
+        assert environment_by_name_map["HOME"] == "/home/andrey"
+        assert environment_by_name_map["GIT_CONFIG_GLOBAL"] == "/dev/null"
+        assert environment_by_name_map["GIT_CONFIG_SYSTEM"] == "/dev/null"
+        assert environment_by_name_map["GIT_ATTR_NOSYSTEM"] == "1"
+        assert "GIT_CONFIG" not in environment_by_name_map
+        assert "CODEX_HOME" not in environment_by_name_map
+        transformed_argument_list = [
+            (
+                str(self.remote_path)
+                if argument == "https://github.com/antonov-andrey/example.git"
+                else "protocol.file.allow=always" if argument == "protocol.https.allow=always" else argument
+            )
+            for argument in argument_list
+        ]
+        self.git_command_list.append(list(transformed_argument_list))
+        if "push" in transformed_argument_list:
+            self.git_push_count += 1
+        child_environment = dict(environment_by_name_map)
+        child_environment["HOME"] = str(self.isolated_home)
+        completed_process = command_run(
+            transformed_argument_list,
+            environment_by_name_map=child_environment,
+            input_text=input_text,
+        )
+        if "push" in transformed_argument_list and completed_process.returncode == 0 and self.adopt_successful_push:
+            base_refspec = next(
+                argument
+                for argument in transformed_argument_list
+                if argument.endswith(":refs/heads/main") and not argument.startswith("--force-with-lease=")
+            )
+            self.provider.merge_commit = base_refspec.split(":", 1)[0]
+            self.provider.base_commit = self.provider.merge_commit
+            self.provider.state = "MERGED"
+        if "init" in transformed_argument_list and completed_process.returncode == 0:
+            private_git_dir = Path(transformed_argument_list[-1])
+            if self.mutate_task_config_path is not None:
+                self.mutate_task_config_path.write_text(
+                    "[include]\n\tpath = /tmp/attacker-git-config\n"
+                    '[url "https://attacker.invalid/"]\n\tinsteadOf = https://github.com/\n'
+                    '[http "https://github.com/"]\n\textraHeader = Authorization: bearer hidden\n'
+                    '[merge "attacker"]\n\tdriver = /bin/false\n',
+                    encoding="utf-8",
+                )
+                self.task_config_mutated = True
+            if self.inject_private_attributes:
+                (private_git_dir / "info").mkdir(exist_ok=True)
+                (private_git_dir / "info" / "attributes").write_text(
+                    "*.txt merge=attacker\n",
+                    encoding="utf-8",
+                )
+        return completed_process
+
+
+def _real_git_environment(home: Path) -> dict[str, str]:
+    """Return a deterministic isolated environment for test repository construction."""
+
+    return {
+        "GIT_ATTR_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_SYSTEM": "/dev/null",
+        "GIT_TERMINAL_PROMPT": "0",
+        "HOME": str(home),
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "PATH": "/usr/bin:/bin",
+    }
+
+
+def _real_git_checked(argument_list: list[str], *, home: Path, input_text: str | None = None) -> str:
+    """Run one successful real Git subprocess for a test fixture."""
+
+    completed_process = command_run(
+        argument_list,
+        environment_by_name_map=_real_git_environment(home),
+        input_text=input_text,
+    )
+    assert completed_process.returncode == 0, completed_process.stderr
+    return completed_process.stdout.strip()
+
+
+def _real_git_history_create(
+    root: Path,
+    *,
+    divergent: bool,
+    altered_merge: bool,
+) -> _RealGitHistory:
+    """Create exact local refs and objects used through the production Git boundary."""
+
+    root.mkdir()
+    home = root / "fixture-home"
+    home.mkdir()
+    source_path = root / "source"
+    task_path = root / "task"
+    remote_path = root / "remote.git"
+    source_path.mkdir()
+    task_path.mkdir()
+    _real_git_checked(["git", "init", "--initial-branch=main", str(source_path)], home=home)
+    (source_path / "shared.txt").write_text("root\n", encoding="utf-8")
+    _real_git_checked(["git", "-C", str(source_path), "add", "shared.txt"], home=home)
+    _real_git_checked(
+        [
+            "git",
+            "-C",
+            str(source_path),
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.test",
+            "commit",
+            "-m",
+            "root",
+        ],
+        home=home,
+    )
+    root_commit = _real_git_checked(["git", "-C", str(source_path), "rev-parse", "HEAD"], home=home)
+    if divergent:
+        (source_path / "base.txt").write_text("base\n", encoding="utf-8")
+        _real_git_checked(["git", "-C", str(source_path), "add", "base.txt"], home=home)
+        _real_git_checked(
+            [
+                "git",
+                "-C",
+                str(source_path),
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.test",
+                "commit",
+                "-m",
+                "base",
+            ],
+            home=home,
+        )
+        base_commit = _real_git_checked(["git", "-C", str(source_path), "rev-parse", "HEAD"], home=home)
+        _real_git_checked(
+            ["git", "-C", str(source_path), "checkout", "-b", "linear/and-17", root_commit],
+            home=home,
+        )
+    else:
+        base_commit = root_commit
+        _real_git_checked(["git", "-C", str(source_path), "checkout", "-b", "linear/and-17"], home=home)
+    (source_path / "head.txt").write_text("head\n", encoding="utf-8")
+    _real_git_checked(["git", "-C", str(source_path), "add", "head.txt"], home=home)
+    _real_git_checked(
+        [
+            "git",
+            "-C",
+            str(source_path),
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.test",
+            "commit",
+            "-m",
+            "head",
+        ],
+        home=home,
+    )
+    head_commit = _real_git_checked(["git", "-C", str(source_path), "rev-parse", "HEAD"], home=home)
+    head_tree = _real_git_checked(["git", "-C", str(source_path), "rev-parse", f"{head_commit}^{{tree}}"], home=home)
+    merge_commit = ""
+    if altered_merge:
+        base_tree = _real_git_checked(
+            ["git", "-C", str(source_path), "rev-parse", f"{base_commit}^{{tree}}"],
+            home=home,
+        )
+        merge_commit = _real_git_checked(
+            [
+                "git",
+                "-C",
+                str(source_path),
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.test",
+                "commit-tree",
+                base_tree,
+                "-p",
+                base_commit,
+                "-p",
+                head_commit,
+                "-m",
+                "malicious altered merge",
+            ],
+            home=home,
+        )
+    _real_git_checked(
+        ["git", "-c", "protocol.file.allow=always", "clone", "--bare", str(source_path), str(remote_path)],
+        home=home,
+    )
+    remote_base_commit = merge_commit or base_commit
+    _real_git_checked(
+        ["git", f"--git-dir={remote_path}", "symbolic-ref", "HEAD", "refs/heads/main"],
+        home=home,
+    )
+    _real_git_checked(
+        ["git", f"--git-dir={remote_path}", "update-ref", "refs/heads/main", remote_base_commit],
+        home=home,
+    )
+    if altered_merge:
+        _real_git_checked(
+            ["git", f"--git-dir={remote_path}", "update-ref", "-d", "refs/heads/linear/and-17"],
+            home=home,
+        )
+    else:
+        _real_git_checked(
+            ["git", f"--git-dir={remote_path}", "update-ref", "refs/heads/linear/and-17", head_commit],
+            home=home,
+        )
+    git_dir = task_path / ".git"
+    (git_dir / "hooks").mkdir(parents=True)
+    (git_dir / "objects" / "info").mkdir(parents=True)
+    (git_dir / "info").mkdir(parents=True)
+    (git_dir / "refs").mkdir(parents=True)
+    (git_dir / "HEAD").write_text("ref: refs/heads/linear/and-17\n", encoding="utf-8")
+    (git_dir / "config").write_text(
+        "[core]\n\trepositoryformatversion = 0\n"
+        '[remote "origin"]\n\turl = git@github.com:antonov-andrey/example.git\n'
+        "\tfetch = +refs/heads/*:refs/remotes/origin/*\n",
+        encoding="utf-8",
+    )
+    return _RealGitHistory(
+        remote_path=remote_path,
+        task_path=task_path,
+        base_commit=base_commit,
+        head_commit=head_commit,
+        head_tree=head_tree,
+        merge_commit=merge_commit,
+    )
+
+
+def test_real_git_global_include_url_header_merge_driver_and_attributes_are_closed(tmp_path: Path) -> None:
+    """Real Git cannot load any malicious global config or attribute source."""
+
+    home = tmp_path / "hostile-home"
+    repository_path = tmp_path / "repository"
+    home.mkdir()
+    include_path = home / "included.gitconfig"
+    marker_path = tmp_path / "merge-driver-invoked"
+    include_path.write_text(
+        '[url "https://attacker.invalid/"]\n\tinsteadOf = https://github.com/\n'
+        '[http "https://github.com/"]\n\textraHeader = Authorization: bearer hidden\n'
+        f'[merge "attacker"]\n\tdriver = /usr/bin/touch {marker_path}\n',
+        encoding="utf-8",
+    )
+    (home / ".gitconfig").write_text(f"[include]\n\tpath = {include_path}\n", encoding="utf-8")
+    global_attributes_path = home / ".config" / "git" / "attributes"
+    global_attributes_path.parent.mkdir(parents=True)
+    global_attributes_path.write_text("*.txt merge=attacker\n", encoding="utf-8")
+    _real_git_checked(["git", "init", str(repository_path)], home=home)
+    _real_git_checked(
+        [
+            "git",
+            "-C",
+            str(repository_path),
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/antonov-andrey/example.git",
+        ],
+        home=home,
+    )
+    closed_environment = _real_git_environment(home)
+    ineffective_git_config_environment = dict(closed_environment)
+    del ineffective_git_config_environment["GIT_CONFIG_GLOBAL"]
+    del ineffective_git_config_environment["GIT_CONFIG_SYSTEM"]
+    ineffective_git_config_environment["GIT_CONFIG"] = "/dev/null"
+    ineffective_url_process = command_run(
+        ["git", "-C", str(repository_path), "remote", "get-url", "origin"],
+        environment_by_name_map=ineffective_git_config_environment,
+    )
+    closed_url_process = command_run(
+        ["git", "-C", str(repository_path), "remote", "get-url", "origin"],
+        environment_by_name_map=closed_environment,
+    )
+    config_process = command_run(
+        [
+            "git",
+            "-C",
+            str(repository_path),
+            "-c",
+            "core.attributesFile=/dev/null",
+            "config",
+            "--includes",
+            "--get-regexp",
+            "^(include|url|http|merge)\\.",
+        ],
+        environment_by_name_map=closed_environment,
+    )
+    attribute_process = command_run(
+        [
+            "git",
+            "-C",
+            str(repository_path),
+            "-c",
+            "core.attributesFile=/dev/null",
+            "check-attr",
+            "merge",
+            "--",
+            "conflict.txt",
+        ],
+        environment_by_name_map=closed_environment,
+    )
+
+    assert ineffective_url_process.returncode == 0
+    assert ineffective_url_process.stdout == "https://attacker.invalid/antonov-andrey/example.git\n"
+    assert closed_url_process.returncode == 0
+    assert closed_url_process.stdout == "https://github.com/antonov-andrey/example.git\n"
+    assert config_process.returncode == 1
+    assert config_process.stdout == ""
+    assert attribute_process.returncode == 0
+    assert attribute_process.stdout == "conflict.txt: merge: unspecified\n"
+    assert not marker_path.exists()
+
+
+@pytest.mark.parametrize(
+    "credential_request",
+    (
+        "protocol=https\nhost=attacker.invalid\npath=antonov-andrey/example.git\n\n",
+        "protocol=https\nhost=github.com\npath=attacker/example.git\n\n",
+    ),
+)
+def test_real_git_destination_mismatch_never_receives_invocation_credential(
+    credential_request: str,
+) -> None:
+    """The real credential protocol fails before emitting a token to another destination."""
+
+    captured_environment: dict[str, str] = {}
+
+    def recording_runner(
+        argument_list: Sequence[str],
+        *,
+        environment_by_name_map: Mapping[str, str],
+        input_text: str | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        captured_environment.update(environment_by_name_map)
+        return command_run(
+            argument_list,
+            environment_by_name_map=environment_by_name_map,
+            input_text=input_text,
+        )
+
+    principal = GitHubPrincipal(login="octocat", user_id=7, node_id="U_octocat")
+    repository = RepositoryIdentity("antonov-andrey/example")
+    completed_process = command_closed_run(
+        recording_runner,
+        [
+            "git",
+            *git_credential_config_argument_list_get(principal, repository),
+            "credential",
+            "fill",
+        ],
+        input_text=credential_request,
+    )
+
+    assert completed_process.returncode != 0
+    assert "password=" not in completed_process.stdout
+    assert "x-access-token" not in completed_process.stdout
+    assert captured_environment["HOME"] == "/home/andrey"
+    assert captured_environment["GIT_CONFIG_GLOBAL"] == "/dev/null"
+    assert captured_environment["GIT_CONFIG_SYSTEM"] == "/dev/null"
+    assert "CODEX_HOME" not in captured_environment
+
+
+def test_real_git_divergent_merge_ignores_global_and_task_attributes_without_push(tmp_path: Path) -> None:
+    """Divergent reviewed commits cannot invoke a merge driver or produce an altered tree."""
+
+    history = _real_git_history_create(tmp_path / "history", divergent=True, altered_merge=False)
+    hostile_home = tmp_path / "boundary-home"
+    hostile_home.mkdir()
+    marker_path = tmp_path / "merge-driver-invoked"
+    included_config_path = hostile_home / "included.gitconfig"
+    included_config_path.write_text(
+        '[url "https://attacker.invalid/"]\n\tinsteadOf = https://github.com/\n'
+        '[http "https://github.com/"]\n\textraHeader = Authorization: bearer hidden\n'
+        f'[merge "attacker"]\n\tdriver = /usr/bin/touch {marker_path}\n',
+        encoding="utf-8",
+    )
+    (hostile_home / ".gitconfig").write_text(
+        f"[include]\n\tpath = {included_config_path}\n[core]\n\tattributesFile = {hostile_home / 'attributes'}\n",
+        encoding="utf-8",
+    )
+    (hostile_home / "attributes").write_text("*.txt merge=attacker\n", encoding="utf-8")
+    (history.task_path / ".git" / "info" / "attributes").write_text(
+        "*.txt merge=attacker\n",
+        encoding="utf-8",
+    )
+    provider = _GhRunner(base_commit=history.base_commit, head_commit=history.head_commit)
+    runner = _RealGitBoundaryRunner(
+        provider=provider,
+        remote_path=history.remote_path,
+        isolated_home=hostile_home,
+    )
+
+    with pytest.raises(GitHubContractError, match="base is not an ancestor"):
+        GitHubPullRequestBoundary(runner).merge(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=history.base_commit,
+            reviewed_head_commit=history.head_commit,
+            merge_method="merge",
+            repository_path=history.task_path,
+        )
+
+    assert runner.git_push_count == 0
+    assert provider.operation_mutation_count == 0
+    assert not marker_path.exists()
+    assert not any("merge-tree" in command for command in runner.git_command_list)
+
+
+def test_real_git_task_local_config_change_after_audit_cannot_redirect_private_operations(tmp_path: Path) -> None:
+    """A post-audit task config replacement is never used for objects, network or recovery."""
+
+    history = _real_git_history_create(tmp_path / "history", divergent=True, altered_merge=False)
+    hostile_home = tmp_path / "boundary-home"
+    hostile_home.mkdir()
+    task_config_path = history.task_path / ".git" / "config"
+    provider = _GhRunner(base_commit=history.base_commit, head_commit=history.head_commit)
+    runner = _RealGitBoundaryRunner(
+        provider=provider,
+        remote_path=history.remote_path,
+        isolated_home=hostile_home,
+        mutate_task_config_path=task_config_path,
+    )
+
+    with pytest.raises(GitHubContractError, match="base is not an ancestor"):
+        GitHubPullRequestBoundary(runner).merge(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=history.base_commit,
+            reviewed_head_commit=history.head_commit,
+            merge_method="merge",
+            repository_path=history.task_path,
+        )
+
+    assert runner.task_config_mutated is True
+    assert "attacker.invalid" in task_config_path.read_text(encoding="utf-8")
+    assert runner.git_push_count == 0
+    assert provider.operation_mutation_count == 0
+    assert all(str(history.task_path) not in argument for command in runner.git_command_list for argument in command)
+
+
+def test_real_git_private_info_attributes_injection_fails_before_fetch_or_push(tmp_path: Path) -> None:
+    """The resolved provider-owned info/attributes path must remain absent."""
+
+    history = _real_git_history_create(tmp_path / "history", divergent=False, altered_merge=False)
+    hostile_home = tmp_path / "boundary-home"
+    hostile_home.mkdir()
+    provider = _GhRunner(base_commit=history.base_commit, head_commit=history.head_commit)
+    runner = _RealGitBoundaryRunner(
+        provider=provider,
+        remote_path=history.remote_path,
+        isolated_home=hostile_home,
+        inject_private_attributes=True,
+    )
+
+    with pytest.raises(GitHubContractError, match="Private Git repository contains unsafe"):
+        GitHubPullRequestBoundary(runner).merge(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=history.base_commit,
+            reviewed_head_commit=history.head_commit,
+            merge_method="merge",
+            repository_path=history.task_path,
+        )
+
+    assert runner.git_push_count == 0
+    assert provider.operation_mutation_count == 0
+    assert not any("fetch" in command for command in runner.git_command_list)
+
+
+def test_real_git_recovery_rejects_altered_tree_despite_global_and_task_attributes(tmp_path: Path) -> None:
+    """Recovery accepts only the exact reviewed head tree and ordered parents."""
+
+    history = _real_git_history_create(tmp_path / "history", divergent=False, altered_merge=True)
+    hostile_home = tmp_path / "boundary-home"
+    hostile_home.mkdir()
+    (hostile_home / ".gitconfig").write_text(
+        f"[core]\n\tattributesFile = {hostile_home / 'attributes'}\n" '[merge "attacker"]\n\tdriver = /bin/true\n',
+        encoding="utf-8",
+    )
+    (hostile_home / "attributes").write_text("*.txt merge=attacker\n", encoding="utf-8")
+    (history.task_path / ".git" / "info" / "attributes").write_text(
+        "*.txt merge=attacker\n",
+        encoding="utf-8",
+    )
+    provider = _GhRunner(base_commit=history.merge_commit, head_commit=history.head_commit)
+    provider.state = "MERGED"
+    provider.merge_commit = history.merge_commit
+    runner = _RealGitBoundaryRunner(
+        provider=provider,
+        remote_path=history.remote_path,
+        isolated_home=hostile_home,
+    )
+
+    with pytest.raises(GitHubContractError, match="exact reviewed merge identity"):
+        GitHubPullRequestBoundary(runner).merge(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=history.base_commit,
+            reviewed_head_commit=history.head_commit,
+            merge_method="merge",
+            repository_path=history.task_path,
+        )
+
+    assert history.merge_commit
+    assert runner.git_push_count == 0
+    assert provider.operation_mutation_count == 0
+    assert not any("merge-tree" in command for command in runner.git_command_list)
+
+
+def test_real_git_private_repository_constructs_and_recovers_exact_head_tree(tmp_path: Path) -> None:
+    """The complete real Git path pushes and re-proves one exact two-parent result."""
+
+    history = _real_git_history_create(tmp_path / "history", divergent=False, altered_merge=False)
+    isolated_home = tmp_path / "boundary-home"
+    isolated_home.mkdir()
+    provider = _GhRunner(base_commit=history.base_commit, head_commit=history.head_commit)
+    runner = _RealGitBoundaryRunner(
+        provider=provider,
+        remote_path=history.remote_path,
+        isolated_home=isolated_home,
+        adopt_successful_push=True,
+    )
+
+    merged = GitHubPullRequestBoundary(runner).merge(
+        repository=RepositoryIdentity("antonov-andrey/example"),
+        number=17,
+        issue_identifier="AND-17",
+        base_branch="main",
+        head_branch="linear/and-17",
+        reviewed_base_commit=history.base_commit,
+        reviewed_head_commit=history.head_commit,
+        merge_method="merge",
+        repository_path=history.task_path,
+    )
+
+    isolated_git_home = tmp_path / "inspection-home"
+    isolated_git_home.mkdir()
+    commit_payload = _real_git_checked(
+        ["git", f"--git-dir={history.remote_path}", "cat-file", "-p", merged.merge_commit],
+        home=isolated_git_home,
+    )
+    ref_output = _real_git_checked(
+        ["git", f"--git-dir={history.remote_path}", "for-each-ref", "--format=%(refname)", "refs/heads/"],
+        home=isolated_git_home,
+    )
+
+    assert merged.state == "MERGED"
+    assert f"tree {history.head_tree}\n" in commit_payload
+    assert f"parent {history.base_commit}\nparent {history.head_commit}\n" in commit_payload
+    assert ref_output == "refs/heads/main"
+    assert runner.git_push_count == 1
+    assert runner.provider.repository_policy_read_count == 2
+    assert not any("merge-tree" in command for command in runner.git_command_list)
 
 
 def test_github_inspect_reads_current_base_oid_for_review_identity() -> None:
@@ -1093,7 +1790,9 @@ def test_github_merge_binds_exact_reviewed_base_head_and_typed_zero_required_che
     assert runner.operation_mutation_count == 1
     push_environment = runner.environment_list[runner.command_list.index(push_command)]
     assert push_environment["HOME"] == "/home/andrey"
-    assert push_environment["GIT_CONFIG"] == "/dev/null"
+    assert push_environment["GIT_CONFIG_GLOBAL"] == "/dev/null"
+    assert push_environment["GIT_CONFIG_SYSTEM"] == "/dev/null"
+    assert "GIT_CONFIG" not in push_environment
     assert push_environment["GIT_TERMINAL_PROMPT"] == "0"
     assert "CODEX_HOME" not in push_environment
     assert "GIT_ASKPASS" not in push_environment
@@ -1101,6 +1800,171 @@ def test_github_merge_binds_exact_reviewed_base_head_and_typed_zero_required_che
     view_command = next(item for item in runner.command_list if item[1:3] == ["pr", "view"])
     assert "baseRefOid" in view_command[-1]
     assert "reviewDecision" not in view_command[-1]
+
+
+def test_atomic_merge_reads_exact_principal_bound_repository_policy_before_construction_and_push(
+    tmp_path: Path,
+) -> None:
+    """Both complete policy reads surround construction and bind the same principal."""
+
+    runner = _GhRunner()
+    GitHubPullRequestBoundary(runner).merge(
+        repository=RepositoryIdentity("antonov-andrey/example"),
+        number=17,
+        issue_identifier="AND-17",
+        base_branch="main",
+        head_branch="linear/and-17",
+        reviewed_base_commit=COMMIT_BASE,
+        reviewed_head_commit=COMMIT_ONE,
+        merge_method="merge",
+        repository_path=tmp_path,
+    )
+
+    policy_index_list = [
+        index
+        for index, command in enumerate(runner.command_list)
+        if command[1:5] == ["api", "--hostname", "github.com", "repos/antonov-andrey/example"]
+    ]
+    construction_index = next(index for index, command in enumerate(runner.command_list) if "commit-tree" in command)
+    push_index = next(index for index, command in enumerate(runner.command_list) if "push" in command)
+    assert len(policy_index_list) == 2
+    assert policy_index_list[0] < construction_index < policy_index_list[1] < push_index
+    assert runner.execution_identity_read_count >= 6
+
+
+def test_atomic_merge_rejects_identical_reviewed_base_and_head_before_git_mutation(tmp_path: Path) -> None:
+    """Commit construction cannot collapse duplicate ordered parents after review."""
+
+    runner = _GhRunner(base_commit=COMMIT_BASE, head_commit=COMMIT_BASE)
+
+    with pytest.raises(GitHubContractError, match="distinct commits"):
+        GitHubPullRequestBoundary(runner).merge(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_BASE,
+            merge_method="merge",
+            repository_path=tmp_path,
+        )
+
+    assert runner.operation_mutation_count == 0
+    assert not any(command[0] == "git" for command in runner.command_list)
+
+
+@pytest.mark.parametrize(
+    ("field_by_name_map", "message"),
+    (
+        ({"allow_merge_commit": False}, "merge method is not enabled"),
+        ({"disabled": True}, "policy is inactive"),
+        ({"allow_merge_commit": "true"}, "boolean field"),
+        ({"merge_commit_title": "UNKNOWN"}, "merge-policy option"),
+        ({"full_name": "attacker/example"}, "identity differs"),
+    ),
+)
+def test_atomic_merge_rejects_disabled_malformed_or_identity_conflicting_repository_policy_without_ref_mutation(
+    tmp_path: Path,
+    field_by_name_map: dict[str, object],
+    message: str,
+) -> None:
+    """A strict fresh repository response cannot be partial, disabled or foreign."""
+
+    runner = _GhRunner()
+    runner.repository_policy_field_by_name_map.update(field_by_name_map)
+
+    with pytest.raises(GitHubContractError, match=message):
+        GitHubPullRequestBoundary(runner).merge(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+            repository_path=tmp_path,
+        )
+
+    assert runner.operation_mutation_count == 0
+    assert not any("commit-tree" in command or "push" in command for command in runner.command_list)
+
+
+def test_atomic_merge_rejects_missing_repository_policy_field_without_ref_mutation(tmp_path: Path) -> None:
+    """Every relevant provider field is mandatory rather than defaulted."""
+
+    runner = _GhRunner()
+    payload = runner._repository_policy_payload_get()
+    del payload["allow_merge_commit"]
+    runner.repository_policy_payload_override = payload
+
+    with pytest.raises(GitHubContractError, match="response has another shape"):
+        GitHubPullRequestBoundary(runner).merge(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+            repository_path=tmp_path,
+        )
+
+    assert runner.operation_mutation_count == 0
+    assert not any("commit-tree" in command or "push" in command for command in runner.command_list)
+
+
+def test_atomic_merge_rejects_repository_policy_drift_after_construction_without_ref_mutation(tmp_path: Path) -> None:
+    """Any relevant metadata change between the two reads stops before push."""
+
+    runner = _GhRunner()
+    runner.repository_policy_drift_field_by_name_map["delete_branch_on_merge"] = True
+
+    with pytest.raises(GitHubContractError, match="policy changed during merge construction"):
+        GitHubPullRequestBoundary(runner).merge(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+            repository_path=tmp_path,
+        )
+
+    assert any("commit-tree" in command for command in runner.command_list)
+    assert runner.operation_mutation_count == 0
+    assert not any("push" in command for command in runner.command_list)
+
+
+def test_atomic_merge_rejects_principal_change_around_repository_policy_without_ref_mutation(tmp_path: Path) -> None:
+    """The repository policy is accepted only between matching fresh identity reads."""
+
+    runner = _GhRunner()
+    runner.changed_execution_login = "mallory"
+    runner.changed_execution_user_id = 8
+    runner.changed_execution_node_id = "U_mallory"
+    runner.execution_identity_change_after_read_count = 3
+
+    with pytest.raises(GitHubContractError, match="identity changed before Git mutation"):
+        GitHubPullRequestBoundary(runner).merge(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+            repository_path=tmp_path,
+        )
+
+    assert runner.repository_policy_read_count == 1
+    assert runner.operation_mutation_count == 0
+    assert not any("commit-tree" in command or "push" in command for command in runner.command_list)
 
 
 @pytest.mark.parametrize(
@@ -1212,7 +2076,7 @@ def test_atomic_merge_rejects_local_authorization_or_url_redirection_without_mut
         )
 
     assert runner.operation_mutation_count == 0
-    assert not any("merge-tree" in item or "push" in item for item in runner.command_list)
+    assert not any("commit-tree" in item or "push" in item for item in runner.command_list)
 
 
 @pytest.mark.parametrize(
@@ -1261,7 +2125,9 @@ def test_atomic_merge_rejects_mutating_pre_push_hook_even_with_no_verify(tmp_pat
     """Repository hooks are rejected and also disabled on the atomic push."""
 
     runner = _GhRunner()
-    runner.pre_push_hook = True
+    hook_path = tmp_path / ".git" / "hooks" / "pre-push"
+    hook_path.write_text(f"#!/bin/sh\nprintf attacked > {tmp_path / 'hook-mutated'}\n", encoding="utf-8")
+    hook_path.chmod(0o755)
 
     with pytest.raises(GitHubContractError, match="hook or object substitution"):
         GitHubPullRequestBoundary(runner).merge(
@@ -1285,30 +2151,9 @@ def test_atomic_merge_rejects_replace_refs_without_mutation(tmp_path: Path) -> N
     """A local replacement object cannot alter reviewed commit or tree semantics."""
 
     runner = _GhRunner()
-    runner.replace_ref_list = [f"refs/replace/{COMMIT_BASE}"]
-
-    with pytest.raises(GitHubContractError, match="replace refs"):
-        GitHubPullRequestBoundary(runner).merge(
-            repository=RepositoryIdentity("antonov-andrey/example"),
-            number=17,
-            issue_identifier="AND-17",
-            base_branch="main",
-            head_branch="linear/and-17",
-            reviewed_base_commit=COMMIT_BASE,
-            reviewed_head_commit=COMMIT_ONE,
-            merge_method="merge",
-            repository_path=tmp_path,
-        )
-
-    assert runner.operation_mutation_count == 0
-    assert not any("merge-tree" in item or "push" in item for item in runner.command_list)
-
-
-def test_atomic_merge_rejects_alternate_object_store_without_mutation(tmp_path: Path) -> None:
-    """Repository-local alternate object storage cannot supply reviewed objects."""
-
-    runner = _GhRunner()
-    runner.alternate_object_store = True
+    replace_ref_path = tmp_path / ".git" / "refs" / "replace" / COMMIT_BASE
+    replace_ref_path.parent.mkdir(parents=True)
+    replace_ref_path.write_text(COMMIT_ONE + "\n", encoding="utf-8")
 
     with pytest.raises(GitHubContractError, match="hook or object substitution"):
         GitHubPullRequestBoundary(runner).merge(
@@ -1324,7 +2169,30 @@ def test_atomic_merge_rejects_alternate_object_store_without_mutation(tmp_path: 
         )
 
     assert runner.operation_mutation_count == 0
-    assert not any("merge-tree" in item or "push" in item for item in runner.command_list)
+    assert not any("commit-tree" in item or "push" in item for item in runner.command_list)
+
+
+def test_atomic_merge_rejects_alternate_object_store_without_mutation(tmp_path: Path) -> None:
+    """Repository-local alternate object storage cannot supply reviewed objects."""
+
+    runner = _GhRunner()
+    (tmp_path / ".git" / "objects" / "info" / "alternates").write_text("/tmp/foreign\n", encoding="utf-8")
+
+    with pytest.raises(GitHubContractError, match="hook or object substitution"):
+        GitHubPullRequestBoundary(runner).merge(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+            repository_path=tmp_path,
+        )
+
+    assert runner.operation_mutation_count == 0
+    assert not any("commit-tree" in item or "push" in item for item in runner.command_list)
 
 
 @pytest.mark.parametrize(
@@ -1360,7 +2228,7 @@ def test_atomic_merge_rejects_actual_credential_token_principal_mismatch_without
 
     assert any(item[0] == "/bin/sh" for item in runner.command_list)
     assert runner.operation_mutation_count == 0
-    assert not any("merge-tree" in item or "push" in item for item in runner.command_list)
+    assert not any("commit-tree" in item or "push" in item for item in runner.command_list)
 
 
 def test_atomic_merge_rejects_changed_gh_principal_before_git_mutation(tmp_path: Path) -> None:
@@ -2145,7 +3013,8 @@ def test_public_reviewed_inspection_proves_terminal_merge_before_reporting_succe
     assert any(
         item[1:4] == ["api", "--hostname", "github.com"] and "/pulls/17" in item[4] for item in runner.command_list
     )
-    assert any("merge-tree" in item for item in runner.command_list)
+    assert any("merge-base" in item for item in runner.command_list)
+    assert any("rev-parse" in item and item[-1].endswith("^{tree}") for item in runner.command_list)
     assert any("cat-file" in item and "-p" in item for item in runner.command_list)
     assert any("ls-remote" in item for item in runner.command_list)
     assert not any(item[1:3] == ["api", "--include"] for item in runner.command_list)
@@ -2169,13 +3038,13 @@ def test_public_terminal_inspection_requires_repository_for_immutable_proof() ->
             merge_method="merge",
         )
 
-    assert not any("fetch" in item or "merge-tree" in item for item in runner.command_list)
+    assert not any("fetch" in item or "commit-tree" in item for item in runner.command_list)
 
 
 @pytest.mark.parametrize(
     ("reviewed_base_commit", "reviewed_head_commit", "message"),
     (
-        (COMMIT_ONE, COMMIT_ONE, "exact reviewed merge identity"),
+        (COMMIT_ONE, COMMIT_ONE, "distinct commits"),
         (COMMIT_BASE, COMMIT_TWO, "head changed after independent review"),
     ),
 )
@@ -2231,7 +3100,7 @@ def test_public_terminal_inspection_rejects_unprovable_strategy(
             repository_path=tmp_path,
         )
 
-    assert not any("fetch" in item or "merge-tree" in item for item in runner.command_list)
+    assert not any("fetch" in item or "commit-tree" in item for item in runner.command_list)
 
 
 @pytest.mark.parametrize(
