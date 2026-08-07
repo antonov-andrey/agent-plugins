@@ -83,8 +83,8 @@ class GitHubPullRequestBoundary:
         active_snapshot_list: list[PullRequestSnapshot] = []
         for existing_number in existing_number_list:
             snapshot = self.inspect(repository=repository, number=existing_number)
-            snapshot.integration_identity_require(issue_identifier)
             snapshot.target_require(base_branch=base_branch, head_branch=head_branch)
+            snapshot.task_branch_identity_require(issue_identifier)
             if snapshot.state != "CLOSED":
                 active_snapshot_list.append(snapshot)
         if len(active_snapshot_list) > 1:
@@ -93,6 +93,7 @@ class GitHubPullRequestBoundary:
             snapshot = active_snapshot_list[0]
             if snapshot.state != "OPEN":
                 raise GitHubContractError("Existing exact task pull request cannot be adopted in its current state")
+            snapshot.integration_identity_require(issue_identifier)
             return snapshot
         output = self._checked(
             (
@@ -112,8 +113,11 @@ class GitHubPullRequestBoundary:
         ).stdout.strip()
         number = _pr_number_from_url(output)
         snapshot = self.inspect(repository=repository, number=number)
-        snapshot.integration_identity_require(issue_identifier)
         snapshot.target_require(base_branch=base_branch, head_branch=head_branch)
+        snapshot.task_branch_identity_require(issue_identifier)
+        if snapshot.state != "OPEN":
+            raise GitHubContractError("Created exact task pull request is not open")
+        snapshot.integration_identity_require(issue_identifier)
         return snapshot
 
     def matching_number_list(
@@ -418,13 +422,14 @@ class GitHubPullRequestBoundary:
         """
 
         snapshot = self.inspect(repository=repository, number=number)
-        snapshot.integration_identity_require(issue_identifier)
         snapshot.target_require(base_branch=base_branch, head_branch=head_branch)
+        snapshot.task_branch_identity_require(issue_identifier)
         if snapshot.state == "OPEN":
+            snapshot.integration_identity_require(issue_identifier)
             self._checked(("pr", "close", str(number), "--repo", repository.value))
             snapshot = self.inspect(repository=repository, number=number)
-            snapshot.integration_identity_require(issue_identifier)
             snapshot.target_require(base_branch=base_branch, head_branch=head_branch)
+            snapshot.task_branch_identity_require(issue_identifier)
         if snapshot.state not in {"CLOSED", "MERGED"}:
             raise GitHubContractError("Canceled-task pull request did not reach a terminal state")
         return snapshot

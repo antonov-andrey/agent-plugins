@@ -1614,7 +1614,7 @@ def test_successful_cleanup_rejects_closed_unmerged_only_history(tmp_path: Path)
         repository=repository_identity,
         number=8,
         url="https://github.com/antonov-andrey/example/pull/8",
-        title="AND-121 interrupted merge",
+        title="Historical candidate title was edited",
         state="CLOSED",
         draft=False,
         base_branch="main",
@@ -1680,7 +1680,7 @@ def test_successful_cleanup_selects_merged_candidate_over_closed_unmerged_histor
         repository=repository_identity,
         number=8,
         url="https://github.com/antonov-andrey/example/pull/8",
-        title="AND-121 interrupted merge",
+        title="Historical candidate title was edited",
         state="CLOSED",
         draft=False,
         base_branch="main",
@@ -1699,6 +1699,7 @@ def test_successful_cleanup_selects_merged_candidate_over_closed_unmerged_histor
         closed_snapshot,
         number=17,
         url="https://github.com/antonov-andrey/example/pull/17",
+        title="Merged candidate title was edited",
         state="MERGED",
         merged_at=datetime.now(timezone.utc),
         merge_commit="b" * 40,
@@ -1746,6 +1747,82 @@ def test_successful_cleanup_selects_merged_candidate_over_closed_unmerged_histor
             },
         )
     )
+
+
+def test_canceled_cleanup_accepts_closed_history_without_issue_title(tmp_path: Path) -> None:
+    """Canceled cleanup selects exact closed history without mutable title identity."""
+
+    repository_identity = RepositoryIdentity("antonov-andrey/example")
+    snapshot = PullRequestSnapshot(
+        repository=repository_identity,
+        number=8,
+        url="https://github.com/antonov-andrey/example/pull/8",
+        title="Historical candidate title was edited",
+        state="CLOSED",
+        draft=False,
+        base_branch="main",
+        base_commit="c" * 40,
+        head_branch="linear/and-121",
+        head_commit="a" * 40,
+        merge_state="UNKNOWN",
+        merged_at=None,
+        merge_commit="",
+        merged_by_login="",
+        merged_by_user_id=0,
+        merged_by_node_id="",
+        required_check_list=[],
+    )
+
+    class Repository:
+        origin_identity = "https://github.com/antonov-andrey/example"
+        request = RepositoryRequest("https://github.com/antonov-andrey/example.git", "main", "")
+
+    class GitHub:
+        close_count = 0
+
+        @staticmethod
+        def matching_number_list(**_kwargs: object) -> list[int]:
+            return [8]
+
+        @staticmethod
+        def inspect(**_kwargs: object) -> PullRequestSnapshot:
+            return snapshot
+
+        def close_if_open(self, **_kwargs: object) -> PullRequestSnapshot:
+            self.close_count += 1
+            return snapshot
+
+    request = CleanupRequest(
+        issue_identifier="AND-121",
+        authority=CleanupAuthority(
+            scope="terminal-issue",
+            issue_status="Canceled",
+            project_status="Canceled",
+            final_acceptance_done=False,
+            all_other_project_nodes_terminal=False,
+            unresolved_remediation_blocker_count=0,
+        ),
+        repository_list=[Repository.request],
+        pull_request_list=[PullRequestReference(repository=repository_identity, number=8)],
+        resource_list=[],
+    )
+    github = GitHub()
+    reconciler = _task_cleanup_reconciler(
+        WorkspaceConfig(tmp_path.resolve()),
+        github=github,  # type: ignore[arg-type]
+    )
+    state = CleanupState(
+        request=request,
+        repository_by_origin_identity_map={
+            Repository.request.origin_url: Repository(),  # type: ignore[dict-item]
+        },
+    )
+
+    reconciler._pull_request_contract_require(state)
+    reconciler._pull_request_reconcile(state)
+
+    assert state.closed_pull_request_count == 0
+    assert github.close_count == 1
 
 
 @pytest.mark.parametrize(

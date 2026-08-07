@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from git_host.model import RepositoryIdentity
+from git_host.model import PullRequestSnapshot, RepositoryIdentity
 from git_host.pull_request import GitHubPullRequestBoundary
 from task_cleanup.model import CleanupRequest, PullRequestTarget, TaskCleanupError, cleanup_origin_identity_get
 from task_cleanup.resource import ResourceCleaner
@@ -141,8 +141,8 @@ class TaskCleanupReconciler:
         for reference in state.request.pull_request_list:
             before = self._github.inspect(repository=reference.repository, number=reference.number)
             target = state.pull_request_target_get(reference.repository)
-            before.integration_identity_require(state.request.issue_identifier)
             before.target_require(base_branch=target.base_branch, head_branch=target.head_branch)
+            before.task_branch_identity_require(state.request.issue_identifier)
             if canceled:
                 self._github.close_if_open(
                     repository=reference.repository,
@@ -291,20 +291,23 @@ class TaskCleanupReconciler:
                 base_branch=repository.request.base_branch,
                 head_branch=f"linear/{state.request.issue_identifier.lower()}",
             )
-            active_number_list: list[int] = []
+            active_snapshot_list: list[PullRequestSnapshot] = []
             for number in matching_number_list:
                 snapshot = self._github.inspect(repository=identity, number=number)
-                snapshot.integration_identity_require(state.request.issue_identifier)
                 snapshot.target_require(
                     base_branch=repository.request.base_branch,
                     head_branch=f"linear/{state.request.issue_identifier.lower()}",
                 )
+                snapshot.task_branch_identity_require(state.request.issue_identifier)
                 if snapshot.state != "CLOSED":
-                    active_number_list.append(number)
-            if len(active_number_list) > 1:
+                    active_snapshot_list.append(snapshot)
+            if len(active_snapshot_list) > 1:
                 raise TaskCleanupError("More than one active pull request exists for the exact task branch and base")
-            if active_number_list:
-                expected_number_list = active_number_list
+            if active_snapshot_list:
+                active_snapshot = active_snapshot_list[0]
+                if active_snapshot.state == "OPEN":
+                    active_snapshot.integration_identity_require(state.request.issue_identifier)
+                expected_number_list = [active_snapshot.number]
             elif matching_number_list and canceled:
                 expected_number_list = [max(matching_number_list)]
             elif matching_number_list:

@@ -616,6 +616,8 @@ class _GhRunner:
         self.defer_merge_readback = False
         self.pr_exists = False
         self.historical_closed_number_list: list[int] = []
+        self.pull_request_state_by_number_map: dict[int, str] = {}
+        self.pull_request_title_by_number_map: dict[int, str] = {}
         self.advance_base_on_push = False
         self.advance_head_on_push = False
         self.operation_mutation_count = 0
@@ -919,7 +921,7 @@ class _GhRunner:
                 "",
             )
         if argument_list[1:3] == ["api", "--method"] and any("/pulls" in item for item in argument_list):
-            number_list = list(self.historical_closed_number_list)
+            number_list = [*self.historical_closed_number_list, *self.pull_request_state_by_number_map]
             if self.pr_exists:
                 number_list.append(17)
             payload = [
@@ -929,7 +931,7 @@ class _GhRunner:
                         "base": {"ref": self.base_branch},
                         "head": {"ref": "linear/and-17"},
                     }
-                    for number in number_list
+                    for number in sorted(set(number_list))
                 ]
             ]
             return subprocess.CompletedProcess(argument_list, 0, json.dumps(payload), "")
@@ -960,11 +962,14 @@ class _GhRunner:
                     "",
                 )
             number = int(argument_list[3])
-            state = "CLOSED" if number in self.historical_closed_number_list else self.state
+            state = self.pull_request_state_by_number_map.get(
+                number,
+                "CLOSED" if number in self.historical_closed_number_list else self.state,
+            )
             payload = {
                 "number": number,
                 "url": f"https://github.com/antonov-andrey/example/pull/{number}",
-                "title": self.pr_title,
+                "title": self.pull_request_title_by_number_map.get(number, self.pr_title),
                 "state": state,
                 "isDraft": False,
                 "autoMergeRequest": self.auto_merge_request,
@@ -4055,6 +4060,7 @@ def test_github_pr_create_ignores_closed_unmerged_history_for_replacement(tmp_pa
 
     runner = _GhRunner()
     runner.historical_closed_number_list = [8]
+    runner.pull_request_title_by_number_map[8] = "Historical candidate title was edited"
     boundary = GitHubPullRequestBoundary(runner)
     body = tmp_path / "body.md"
     body.write_text("# Replacement\n", encoding="utf-8")
@@ -4071,6 +4077,71 @@ def test_github_pr_create_ignores_closed_unmerged_history_for_replacement(tmp_pa
     assert created.number == 17
     assert created.state == "OPEN"
     assert sum(item[1:3] == ["pr", "create"] for item in runner.command_list) == 1
+
+
+def test_github_pr_create_rejects_current_open_candidate_without_issue_title(tmp_path: Path) -> None:
+    """The one current open candidate remains bound to its issue title token."""
+
+    runner = _GhRunner()
+    runner.pr_exists = True
+    runner.pr_title = "Current candidate title was edited"
+    body = tmp_path / "body.md"
+    body.write_text("# Candidate\n", encoding="utf-8")
+
+    with pytest.raises(GitHubContractError, match="title omits the exact Linear issue token"):
+        GitHubPullRequestBoundary(runner).create(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            title="AND-17 Keep exact current candidate",
+            body_file=body,
+        )
+
+    assert not any(item[1:3] == ["pr", "create"] for item in runner.command_list)
+
+
+def test_github_pr_create_rejects_duplicate_open_candidates(tmp_path: Path) -> None:
+    """Two exact open candidates remain an active-identity conflict."""
+
+    runner = _GhRunner()
+    runner.pr_exists = True
+    runner.pull_request_state_by_number_map[16] = "OPEN"
+    body = tmp_path / "body.md"
+    body.write_text("# Candidate\n", encoding="utf-8")
+
+    with pytest.raises(GitHubContractError, match="More than one active pull request"):
+        GitHubPullRequestBoundary(runner).create(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            title="AND-17 Keep one exact candidate",
+            body_file=body,
+        )
+
+    assert not any(item[1:3] == ["pr", "create"] for item in runner.command_list)
+
+
+def test_github_pr_create_rejects_foreign_base_from_matching_lookup(tmp_path: Path) -> None:
+    """A provider response cannot include one PR from another base."""
+
+    runner = _GhRunner(base_branch="release")
+    runner.historical_closed_number_list = [8]
+    body = tmp_path / "body.md"
+    body.write_text("# Candidate\n", encoding="utf-8")
+
+    with pytest.raises(GitHubContractError, match="lookup response has another shape"):
+        GitHubPullRequestBoundary(runner).create(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            title="AND-17 Keep exact target",
+            body_file=body,
+        )
+
+    assert not any(item[1:3] == ["pr", "create"] for item in runner.command_list)
 
 
 @pytest.mark.parametrize(
@@ -4200,6 +4271,25 @@ def test_canceled_pull_request_close_is_idempotent_and_exact() -> None:
     assert boundary.close_if_open(**arguments).state == "CLOSED"
     assert boundary.close_if_open(**arguments).state == "CLOSED"
     assert sum(item[1:3] == ["pr", "close"] for item in runner.command_list) == 1
+
+
+def test_canceled_pull_request_close_accepts_closed_history_without_issue_title() -> None:
+    """A terminal historical title does not block idempotent cancellation cleanup."""
+
+    runner = _GhRunner()
+    runner.state = "CLOSED"
+    runner.pr_title = "Historical candidate title was edited"
+
+    snapshot = GitHubPullRequestBoundary(runner).close_if_open(
+        repository=RepositoryIdentity("antonov-andrey/example"),
+        number=17,
+        issue_identifier="AND-17",
+        base_branch="main",
+        head_branch="linear/and-17",
+    )
+
+    assert snapshot.state == "CLOSED"
+    assert not any(item[1:3] == ["pr", "close"] for item in runner.command_list)
 
 
 def test_canceled_pull_request_close_rejects_foreign_target() -> None:
