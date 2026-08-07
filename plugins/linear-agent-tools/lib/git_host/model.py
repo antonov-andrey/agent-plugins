@@ -249,7 +249,7 @@ class BranchProtectionSnapshot:
             raise GitHubContractError("Executing GitHub identity lacks exact repository write authority")
 
     def merge_mechanism_require(self, merge_method: str) -> None:
-        """Require protection that enforces the selected atomic merge mechanism.
+        """Require protection that enforces the selected reviewed-base merge mechanism.
 
         Args:
             merge_method: Declared merge strategy.

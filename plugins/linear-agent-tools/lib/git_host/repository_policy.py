@@ -137,6 +137,8 @@ class GitHubRepositoryMergePolicy:
         }
         if merge_method not in enabled_by_method or not enabled_by_method[merge_method]:
             raise GitHubContractError("Declared repository merge method is not enabled")
+        if merge_method == "merge" and self.delete_branch_on_merge:
+            raise GitHubContractError("Exact merge requires GitHub automatic head-branch deletion to be disabled")
 
 
 class GitHubRepositoryMergePolicyBoundary:

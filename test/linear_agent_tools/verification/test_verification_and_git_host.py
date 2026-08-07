@@ -613,6 +613,7 @@ class _GhRunner:
         self.state = "OPEN"
         self.defer_merge_readback = False
         self.pr_exists = False
+        self.historical_closed_number_list: list[int] = []
         self.advance_base_on_push = False
         self.advance_head_on_push = False
         self.operation_mutation_count = 0
@@ -870,19 +871,19 @@ class _GhRunner:
                 "",
             )
         if argument_list[1:3] == ["api", "--method"] and any("/pulls" in item for item in argument_list):
-            payload = (
+            number_list = list(self.historical_closed_number_list)
+            if self.pr_exists:
+                number_list.append(17)
+            payload = [
                 [
-                    [
-                        {
-                            "number": 17,
-                            "base": {"ref": self.base_branch},
-                            "head": {"ref": "linear/and-17"},
-                        }
-                    ]
+                    {
+                        "number": number,
+                        "base": {"ref": self.base_branch},
+                        "head": {"ref": "linear/and-17"},
+                    }
+                    for number in number_list
                 ]
-                if self.pr_exists
-                else [[]]
-            )
+            ]
             return subprocess.CompletedProcess(argument_list, 0, json.dumps(payload), "")
         if argument_list[1:3] == ["pr", "create"]:
             self.pr_exists = True
@@ -910,11 +911,13 @@ class _GhRunner:
                     ),
                     "",
                 )
+            number = int(argument_list[3])
+            state = "CLOSED" if number in self.historical_closed_number_list else self.state
             payload = {
-                "number": 17,
-                "url": PULL_REQUEST_URL,
+                "number": number,
+                "url": f"https://github.com/antonov-andrey/example/pull/{number}",
                 "title": self.pr_title,
-                "state": self.state,
+                "state": state,
                 "isDraft": False,
                 "autoMergeRequest": self.auto_merge_request,
                 "baseRefName": self.base_branch,
@@ -929,8 +932,8 @@ class _GhRunner:
                 "headRepositoryOwner": {"id": "U_octocat", "name": "Octocat", "login": "octocat"},
                 "isCrossRepository": self.cross_repository,
                 "mergeStateStatus": "CLEAN",
-                "mergedAt": "2026-08-04T12:30:00Z" if self.state == "MERGED" else None,
-                "mergeCommit": {"oid": self.merge_commit} if self.state == "MERGED" else None,
+                "mergedAt": "2026-08-04T12:30:00Z" if state == "MERGED" else None,
+                "mergeCommit": {"oid": self.merge_commit} if state == "MERGED" else None,
                 "mergedBy": (
                     {
                         "id": self.merged_by_node_id,
@@ -938,7 +941,7 @@ class _GhRunner:
                         "name": "Octocat",
                         "is_bot": False,
                     }
-                    if self.state == "MERGED"
+                    if state == "MERGED"
                     else None
                 ),
             }
@@ -1131,9 +1134,7 @@ class _GhRunner:
                 return subprocess.CompletedProcess(argument_list, 1, "", "stale info")
             assert "--atomic" in argument_list
             base_ref = f"refs/heads/{self.base_branch}"
-            head_ref = "refs/heads/linear/and-17"
             self.remote_commit_by_ref_map[base_ref] = self.merge_commit
-            del self.remote_commit_by_ref_map[head_ref]
             self.operation_mutation_count += 1
             if not self.defer_merge_readback:
                 self.state = "MERGED"
@@ -1836,7 +1837,7 @@ def test_real_git_private_repository_constructs_and_recovers_exact_head_tree(tmp
     assert merged.state == "MERGED"
     assert f"tree {history.head_tree}\n" in commit_payload
     assert f"parent {history.base_commit}\nparent {history.head_commit}\n" in commit_payload
-    assert ref_output == "refs/heads/main"
+    assert ref_output.splitlines() == ["refs/heads/linear/and-17", "refs/heads/main"]
     assert runner.git_push_count == 1
     assert runner.provider.repository_policy_read_count == 2
     assert not any("merge-tree" in command for command in runner.git_command_list)
@@ -1941,7 +1942,7 @@ def test_merge_cli_requires_reviewed_base_and_head_identity() -> None:
 
 
 def test_github_merge_binds_exact_reviewed_base_head_and_typed_zero_required_checks(tmp_path: Path) -> None:
-    """The protected transaction leases both refs after a typed zero-check read."""
+    """The protected transaction CASes only base and retains the exact open head."""
 
     runner = _GhRunner()
     merged = GitHubPullRequestBoundary(runner).merge(
@@ -1961,9 +1962,10 @@ def test_github_merge_binds_exact_reviewed_base_head_and_typed_zero_required_che
     push_command = next(item for item in runner.command_list if "push" in item)
     assert "--atomic" in push_command
     assert f"--force-with-lease=refs/heads/main:{COMMIT_BASE}" in push_command
-    assert f"--force-with-lease=refs/heads/linear/and-17:{COMMIT_ONE}" in push_command
+    assert not any(argument.startswith("--force-with-lease=refs/heads/linear/and-17:") for argument in push_command)
     assert f"{COMMIT_TWO}:refs/heads/main" in push_command
-    assert ":refs/heads/linear/and-17" in push_command
+    assert ":refs/heads/linear/and-17" not in push_command
+    assert runner.remote_commit_by_ref_map["refs/heads/linear/and-17"] == COMMIT_ONE
     assert "https://github.com/antonov-andrey/example.git" in push_command
     assert "origin" not in push_command
     assert "credential.helper=" in push_command
@@ -2116,11 +2118,14 @@ def test_atomic_merge_recovery_probes_each_authenticated_git_command_and_stops_a
     tmp_path: Path,
     failure_probe_number: int,
 ) -> None:
-    """Recovery fetch and deleted-ref readback each require a fresh adjacent probe."""
+    """Recovery fetch and retained-ref readback each require a fresh adjacent probe."""
 
     runner = _GhRunner()
     runner.state = "MERGED"
-    runner.remote_commit_by_ref_map = {"refs/heads/main": COMMIT_TWO}
+    runner.remote_commit_by_ref_map = {
+        "refs/heads/main": COMMIT_TWO,
+        "refs/heads/linear/and-17": COMMIT_ONE,
+    }
     snapshot = GitHubPullRequestBoundary(runner).inspect(
         repository=RepositoryIdentity("antonov-andrey/example"),
         number=17,
@@ -2268,7 +2273,7 @@ def test_atomic_merge_rejects_repository_policy_drift_after_construction_without
     """Any relevant metadata change between the two reads stops before push."""
 
     runner = _GhRunner()
-    runner.repository_policy_drift_field_by_name_map["delete_branch_on_merge"] = True
+    runner.repository_policy_drift_field_by_name_map["has_discussions"] = True
 
     with pytest.raises(GitHubContractError, match="policy changed during merge construction"):
         GitHubPullRequestBoundary(runner).merge(
@@ -2286,6 +2291,29 @@ def test_atomic_merge_rejects_repository_policy_drift_after_construction_without
     assert any("commit-tree" in command for command in runner.command_list)
     assert runner.operation_mutation_count == 0
     assert not any("push" in command for command in runner.command_list)
+
+
+def test_atomic_merge_rejects_automatic_head_deletion_before_construction(tmp_path: Path) -> None:
+    """GitHub cannot own head deletion before terminal merged readback and cleanup."""
+
+    runner = _GhRunner()
+    runner.repository_policy_field_by_name_map["delete_branch_on_merge"] = True
+
+    with pytest.raises(GitHubContractError, match="automatic head-branch deletion.*disabled"):
+        GitHubPullRequestBoundary(runner).merge(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+            repository_path=tmp_path,
+        )
+
+    assert runner.operation_mutation_count == 0
+    assert not any("commit-tree" in command or "push" in command for command in runner.command_list)
 
 
 def test_atomic_merge_rejects_principal_change_around_repository_policy_without_ref_mutation(tmp_path: Path) -> None:
@@ -2627,19 +2655,12 @@ def test_atomic_merge_rejects_matching_foreign_fetch_and_push_destination_withou
     assert runner.operation_mutation_count == 0
 
 
-@pytest.mark.parametrize("racing_ref", ("base", "head"))
-def test_github_atomic_merge_rejects_ref_advance_in_preflight_mutation_window_without_ref_mutation(
-    tmp_path: Path,
-    racing_ref: str,
-) -> None:
-    """A racing base or head advance rejects both ref updates as one transaction."""
+def test_github_base_only_cas_rejects_base_advance_without_merge_mutation(tmp_path: Path) -> None:
+    """The sole reviewed-base lease rejects a concurrent base advance."""
 
     runner = _GhRunner()
-    if racing_ref == "base":
-        runner.advance_base_on_push = True
-    else:
-        runner.advance_head_on_push = True
-    with pytest.raises(GitHubContractError, match="Atomic reviewed Git ref transaction failed"):
+    runner.advance_base_on_push = True
+    with pytest.raises(GitHubContractError, match="Reviewed base Git CAS transaction failed"):
         GitHubPullRequestBoundary(runner).merge(
             repository=RepositoryIdentity("antonov-andrey/example"),
             number=17,
@@ -2653,23 +2674,42 @@ def test_github_atomic_merge_rejects_ref_advance_in_preflight_mutation_window_wi
         )
 
     # The injected external base advance is observable, but the merge boundary
-    # changed neither ref and did not delete the reviewed head.
+    # changed neither ref and retained the reviewed head.
     assert runner.operation_mutation_count == 0
-    assert runner.remote_commit_by_ref_map == (
-        {
-            "refs/heads/main": "d" * 40,
-            "refs/heads/linear/and-17": COMMIT_ONE,
-        }
-        if racing_ref == "base"
-        else {
-            "refs/heads/main": COMMIT_BASE,
-            "refs/heads/linear/and-17": "e" * 40,
-        }
-    )
+    assert runner.remote_commit_by_ref_map == {
+        "refs/heads/main": "d" * 40,
+        "refs/heads/linear/and-17": COMMIT_ONE,
+    }
     push_command = next(item for item in runner.command_list if "push" in item)
     assert "--atomic" in push_command
     assert f"--force-with-lease=refs/heads/main:{COMMIT_BASE}" in push_command
-    assert f"--force-with-lease=refs/heads/linear/and-17:{COMMIT_ONE}" in push_command
+    assert not any(argument.startswith("--force-with-lease=refs/heads/linear/and-17:") for argument in push_command)
+
+
+def test_github_base_only_cas_rejects_changed_head_at_exact_post_push_readback(tmp_path: Path) -> None:
+    """A concurrent head change cannot pass retained-head terminal proof."""
+
+    runner = _GhRunner()
+    runner.advance_head_on_push = True
+
+    with pytest.raises(GitHubContractError, match="did not retain the exact reviewed head ref"):
+        GitHubPullRequestBoundary(runner).merge(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+            repository_path=tmp_path,
+        )
+
+    assert runner.operation_mutation_count == 1
+    assert runner.remote_commit_by_ref_map == {
+        "refs/heads/main": COMMIT_TWO,
+        "refs/heads/linear/and-17": "e" * 40,
+    }
 
 
 def test_atomic_merge_terminal_read_lag_routes_to_exact_recovery_not_another_mutation(tmp_path: Path) -> None:
@@ -2677,7 +2717,7 @@ def test_atomic_merge_terminal_read_lag_routes_to_exact_recovery_not_another_mut
 
     runner = _GhRunner()
     runner.defer_merge_readback = True
-    with pytest.raises(GitHubContractError, match="transaction completed.*retry exact recovery"):
+    with pytest.raises(GitHubContractError, match="base CAS completed.*retry exact recovery"):
         GitHubPullRequestBoundary(runner).merge(
             repository=RepositoryIdentity("antonov-andrey/example"),
             number=17,
@@ -2706,6 +2746,7 @@ def test_atomic_merge_terminal_read_lag_routes_to_exact_recovery_not_another_mut
 
     assert recovered.state == "MERGED"
     assert runner.operation_mutation_count == 1
+    assert runner.remote_commit_by_ref_map["refs/heads/linear/and-17"] == COMMIT_ONE
 
 
 def test_classic_protection_accepts_typed_legitimate_zero_required_checks() -> None:
@@ -3393,7 +3434,10 @@ def test_github_merge_retry_adopts_exact_already_merged_reviewed_identity(tmp_pa
 
     runner = _GhRunner()
     runner.state = "MERGED"
-    runner.remote_commit_by_ref_map = {"refs/heads/main": COMMIT_TWO}
+    runner.remote_commit_by_ref_map = {
+        "refs/heads/main": COMMIT_TWO,
+        "refs/heads/linear/and-17": COMMIT_ONE,
+    }
     merged = GitHubPullRequestBoundary(runner).merge(
         repository=RepositoryIdentity("antonov-andrey/example"),
         number=17,
@@ -3412,11 +3456,14 @@ def test_github_merge_retry_adopts_exact_already_merged_reviewed_identity(tmp_pa
 
 
 def test_public_reviewed_inspection_proves_terminal_merge_before_reporting_success(tmp_path: Path) -> None:
-    """Public terminal inspection performs REST identity, tree, parent and deletion proof."""
+    """Public terminal inspection proves REST identity, tree, parents and retained head."""
 
     runner = _GhRunner()
     runner.state = "MERGED"
-    runner.remote_commit_by_ref_map = {"refs/heads/main": COMMIT_TWO}
+    runner.remote_commit_by_ref_map = {
+        "refs/heads/main": COMMIT_TWO,
+        "refs/heads/linear/and-17": COMMIT_ONE,
+    }
 
     inspection = GitHubPullRequestBoundary(runner).reviewed_inspect(
         repository=RepositoryIdentity("antonov-andrey/example"),
@@ -3540,7 +3587,10 @@ def test_atomic_merge_recovery_ignores_current_protection_and_check_definition_d
     runner = _GhRunner(protection_kind=protection_kind, required_check_name_list=required_check_name_list)
     runner.state = "MERGED"
     runner.base_commit = "d" * 40
-    runner.remote_commit_by_ref_map = {"refs/heads/main": "d" * 40}
+    runner.remote_commit_by_ref_map = {
+        "refs/heads/main": "d" * 40,
+        "refs/heads/linear/and-17": COMMIT_ONE,
+    }
     runner.status_rollup_returncode = 1
     runner.check_returncode = 1
     runner.pr_title = "Mutable title edited after merge"
@@ -3605,12 +3655,20 @@ def test_atomic_merge_recovery_rejects_inexact_immutable_terminal_identity(
     assert runner.operation_mutation_count == 0
 
 
-def test_atomic_merge_recovery_rejects_merged_pr_without_atomic_head_deletion(tmp_path: Path) -> None:
-    """A foreign provider merge cannot masquerade as a recovered two-ref transaction."""
+@pytest.mark.parametrize("retained_head_commit", (None, COMMIT_TWO))
+def test_atomic_merge_recovery_rejects_missing_or_changed_reviewed_head(
+    tmp_path: Path,
+    retained_head_commit: str | None,
+) -> None:
+    """Terminal recovery requires the reviewed head until issue cleanup owns deletion."""
 
     runner = _GhRunner()
     runner.state = "MERGED"
-    with pytest.raises(GitHubContractError, match="did not delete"):
+    runner.remote_commit_by_ref_map = {"refs/heads/main": COMMIT_TWO}
+    if retained_head_commit is not None:
+        runner.remote_commit_by_ref_map["refs/heads/linear/and-17"] = retained_head_commit
+
+    with pytest.raises(GitHubContractError, match="did not retain the exact reviewed head ref"):
         GitHubPullRequestBoundary(runner).merge(
             repository=RepositoryIdentity("antonov-andrey/example"),
             number=17,
@@ -3622,6 +3680,29 @@ def test_atomic_merge_recovery_rejects_merged_pr_without_atomic_head_deletion(tm
             merge_method="merge",
             repository_path=tmp_path,
         )
+
+
+def test_github_merge_rejects_closed_unmerged_as_success_evidence(tmp_path: Path) -> None:
+    """CLOSED without GitHub merged state never enters mutation or recovery."""
+
+    runner = _GhRunner()
+    runner.state = "CLOSED"
+
+    with pytest.raises(GitHubContractError, match="Closed unmerged.*never successful merge evidence"):
+        GitHubPullRequestBoundary(runner).merge(
+            repository=RepositoryIdentity("antonov-andrey/example"),
+            number=17,
+            issue_identifier="AND-17",
+            base_branch="main",
+            head_branch="linear/and-17",
+            reviewed_base_commit=COMMIT_BASE,
+            reviewed_head_commit=COMMIT_ONE,
+            merge_method="merge",
+            repository_path=tmp_path,
+        )
+
+    assert runner.operation_mutation_count == 0
+    assert runner.remote_commit_by_ref_map["refs/heads/linear/and-17"] == COMMIT_ONE
 
 
 def test_github_pr_create_is_idempotent_for_exact_issue_branch(tmp_path: Path) -> None:
@@ -3648,6 +3729,29 @@ def test_github_pr_create_is_idempotent_for_exact_issue_branch(tmp_path: Path) -
     lookup_command = next(item for item in runner.command_list if item[1:3] == ["api", "--method"])
     assert "--paginate" in lookup_command
     assert "--slurp" in lookup_command
+
+
+def test_github_pr_create_ignores_closed_unmerged_history_for_replacement(tmp_path: Path) -> None:
+    """A prior closed-unmerged PR does not block one new exact open candidate."""
+
+    runner = _GhRunner()
+    runner.historical_closed_number_list = [8]
+    boundary = GitHubPullRequestBoundary(runner)
+    body = tmp_path / "body.md"
+    body.write_text("# Replacement\n", encoding="utf-8")
+
+    created = boundary.create(
+        repository=RepositoryIdentity("antonov-andrey/example"),
+        issue_identifier="AND-17",
+        base_branch="main",
+        head_branch="linear/and-17",
+        title="AND-17 Replace closed-unmerged candidate",
+        body_file=body,
+    )
+
+    assert created.number == 17
+    assert created.state == "OPEN"
+    assert sum(item[1:3] == ["pr", "create"] for item in runner.command_list) == 1
 
 
 @pytest.mark.parametrize(

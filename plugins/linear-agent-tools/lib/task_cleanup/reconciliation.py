@@ -282,22 +282,36 @@ class TaskCleanupReconciler:
         for reference in state.request.pull_request_list:
             if reference.repository not in repository_by_github_identity_map:
                 raise TaskCleanupError("Linked pull request is outside the participating GitHub repository set")
+        canceled = (
+            state.request.authority.issue_status == "Canceled" or state.request.authority.project_status == "Canceled"
+        )
         for identity, repository in repository_by_github_identity_map.items():
-            expected_number_list = self._github.matching_number_list(
+            matching_number_list = self._github.matching_number_list(
                 repository=identity,
                 base_branch=repository.request.base_branch,
                 head_branch=f"linear/{state.request.issue_identifier.lower()}",
             )
-            if len(expected_number_list) > 1:
-                raise TaskCleanupError("More than one pull request exists for the exact task branch and base")
-            provided = reference_by_repository_identity_map.get(identity)
-            provided_number_list = [] if provided is None else [provided.number]
-            if expected_number_list != provided_number_list:
-                raise TaskCleanupError("Cleanup request omits or substitutes the exact task pull request")
-            if provided is not None:
-                snapshot = self._github.inspect(repository=provided.repository, number=provided.number)
+            active_number_list: list[int] = []
+            for number in matching_number_list:
+                snapshot = self._github.inspect(repository=identity, number=number)
                 snapshot.integration_identity_require(state.request.issue_identifier)
                 snapshot.target_require(
                     base_branch=repository.request.base_branch,
                     head_branch=f"linear/{state.request.issue_identifier.lower()}",
                 )
+                if snapshot.state != "CLOSED":
+                    active_number_list.append(number)
+            if len(active_number_list) > 1:
+                raise TaskCleanupError("More than one active pull request exists for the exact task branch and base")
+            if active_number_list:
+                expected_number_list = active_number_list
+            elif matching_number_list and canceled:
+                expected_number_list = [max(matching_number_list)]
+            elif matching_number_list:
+                raise TaskCleanupError("Closed unmerged pull request is never successful merge evidence")
+            else:
+                expected_number_list = []
+            provided = reference_by_repository_identity_map.get(identity)
+            provided_number_list = [] if provided is None else [provided.number]
+            if expected_number_list != provided_number_list:
+                raise TaskCleanupError("Cleanup request omits or substitutes the exact task pull request")

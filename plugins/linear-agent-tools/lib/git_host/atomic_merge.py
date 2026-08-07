@@ -1,4 +1,4 @@
-"""Server-atomic exact-base-and-head Git merge through a private repository."""
+"""Exact reviewed-base Git merge through a private repository."""
 
 from __future__ import annotations
 
@@ -125,7 +125,7 @@ class GitHubAtomicMergeBoundary:
         execution_node_id: str,
         merge_method: str,
     ) -> str:
-        """Create one ancestry-closed merge commit and atomically update both refs."""
+        """Create one ancestry-closed merge commit and CAS only the reviewed base."""
 
         if merge_method != "merge":
             raise GitHubContractError("Only exact merge-commit construction is supported")
@@ -228,26 +228,25 @@ class GitHubAtomicMergeBoundary:
                     "--no-signed",
                     "--no-verify",
                     f"--force-with-lease={base_ref}:{snapshot.base_commit}",
-                    f"--force-with-lease={head_ref}:{snapshot.head_commit}",
                     destination.explicit_url,
                     f"{merge_commit}:{base_ref}",
-                    f":{head_ref}",
                 ),
-                label="Atomic reviewed Git ref transaction",
+                label="Reviewed base Git CAS transaction",
                 config_argument_list=network_config_argument_list,
             )
             remote_ref_process = self._private_authenticated_git_checked(
                 authentication,
                 private_git_dir,
                 ("ls-remote", "--refs", destination.explicit_url, base_ref, head_ref),
-                label="Atomic reviewed Git ref readback",
+                label="Reviewed base Git CAS readback",
                 config_argument_list=network_config_argument_list,
             )
         _remote_ref_result_require(
             remote_ref_process.stdout,
             expected_base_ref=base_ref,
             expected_base_commit=merge_commit,
-            deleted_head_ref=head_ref,
+            expected_head_ref=head_ref,
+            expected_head_commit=snapshot.head_commit,
         )
         return merge_commit
 
@@ -260,7 +259,7 @@ class GitHubAtomicMergeBoundary:
         reviewed_base_commit: str,
         reviewed_head_commit: str,
     ) -> None:
-        """Prove terminal tree, parents and deleted head in the same closed boundary."""
+        """Prove terminal tree, parents and retained head in the same closed boundary."""
 
         snapshot.merged_metadata_require(
             reviewed_base_commit=reviewed_base_commit,
@@ -332,7 +331,11 @@ class GitHubAtomicMergeBoundary:
                 label="Merged Git ref readback",
                 config_argument_list=network_config_argument_list,
             )
-        _deleted_ref_result_require(remote_ref_process.stdout, deleted_ref=head_ref)
+        _retained_ref_result_require(
+            remote_ref_process.stdout,
+            expected_ref=head_ref,
+            expected_commit=reviewed_head_commit,
+        )
 
     def _repository_destination_require(
         self,
@@ -763,9 +766,10 @@ def _remote_ref_result_require(
     *,
     expected_base_ref: str,
     expected_base_commit: str,
-    deleted_head_ref: str,
+    expected_head_ref: str,
+    expected_head_commit: str,
 ) -> None:
-    """Require exact post-transaction base and absent head refs."""
+    """Require the exact post-CAS base and unchanged reviewed head refs."""
 
     commit_by_ref_map: dict[str, str] = {}
     for line in value.splitlines():
@@ -775,23 +779,19 @@ def _remote_ref_result_require(
         if field_list[1] in commit_by_ref_map:
             raise GitHubContractError("Atomic Git ref readback repeats one ref")
         commit_by_ref_map[field_list[1]] = field_list[0]
-    if deleted_head_ref in commit_by_ref_map:
-        raise GitHubContractError("Crash-recovered atomic merge did not delete the reviewed head ref")
-    if commit_by_ref_map != {expected_base_ref: expected_base_commit}:
-        raise GitHubContractError("Atomic Git ref readback differs from the complete transaction")
+    if commit_by_ref_map != {
+        expected_base_ref: expected_base_commit,
+        expected_head_ref: expected_head_commit,
+    }:
+        raise GitHubContractError("Reviewed base CAS readback did not retain the exact reviewed head ref")
 
 
-def _deleted_ref_result_require(value: str, *, deleted_ref: str) -> None:
-    """Require an exact empty read for one reviewed head ref after recovery."""
+def _retained_ref_result_require(value: str, *, expected_ref: str, expected_commit: str) -> None:
+    """Require one exact retained reviewed head ref during terminal recovery."""
 
-    if value:
-        for line in value.splitlines():
-            field_list = line.split("\t")
-            if len(field_list) != 2 or _COMMIT_PATTERN.fullmatch(field_list[0]) is None:
-                raise GitHubContractError("Recovered deleted Git ref readback has another shape")
-            if field_list[1] == deleted_ref:
-                raise GitHubContractError("Crash-recovered atomic merge did not delete the reviewed head ref")
-        raise GitHubContractError("Recovered deleted Git ref readback returned an unexpected ref")
+    expected_value = f"{expected_commit}\t{expected_ref}\n"
+    if value != expected_value:
+        raise GitHubContractError("Recovered merge did not retain the exact reviewed head ref")
 
 
 def _merge_commit_identity_require(

@@ -1071,6 +1071,96 @@ def test_terminal_cleanup_removes_exact_workspace_and_is_idempotent(
     assert _git(root, "branch", "--list", "linear/and-106") == ""
 
 
+def test_successful_cleanup_retires_branch_only_after_terminal_merged_readback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue cleanup, not merge mutation, owns branch deletion after exact MERGED state."""
+
+    repository_fixture = _repository_create(tmp_path, resources=False)
+    root = repository_fixture.root
+    remote = repository_fixture.remote
+    config = WorkspaceConfig(tmp_path.resolve())
+    workspace_request = _request(remote, issue="AND-129")
+    state = TaskWorkspaceTransaction(config).prepare(workspace_request)[0]
+    task_root = Path(state.task_root)
+    (task_root / "change.txt").write_text("reviewed change\n", encoding="utf-8")
+    _git(task_root, "add", "change.txt")
+    _git(task_root, "commit", "-m", "Implement reviewed change")
+    head_commit = _git(task_root, "rev-parse", "HEAD")
+    _git(task_root, "push", "-u", "origin", state.branch_name)
+    _git(root, "merge", "--ff-only", state.branch_name)
+    _git(root, "push", "origin", "main")
+
+    repository_identity = RepositoryIdentity("antonov-andrey/example")
+    monkeypatch.setattr(
+        RepositoryIdentity,
+        "from_origin_identity",
+        classmethod(lambda _cls, _origin_identity: repository_identity),
+    )
+
+    class GitHub:
+        state = "OPEN"
+
+        @staticmethod
+        def matching_number_list(**_kwargs: object) -> list[int]:
+            return [17]
+
+        def inspect(self, **_kwargs: object) -> PullRequestSnapshot:
+            merged = self.state == "MERGED"
+            return PullRequestSnapshot(
+                repository=repository_identity,
+                number=17,
+                url="https://github.com/antonov-andrey/example/pull/17",
+                title="AND-129 terminal cleanup ownership",
+                state=self.state,
+                draft=False,
+                base_branch="main",
+                base_commit=repository_fixture.baseline_commit,
+                head_branch="linear/and-129",
+                head_commit=head_commit,
+                merge_state="CLEAN",
+                merged_at=datetime.now(timezone.utc) if merged else None,
+                merge_commit=head_commit if merged else "",
+                merged_by_login="octocat" if merged else "",
+                merged_by_user_id=7 if merged else 0,
+                merged_by_node_id="U_octocat" if merged else "",
+                required_check_list=[],
+            )
+
+    cleanup_request = CleanupRequest(
+        issue_identifier="AND-129",
+        authority=CleanupAuthority(
+            scope="terminal-issue",
+            issue_status="Done",
+            project_status="In Progress",
+            final_acceptance_done=False,
+            all_other_project_nodes_terminal=False,
+            unresolved_remediation_blocker_count=0,
+        ),
+        repository_list=workspace_request.repository_list,
+        pull_request_list=[PullRequestReference(repository=repository_identity, number=17)],
+        resource_list=[],
+    )
+    github = GitHub()
+    reconciler = _task_cleanup_reconciler(config, github=github)  # type: ignore[arg-type]
+
+    with pytest.raises(TaskCleanupError, match="requires every linked pull request to be merged"):
+        reconciler.cleanup(cleanup_request)
+
+    assert task_root.exists()
+    assert _git(root, "ls-remote", "--heads", "origin", state.branch_name)
+
+    github.state = "MERGED"
+    result = reconciler.cleanup(cleanup_request)
+
+    assert result.removed_worktree_count == 1
+    assert result.removed_local_branch_count == 1
+    assert result.removed_remote_branch_count == 1
+    assert not task_root.exists()
+    assert _git(root, "ls-remote", "--heads", "origin", state.branch_name) == ""
+
+
 def test_cleanup_resolves_resource_repository_by_normalized_identity(tmp_path: Path) -> None:
     """A graph-approved URL alias selects the same checkout throughout terminal cleanup."""
 
@@ -1454,6 +1544,26 @@ def test_cleanup_never_executes_project_command_through_replaced_worktree_symlin
 def test_cleanup_requires_complete_exact_pull_request_set(tmp_path: Path) -> None:
     """An omitted exact task PR cannot be hidden by an empty cleanup request list."""
 
+    snapshot = PullRequestSnapshot(
+        repository=RepositoryIdentity("antonov-andrey/example"),
+        number=17,
+        url="https://github.com/antonov-andrey/example/pull/17",
+        title="AND-121 exact task pull request",
+        state="OPEN",
+        draft=False,
+        base_branch="main",
+        base_commit="c" * 40,
+        head_branch="linear/and-121",
+        head_commit="a" * 40,
+        merge_state="CLEAN",
+        merged_at=None,
+        merge_commit="",
+        merged_by_login="",
+        merged_by_user_id=0,
+        merged_by_node_id="",
+        required_check_list=[],
+    )
+
     class Repository:
         origin_identity = "https://github.com/antonov-andrey/example"
         request = type("Request", (), {"base_branch": "main"})()
@@ -1462,6 +1572,10 @@ def test_cleanup_requires_complete_exact_pull_request_set(tmp_path: Path) -> Non
         @staticmethod
         def matching_number_list(**_kwargs: object) -> list[int]:
             return [17]
+
+        @staticmethod
+        def inspect(**_kwargs: object) -> PullRequestSnapshot:
+            return snapshot
 
     request = CleanupRequest(
         issue_identifier="AND-121",
@@ -1490,6 +1604,148 @@ def test_cleanup_requires_complete_exact_pull_request_set(tmp_path: Path) -> Non
                 },
             )
         )
+
+
+def test_successful_cleanup_rejects_closed_unmerged_only_history(tmp_path: Path) -> None:
+    """A historical CLOSED PR can never authorize successful branch retirement."""
+
+    repository_identity = RepositoryIdentity("antonov-andrey/example")
+    snapshot = PullRequestSnapshot(
+        repository=repository_identity,
+        number=8,
+        url="https://github.com/antonov-andrey/example/pull/8",
+        title="AND-121 interrupted merge",
+        state="CLOSED",
+        draft=False,
+        base_branch="main",
+        base_commit="c" * 40,
+        head_branch="linear/and-121",
+        head_commit="a" * 40,
+        merge_state="UNKNOWN",
+        merged_at=None,
+        merge_commit="",
+        merged_by_login="",
+        merged_by_user_id=0,
+        merged_by_node_id="",
+        required_check_list=[],
+    )
+
+    class Repository:
+        origin_identity = "https://github.com/antonov-andrey/example"
+        request = RepositoryRequest("https://github.com/antonov-andrey/example.git", "main", "")
+
+    class GitHub:
+        @staticmethod
+        def matching_number_list(**_kwargs: object) -> list[int]:
+            return [8]
+
+        @staticmethod
+        def inspect(**_kwargs: object) -> PullRequestSnapshot:
+            return snapshot
+
+    request = CleanupRequest(
+        issue_identifier="AND-121",
+        authority=CleanupAuthority(
+            scope="terminal-issue",
+            issue_status="Done",
+            project_status="In Progress",
+            final_acceptance_done=False,
+            all_other_project_nodes_terminal=False,
+            unresolved_remediation_blocker_count=0,
+        ),
+        repository_list=[Repository.request],
+        pull_request_list=[PullRequestReference(repository=repository_identity, number=8)],
+        resource_list=[],
+    )
+
+    with pytest.raises(TaskCleanupError, match="Closed unmerged.*never successful merge evidence"):
+        _task_cleanup_reconciler(
+            WorkspaceConfig(tmp_path.resolve()),
+            github=GitHub(),  # type: ignore[arg-type]
+        )._pull_request_contract_require(
+            CleanupState(
+                request=request,
+                repository_by_origin_identity_map={
+                    Repository.request.origin_url: Repository(),  # type: ignore[dict-item]
+                },
+            )
+        )
+
+
+def test_successful_cleanup_selects_merged_candidate_over_closed_unmerged_history(tmp_path: Path) -> None:
+    """Replacement MERGED proof supersedes, but never converts, closed-unmerged history."""
+
+    repository_identity = RepositoryIdentity("antonov-andrey/example")
+    closed_snapshot = PullRequestSnapshot(
+        repository=repository_identity,
+        number=8,
+        url="https://github.com/antonov-andrey/example/pull/8",
+        title="AND-121 interrupted merge",
+        state="CLOSED",
+        draft=False,
+        base_branch="main",
+        base_commit="c" * 40,
+        head_branch="linear/and-121",
+        head_commit="a" * 40,
+        merge_state="UNKNOWN",
+        merged_at=None,
+        merge_commit="",
+        merged_by_login="",
+        merged_by_user_id=0,
+        merged_by_node_id="",
+        required_check_list=[],
+    )
+    merged_snapshot = replace(
+        closed_snapshot,
+        number=17,
+        url="https://github.com/antonov-andrey/example/pull/17",
+        state="MERGED",
+        merged_at=datetime.now(timezone.utc),
+        merge_commit="b" * 40,
+        merged_by_login="octocat",
+        merged_by_user_id=7,
+        merged_by_node_id="U_octocat",
+    )
+
+    class Repository:
+        origin_identity = "https://github.com/antonov-andrey/example"
+        request = RepositoryRequest("https://github.com/antonov-andrey/example.git", "main", "")
+
+    class GitHub:
+        @staticmethod
+        def matching_number_list(**_kwargs: object) -> list[int]:
+            return [8, 17]
+
+        @staticmethod
+        def inspect(*, number: int, **_kwargs: object) -> PullRequestSnapshot:
+            return {8: closed_snapshot, 17: merged_snapshot}[number]
+
+    request = CleanupRequest(
+        issue_identifier="AND-121",
+        authority=CleanupAuthority(
+            scope="terminal-issue",
+            issue_status="Done",
+            project_status="In Progress",
+            final_acceptance_done=False,
+            all_other_project_nodes_terminal=False,
+            unresolved_remediation_blocker_count=0,
+        ),
+        repository_list=[Repository.request],
+        pull_request_list=[PullRequestReference(repository=repository_identity, number=17)],
+        resource_list=[],
+    )
+
+    _task_cleanup_reconciler(
+        WorkspaceConfig(tmp_path.resolve()),
+        github=GitHub(),  # type: ignore[arg-type]
+    )._pull_request_contract_require(
+        CleanupState(
+            request=request,
+            repository_by_origin_identity_map={
+                Repository.request.origin_url: Repository(),  # type: ignore[dict-item]
+            },
+        )
+    )
 
 
 @pytest.mark.parametrize(

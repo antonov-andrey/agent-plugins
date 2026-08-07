@@ -80,12 +80,17 @@ class GitHubPullRequestBoundary:
             base_branch=base_branch,
             head_branch=head_branch,
         )
-        if len(existing_number_list) > 1:
-            raise GitHubContractError("More than one pull request matches the exact task branch and base")
-        if existing_number_list:
-            snapshot = self.inspect(repository=repository, number=existing_number_list[0])
+        active_snapshot_list: list[PullRequestSnapshot] = []
+        for existing_number in existing_number_list:
+            snapshot = self.inspect(repository=repository, number=existing_number)
             snapshot.integration_identity_require(issue_identifier)
             snapshot.target_require(base_branch=base_branch, head_branch=head_branch)
+            if snapshot.state != "CLOSED":
+                active_snapshot_list.append(snapshot)
+        if len(active_snapshot_list) > 1:
+            raise GitHubContractError("More than one active pull request matches the exact task branch and base")
+        if active_snapshot_list:
+            snapshot = active_snapshot_list[0]
             if snapshot.state != "OPEN":
                 raise GitHubContractError("Existing exact task pull request cannot be adopted in its current state")
             return snapshot
@@ -275,6 +280,8 @@ class GitHubPullRequestBoundary:
                 reviewed_head_commit=reviewed_head_commit,
             )
             return PullRequestMergeInspection(pull_request=snapshot, branch_protection=None)
+        if snapshot.state == "CLOSED":
+            raise GitHubContractError("Closed unmerged pull request is never successful merge evidence")
         snapshot.integration_identity_require(issue_identifier)
         snapshot.reviewed_open_identity_require(
             reviewed_base_commit=reviewed_base_commit,
@@ -323,7 +330,7 @@ class GitHubPullRequestBoundary:
             reviewed_base_commit: Exact independently reviewed base commit.
             reviewed_head_commit: Exact independently reviewed head.
             merge_method: Declared repository-supported merge, squash or rebase method.
-            repository_path: Exact task worktree, required for atomic merge commits.
+            repository_path: Exact task worktree, required for reviewed-base CAS merges.
 
         Returns:
             Merged PR snapshot.
@@ -366,7 +373,7 @@ class GitHubPullRequestBoundary:
         after.task_branch_identity_require(issue_identifier)
         if expected_merge_commit and after.state != "MERGED":
             raise GitHubContractError(
-                "Atomic Git transaction completed but GitHub merge readback is not terminal; retry exact recovery"
+                "Reviewed base CAS completed but GitHub merge readback is not terminal; retry exact recovery"
             )
         after.merged_metadata_require(
             reviewed_base_commit=reviewed_base_commit,
@@ -378,7 +385,7 @@ class GitHubPullRequestBoundary:
             node_id=protection.execution_node_id,
         )
         if after.merge_commit != expected_merge_commit:
-            raise GitHubContractError("GitHub merged result differs from the atomic Git transaction")
+            raise GitHubContractError("GitHub merged result differs from the reviewed base CAS transaction")
         GitHubAtomicMergeBoundary(self._runner).merged_result_require(
             repository=repository,
             repository_path=repository_path,
