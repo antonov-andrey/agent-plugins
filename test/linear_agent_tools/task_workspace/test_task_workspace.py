@@ -275,6 +275,8 @@ def test_copy_bootstrap_rejects_source_root_symlink_before_destination_creation(
     foreign_root = tmp_path / "foreign"
     (main_root / "owned").mkdir(parents=True)
     task_root.mkdir()
+    temporary_root = tmp_path / "private"
+    temporary_root.mkdir(mode=0o700)
     foreign_root.mkdir()
     (foreign_root / "secret.txt").write_text("foreign\n", encoding="utf-8")
     (main_root / "owned" / "resource").symlink_to(foreign_root, target_is_directory=True)
@@ -284,7 +286,11 @@ def test_copy_bootstrap_rejects_source_root_symlink_before_destination_creation(
     resource = BootstrapResource(relative_path="owned/resource", kind="copy", skipped=False)
 
     with pytest.raises(TaskWorkspaceError, match="source may not be a symlink"):
-        resource.materialize(main_root=main_root.resolve(), task_root=task_root.resolve())
+        resource.materialize(
+            main_root=main_root.resolve(),
+            task_root=task_root.resolve(),
+            temporary_root=temporary_root.resolve(),
+        )
 
     assert [path.name for path in existing_destination.iterdir()] == ["preserved.txt"]
     assert (existing_destination / "preserved.txt").read_text(encoding="utf-8") == "preserved\n"
@@ -299,13 +305,19 @@ def test_copy_bootstrap_rejects_nested_symlink_before_destination_creation(tmp_p
     source_root = main_root / "owned" / "resource"
     source_root.mkdir(parents=True)
     task_root.mkdir()
+    temporary_root = tmp_path / "private"
+    temporary_root.mkdir(mode=0o700)
     foreign = tmp_path / "foreign.txt"
     foreign.write_text("foreign\n", encoding="utf-8")
     (source_root / "nested-link").symlink_to(foreign)
     resource = BootstrapResource(relative_path="owned/resource", kind="copy", skipped=False)
 
     with pytest.raises(TaskWorkspaceError, match="source may not be a symlink"):
-        resource.materialize(main_root=main_root.resolve(), task_root=task_root.resolve())
+        resource.materialize(
+            main_root=main_root.resolve(),
+            task_root=task_root.resolve(),
+            temporary_root=temporary_root.resolve(),
+        )
 
     assert list(task_root.iterdir()) == []
     assert foreign.read_text(encoding="utf-8") == "foreign\n"
@@ -319,11 +331,17 @@ def test_copy_bootstrap_rejects_unsupported_source_type_before_destination_creat
     source_root = main_root / "owned" / "resource"
     source_root.mkdir(parents=True)
     task_root.mkdir()
+    temporary_root = tmp_path / "private"
+    temporary_root.mkdir(mode=0o700)
     os.mkfifo(source_root / "pipe")
     resource = BootstrapResource(relative_path="owned/resource", kind="copy", skipped=False)
 
     with pytest.raises(TaskWorkspaceError, match="source has an unsupported type"):
-        resource.materialize(main_root=main_root.resolve(), task_root=task_root.resolve())
+        resource.materialize(
+            main_root=main_root.resolve(),
+            task_root=task_root.resolve(),
+            temporary_root=temporary_root.resolve(),
+        )
 
     assert list(task_root.iterdir()) == []
 
@@ -336,12 +354,18 @@ def test_copy_bootstrap_materializes_and_reads_back_one_valid_tree(tmp_path: Pat
     source_root = main_root / "owned" / "resource"
     (source_root / "nested").mkdir(parents=True)
     task_root.mkdir()
+    temporary_root = tmp_path / "private"
+    temporary_root.mkdir(mode=0o700)
     source_file = source_root / "nested" / "config.json"
     source_file.write_text('{"mode":"test"}\n', encoding="utf-8")
     source_file.chmod(0o640)
     resource = BootstrapResource(relative_path="owned/resource", kind="copy", skipped=False)
 
-    resource.materialize(main_root=main_root.resolve(), task_root=task_root.resolve())
+    resource.materialize(
+        main_root=main_root.resolve(),
+        task_root=task_root.resolve(),
+        temporary_root=temporary_root.resolve(),
+    )
     resource.ready_require(main_root=main_root.resolve(), task_root=task_root.resolve())
 
     destination_file = task_root / "owned" / "resource" / "nested" / "config.json"
@@ -834,6 +858,114 @@ def test_interrupted_bootstrap_recovers_from_minimal_baseline_state(
     assert state.payload() == {"schema_version": 1, "baseline_commit": repository_fixture.baseline_commit}
     assert (task_root / "local-config.json").read_text(encoding="utf-8") == '{"mode":"test"}\n'
     assert (task_root / "secret.txt").is_symlink()
+
+
+def test_private_state_write_recovers_deterministic_stale_temp_and_preserves_foreign_sibling(
+    tmp_path: Path,
+) -> None:
+    """A killed state write cannot block retry or authorize unrelated-file removal."""
+
+    repository_fixture = _repository_create(tmp_path, resources=False)
+    request = _request(repository_fixture.remote, issue="AND-136")
+    config = WorkspaceConfig(tmp_path.resolve())
+    repository = WorkspaceRepository.from_config(config, request.repository_list[0])
+    temporary_root = repository.bootstrap_temporary_root_get(request.issue_identifier, create=True)
+    assert temporary_root is not None
+    private_parent = temporary_root.parent
+    repository.bootstrap_temporary_root_cleanup(request.issue_identifier)
+    stale_state = private_parent / ".workspace.json.tmp"
+    stale_state.write_text("stale private state\n", encoding="utf-8")
+    stale_state.chmod(0o600)
+    foreign_sibling = private_parent / "foreign.txt"
+    foreign_sibling.write_text("preserve foreign\n", encoding="utf-8")
+    foreign_sibling.chmod(0o600)
+
+    state = TaskWorkspaceTransaction(config).prepare(request)[0]
+
+    assert state.baseline_commit == repository_fixture.baseline_commit
+    assert not stale_state.exists()
+    assert foreign_sibling.read_text(encoding="utf-8") == "preserve foreign\n"
+    assert not (private_parent / "bootstrap").exists()
+    assert (private_parent / "workspace.json").is_file()
+
+
+def test_bootstrap_retry_replaces_only_deterministic_private_crash_residue(tmp_path: Path) -> None:
+    """Partial copy/link residue is removed without duplicating secrets or touching a foreign sibling."""
+
+    repository_fixture = _repository_create(tmp_path)
+    request = _request(repository_fixture.remote, issue="AND-137")
+    config = WorkspaceConfig(tmp_path.resolve())
+    TaskWorkspaceTransaction(config).prepare(request)
+    repository = WorkspaceRepository.from_config(config, request.repository_list[0])
+    temporary_root = repository.bootstrap_temporary_root_get(request.issue_identifier, create=True)
+    assert temporary_root is not None
+    (temporary_root / "local-config.json").write_text("stale copied secret\n", encoding="utf-8")
+    foreign_target = tmp_path / "foreign-target.txt"
+    foreign_target.write_text("foreign target\n", encoding="utf-8")
+    (temporary_root / "secret.txt").symlink_to(foreign_target)
+    foreign_sibling = temporary_root / "foreign.txt"
+    foreign_sibling.write_text("preserve foreign\n", encoding="utf-8")
+
+    TaskWorkspaceTransaction(config).prepare(request)
+
+    task_root = repository_fixture.root / ".worktree" / request.basename
+    assert (task_root / "local-config.json").read_text(encoding="utf-8") == '{"mode":"test"}\n'
+    assert (task_root / "secret.txt").is_symlink()
+    assert (task_root / "secret.txt").resolve(strict=True) == (repository_fixture.root / "secret.txt").resolve()
+    assert not (temporary_root / "local-config.json").exists()
+    assert not (temporary_root / "secret.txt").exists()
+    assert foreign_sibling.read_text(encoding="utf-8") == "preserve foreign\n"
+    assert foreign_target.read_text(encoding="utf-8") == "foreign target\n"
+
+
+def test_terminal_cleanup_removes_owned_stale_bootstrap_state_but_not_foreign_files(tmp_path: Path) -> None:
+    """Terminal recovery leaves neither owned temp content nor private state after process loss."""
+
+    repository_fixture = _repository_create(tmp_path)
+    request = _request(repository_fixture.remote, issue="AND-138")
+    config = WorkspaceConfig(tmp_path.resolve())
+    TaskWorkspaceTransaction(config).prepare(request)
+    repository = WorkspaceRepository.from_config(config, request.repository_list[0])
+    temporary_root = repository.bootstrap_temporary_root_get(request.issue_identifier, create=True)
+    assert temporary_root is not None
+    stale_copy = temporary_root / "local-config.json"
+    stale_copy.mkdir()
+    (stale_copy / "partial.txt").write_text("partial secret\n", encoding="utf-8")
+    foreign_sibling = temporary_root / "foreign.txt"
+    foreign_sibling.write_text("preserve foreign\n", encoding="utf-8")
+    private_parent = temporary_root.parent
+
+    _task_cleanup_reconciler(config).cleanup(_canceled_cleanup_request(request, issue="AND-138"))
+
+    assert not stale_copy.exists()
+    assert foreign_sibling.read_text(encoding="utf-8") == "preserve foreign\n"
+    assert not (private_parent / ".workspace.json.tmp").exists()
+    assert not (private_parent / "workspace.json").exists()
+    assert not (repository_fixture.root / ".worktree" / request.basename).exists()
+
+
+def test_private_state_recovery_rejects_foreign_temp_alias_without_deleting_it(tmp_path: Path) -> None:
+    """A deterministic name alone cannot make a foreign symlink owned cleanup state."""
+
+    repository_fixture = _repository_create(tmp_path, resources=False)
+    request = _request(repository_fixture.remote, issue="AND-139")
+    config = WorkspaceConfig(tmp_path.resolve())
+    repository = WorkspaceRepository.from_config(config, request.repository_list[0])
+    temporary_root = repository.bootstrap_temporary_root_get(request.issue_identifier, create=True)
+    assert temporary_root is not None
+    private_parent = temporary_root.parent
+    repository.bootstrap_temporary_root_cleanup(request.issue_identifier)
+    foreign_target = tmp_path / "foreign-state.txt"
+    foreign_target.write_text("foreign state\n", encoding="utf-8")
+    foreign_alias = private_parent / ".workspace.json.tmp"
+    foreign_alias.symlink_to(foreign_target)
+
+    with pytest.raises(TaskWorkspaceError, match="not one owned private ordinary file"):
+        TaskWorkspaceTransaction(config).prepare(request)
+
+    assert foreign_alias.is_symlink()
+    assert foreign_target.read_text(encoding="utf-8") == "foreign state\n"
+    assert _git(repository_fixture.root, "branch", "--list", request.branch_name) == ""
 
 
 def test_validate_is_read_only_when_owned_worktree_is_missing(tmp_path: Path) -> None:
@@ -1480,6 +1612,85 @@ def test_terminal_cleanup_recovers_from_live_state_after_partial_removal(
     assert result.removed_remote_branch_count == 1
     assert result.removed_local_branch_count == 1
     assert not state_path.exists()
+
+
+def test_remote_branch_cleanup_rejects_divergent_push_destination_without_foreign_mutation(
+    tmp_path: Path,
+) -> None:
+    """A fetch-owned lease cannot authorize deletion in another push repository."""
+
+    repository_fixture = _repository_create(tmp_path, resources=False)
+    root = repository_fixture.root
+    request = _request(repository_fixture.remote, issue="AND-133")
+    config = WorkspaceConfig(tmp_path.resolve())
+    TaskWorkspaceTransaction(config).prepare(request)
+    task_root = root / ".worktree" / request.basename
+    _git(task_root, "push", "-u", "origin", request.branch_name)
+    expected_commit = _git(task_root, "rev-parse", "HEAD")
+    foreign_remote = tmp_path / "foreign.git"
+    subprocess.run(
+        ["git", "init", "--bare", "--initial-branch=main", str(foreign_remote)],
+        check=True,
+        capture_output=True,
+    )
+    _git(task_root, "push", str(foreign_remote), f"{request.branch_name}:{request.branch_name}")
+    _git(root, "config", "remote.origin.pushurl", str(foreign_remote))
+
+    with pytest.raises(TaskWorkspaceError, match="fetch and push destinations differ"):
+        _task_cleanup_reconciler(config).cleanup(_canceled_cleanup_request(request, issue="AND-133"))
+
+    assert _git(root, "ls-remote", "--heads", str(repository_fixture.remote), request.branch_name).split()[0] == (
+        expected_commit
+    )
+    assert _git(root, "ls-remote", "--heads", str(foreign_remote), request.branch_name).split()[0] == expected_commit
+
+
+def test_remote_branch_cleanup_rejects_unknown_effective_push_destination(tmp_path: Path) -> None:
+    """A relative or otherwise unknown effective push target has no mutation authority."""
+
+    repository_fixture = _repository_create(tmp_path, resources=False)
+    root = repository_fixture.root
+    request = _request(repository_fixture.remote, issue="AND-134")
+    config = WorkspaceConfig(tmp_path.resolve())
+    TaskWorkspaceTransaction(config).prepare(request)
+    task_root = root / ".worktree" / request.basename
+    _git(task_root, "push", "-u", "origin", request.branch_name)
+    expected_commit = _git(task_root, "rev-parse", "HEAD")
+    _git(root, "config", "remote.origin.pushurl", "relative-target")
+
+    with pytest.raises(TaskWorkspaceError, match="unsupported or relative form"):
+        _task_cleanup_reconciler(config).cleanup(_canceled_cleanup_request(request, issue="AND-134"))
+
+    assert _git(root, "ls-remote", "--heads", str(repository_fixture.remote), request.branch_name).split()[0] == (
+        expected_commit
+    )
+
+
+def test_remote_branch_cleanup_leases_the_current_validated_push_target_head(tmp_path: Path) -> None:
+    """A stale tracking snapshot cannot delete a newer head at the validated push target."""
+
+    repository_fixture = _repository_create(tmp_path, resources=False)
+    root = repository_fixture.root
+    request = _request(repository_fixture.remote, issue="AND-135")
+    config = WorkspaceConfig(tmp_path.resolve())
+    TaskWorkspaceTransaction(config).prepare(request)
+    task_root = root / ".worktree" / request.basename
+    _git(task_root, "push", "-u", "origin", request.branch_name)
+    repository = WorkspaceRepository.from_config(config, request.repository_list[0])
+    repository.fetch()
+    stale_commit = repository.commit_get(f"refs/remotes/origin/{request.branch_name}")
+    (task_root / "later.txt").write_text("later\n", encoding="utf-8")
+    _git(task_root, "add", "later.txt")
+    _git(task_root, "commit", "-m", "Advance remote task branch")
+    _git(task_root, "push", "origin", request.branch_name)
+    current_commit = _git(task_root, "rev-parse", "HEAD")
+
+    with pytest.raises(TaskWorkspaceError, match="durable cleanup snapshot"):
+        repository.remote_branch_delete_exact(request.branch_name, expected_commit=stale_commit)
+
+    assert _git(root, "ls-remote", "--heads", str(repository_fixture.remote), request.branch_name).split()[0] == (
+        current_commit
+    )
 
 
 def test_successful_cleanup_retires_branch_only_after_terminal_merged_readback(
@@ -2297,6 +2508,21 @@ def test_workflow_infrastructure_resource_uses_only_fixed_typed_provider_boundar
         pull_request_list=[],
         resource_list=[resource],
     )
+    terminal_request = CleanupRequest(
+        issue_identifier="AND-45",
+        project_id=PROJECT_ID,
+        authority=CleanupAuthority(
+            scope="terminal-issue",
+            issue_status="Done",
+            project_status="In Progress",
+            final_acceptance_done=False,
+            all_other_project_nodes_terminal=False,
+            unresolved_remediation_blocker_count=0,
+        ),
+        repository_list=[repository.request],
+        pull_request_list=[],
+        resource_list=[resource],
+    )
     project_request = CleanupRequest(
         issue_identifier="AND-45",
         project_id=PROJECT_ID,
@@ -2339,16 +2565,48 @@ cleanup:
     retained = reconciler.cleanup(retained_request)
     inventory_absent = True
     absent = registry.reconcile(resource, repository=repository, delete=False)
+    inventory_absent = False
     _git(repository_fixture.root, "merge", "--ff-only", "linear/and-45")
     _git(repository_fixture.root, "push", "origin", "main")
+    original_remote_delete = WorkspaceRepository.remote_branch_delete_exact
+    fail_once = True
+
+    def interrupted_remote_delete(
+        current_repository: WorkspaceRepository,
+        branch_name: str,
+        *,
+        expected_commit: str,
+    ) -> None:
+        nonlocal fail_once
+        if fail_once:
+            fail_once = False
+            raise TaskWorkspaceError("simulated terminal retirement interruption")
+        original_remote_delete(current_repository, branch_name, expected_commit=expected_commit)
+
+    monkeypatch.setattr(WorkspaceRepository, "remote_branch_delete_exact", interrupted_remote_delete)
+    with pytest.raises(TaskWorkspaceError, match="simulated terminal retirement interruption"):
+        reconciler.cleanup(terminal_request)
+    assert not task_root.exists()
+    terminal = reconciler.cleanup(terminal_request)
+    inventory_absent = True
     first = reconciler.cleanup(project_request)
     second = reconciler.cleanup(project_request)
 
     assert [item.state for item in retained.resource_readback_list] == ["retained"]
     assert absent.state == "absent"
+    assert [item.state for item in terminal.resource_readback_list] == ["retained"]
+    assert terminal.removed_worktree_count == 1
+    assert not task_root.exists()
     assert [item.state for item in first.resource_readback_list] == ["absent"]
     assert [item.state for item in second.resource_readback_list] == ["absent"]
-    assert [item[0][2] for item in call_list] == ["destroy-inventory", "destroy-inventory", "destroy", "destroy"]
+    assert [item[0][2] for item in call_list] == [
+        "destroy-inventory",
+        "destroy-inventory",
+        "destroy-inventory",
+        "destroy-inventory",
+        "destroy",
+        "destroy",
+    ]
     standard_home = Path(pwd.getpwuid(os.getuid()).pw_dir)
     expected_environment_by_name_map = {
         "HOME": str(standard_home),
@@ -2364,7 +2622,7 @@ cleanup:
         ),
     }
     for index, (argument_list, cwd, input_bytes, environment_by_name_map) in enumerate(call_list):
-        expected_root = task_root if index < 2 else repository_fixture.root
+        expected_root = task_root if index < 4 else repository_fixture.root
         assert argument_list == [
             sys.executable,
             str(expected_root / "development_environment_manage.py"),

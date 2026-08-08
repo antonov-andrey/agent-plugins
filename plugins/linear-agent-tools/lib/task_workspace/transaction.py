@@ -134,6 +134,7 @@ class TaskWorkspaceTransaction:
 
         repository = WorkspaceRepository.from_config(self._config, repository_request)
         repository.task_root_get(request.issue_identifier)
+        repository.state_temporary_recover(request.issue_identifier)
         state = repository.state_read(request.issue_identifier)
         if state is None:
             state = TaskWorkspaceStatePlanner(repository, request).plan()
@@ -144,6 +145,16 @@ class TaskWorkspaceTransaction:
             bootstrap_plan = self._retained_attempt_bootstrap_plan_get(repository, state)
         task_root = repository.task_worktree_create_or_accept(request.issue_identifier, state)
         WorkspaceSubmoduleReader(task_root).prepare()
-        for resource in bootstrap_plan.resource_list:
-            resource.materialize(main_root=repository.main_root, task_root=task_root)
+        temporary_root = repository.bootstrap_temporary_root_get(request.issue_identifier, create=True)
+        if temporary_root is None:
+            raise TaskWorkspaceError("Workspace bootstrap temporary root was not created")
+        try:
+            for resource in bootstrap_plan.resource_list:
+                resource.materialize(
+                    main_root=repository.main_root,
+                    task_root=task_root,
+                    temporary_root=temporary_root,
+                )
+        finally:
+            repository.bootstrap_temporary_root_cleanup(request.issue_identifier)
         return state

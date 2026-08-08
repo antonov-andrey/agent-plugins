@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from git_host.model import RepositoryIdentity
 from git_host.pull_request import GitHubPullRequestBoundary
 from task_cleanup.model import CleanupRequest, TaskCleanupError
+from task_workspace.bootstrap import BootstrapPlan
 from task_workspace.model import RepositoryWorkspaceState, TaskWorkspaceError
 from task_workspace.repository import WorkspaceRepository, git_command_run
 
@@ -80,6 +81,7 @@ class TaskWorkspaceRetirement:
     def removal_require(self) -> None:
         """Require every currently present task resource to remain exact and removable."""
 
+        self._transient_cleanup()
         task_root = self._repository.task_root_get(self._request.issue_identifier)
         self._repository.fetch()
         registered_branch = self._repository.task_worktree_branch_get(self._request.issue_identifier)
@@ -104,6 +106,33 @@ class TaskWorkspaceRetirement:
             self._branch_removal_require(self._repository.commit_get(self._branch_name))
         if self._repository.exist_remote_branch(self._branch_name):
             self._branch_removal_require(self._repository.commit_get(f"refs/remotes/origin/{self._branch_name}"))
+
+    def _transient_cleanup(self) -> None:
+        """Reconcile only deterministic issue-owned crash residue before retirement."""
+
+        try:
+            self._repository.state_temporary_recover(self._request.issue_identifier)
+            temporary_root = self._repository.bootstrap_temporary_root_get(
+                self._request.issue_identifier,
+                create=False,
+            )
+            if temporary_root is None:
+                return
+            manifest_bytes = self._repository.tracked_file_bytes_get(
+                self._state.baseline_commit,
+                "worktree-bootstrap.yaml",
+            )
+            if manifest_bytes is None:
+                raise TaskWorkspaceError("Task workspace baseline omits its bootstrap manifest")
+            plan = BootstrapPlan.from_retained_attempt_manifest(
+                manifest_bytes,
+                main_root=self._repository.main_root,
+            )
+            for resource in plan.resource_list:
+                resource.transient_cleanup(temporary_root=temporary_root)
+            self._repository.bootstrap_temporary_root_cleanup(self._request.issue_identifier)
+        except TaskWorkspaceError as error:
+            raise TaskCleanupError("Task workspace transient state could not be safely reconciled") from error
 
     def _branch_commit_integration_require(self, *, branch_commit: str, base_commit: str) -> None:
         """Require one successful task head to be integrated into its base."""

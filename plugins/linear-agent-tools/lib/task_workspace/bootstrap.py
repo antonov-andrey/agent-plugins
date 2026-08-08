@@ -7,7 +7,6 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
-import secrets
 import shutil
 import stat
 
@@ -29,31 +28,40 @@ class BootstrapResource:
     kind: str
     skipped: bool
 
-    def materialize(self, *, main_root: Path, task_root: Path) -> None:
+    def materialize(self, *, main_root: Path, task_root: Path, temporary_root: Path) -> None:
         """Materialize or reconcile this manifest-declared resource.
 
         Args:
             main_root: Canonical source checkout.
             task_root: Exact issue-owned worktree.
+            temporary_root: Issue-private deterministic staging root.
         """
 
         if self.skipped:
             return
-        source = main_root / self.relative_path
-        if self.kind == "copy":
-            _copy_source_validate(source)
-        destination_parent = _destination_parent_require(
-            task_root,
+        temporary_parent = _temporary_parent_require(
+            temporary_root,
             relative_path=self.relative_path,
             create=True,
         )
-        destination = destination_parent / PurePosixPath(self.relative_path).name
-        if destination.exists() or destination.is_symlink():
-            if _match_destination(destination, source=source, kind=self.kind):
-                return
-            raise TaskWorkspaceError(f"Owned bootstrap destination conflicts with its plan: {self.relative_path}")
-        temporary = destination.parent / f".{destination.name}.linear-agent-{secrets.token_hex(8)}"
+        if temporary_parent is None:
+            raise TaskWorkspaceError("Bootstrap temporary parent was not created")
+        temporary = temporary_parent / PurePosixPath(self.relative_path).name
+        _temporary_path_remove(temporary)
         try:
+            source = main_root / self.relative_path
+            if self.kind == "copy":
+                _copy_source_validate(source)
+            destination_parent = _destination_parent_require(
+                task_root,
+                relative_path=self.relative_path,
+                create=True,
+            )
+            destination = destination_parent / PurePosixPath(self.relative_path).name
+            if destination.exists() or destination.is_symlink():
+                if _match_destination(destination, source=source, kind=self.kind):
+                    return
+                raise TaskWorkspaceError(f"Owned bootstrap destination conflicts with its plan: {self.relative_path}")
             if self.kind == "link":
                 temporary.symlink_to(source.resolve(strict=True))
             elif source.is_dir():
@@ -70,14 +78,26 @@ class BootstrapResource:
                     raise TaskWorkspaceError(f"Copy bootstrap source changed during materialization: {source}")
             os.replace(temporary, destination)
             _directory_sync(destination.parent)
-        except BaseException:
-            if temporary.is_symlink() or temporary.is_file():
-                temporary.unlink(missing_ok=True)
-            elif temporary.is_dir():
-                shutil.rmtree(temporary)
-            raise
-        if not _match_destination(destination, source=source, kind=self.kind):
-            raise TaskWorkspaceError(f"Bootstrap resource read-back failed: {self.relative_path}")
+            if not _match_destination(destination, source=source, kind=self.kind):
+                raise TaskWorkspaceError(f"Bootstrap resource read-back failed: {self.relative_path}")
+        finally:
+            _temporary_path_remove(temporary)
+            _temporary_parent_prune(temporary_root, temporary_parent)
+
+    def transient_cleanup(self, *, temporary_root: Path) -> None:
+        """Remove only this resource's deterministic owned crash residue."""
+
+        if self.skipped:
+            return
+        temporary_parent = _temporary_parent_require(
+            temporary_root,
+            relative_path=self.relative_path,
+            create=False,
+        )
+        if temporary_parent is None:
+            return
+        _temporary_path_remove(temporary_parent / PurePosixPath(self.relative_path).name)
+        _temporary_parent_prune(temporary_root, temporary_parent)
 
     def ready_require(self, *, main_root: Path, task_root: Path) -> None:
         """Require this manifest-owned destination without repairing it.
@@ -400,6 +420,85 @@ def _destination_parent_require(
             raise TaskWorkspaceError(f"Bootstrap destination parent escapes the task root: {relative_path}")
         current = child
     return current
+
+
+def _temporary_parent_require(
+    temporary_root: Path,
+    *,
+    relative_path: str,
+    create: bool,
+) -> Path | None:
+    """Return a private physical staging parent for one deterministic resource."""
+
+    try:
+        root_metadata = temporary_root.stat(follow_symlinks=False)
+    except OSError as error:
+        raise TaskWorkspaceError("Bootstrap temporary root is unavailable") from error
+    if (
+        not stat.S_ISDIR(root_metadata.st_mode)
+        or root_metadata.st_uid != os.getuid()
+        or stat.S_IMODE(root_metadata.st_mode) & 0o077
+        or temporary_root.resolve(strict=True) != temporary_root
+    ):
+        raise TaskWorkspaceError("Bootstrap temporary root must be one private user-owned physical directory")
+    current = temporary_root
+    for part in PurePosixPath(relative_path).parts[:-1]:
+        child = current / part
+        try:
+            metadata = child.stat(follow_symlinks=False)
+        except FileNotFoundError:
+            if not create:
+                return None
+            child.mkdir(mode=0o700)
+            _directory_sync(current)
+            metadata = child.stat(follow_symlinks=False)
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or metadata.st_uid != os.getuid()
+            or stat.S_IMODE(metadata.st_mode) & 0o077
+        ):
+            raise TaskWorkspaceError("Bootstrap temporary parent is not one private user-owned physical directory")
+        current = child
+    return current
+
+
+def _temporary_path_remove(path: Path) -> None:
+    """Remove one exact owned staging path without touching any sibling."""
+
+    try:
+        metadata = path.stat(follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    except OSError as error:
+        raise TaskWorkspaceError("Bootstrap temporary path is unavailable") from error
+    if metadata.st_uid != os.getuid():
+        raise TaskWorkspaceError("Bootstrap temporary path belongs to another user")
+    try:
+        if stat.S_ISLNK(metadata.st_mode) or stat.S_ISREG(metadata.st_mode):
+            path.unlink()
+        elif stat.S_ISDIR(metadata.st_mode):
+            shutil.rmtree(path)
+        else:
+            raise TaskWorkspaceError("Bootstrap temporary path has a foreign file type")
+        _directory_sync(path.parent)
+    except TaskWorkspaceError:
+        raise
+    except OSError as error:
+        raise TaskWorkspaceError("Bootstrap temporary path could not be removed") from error
+
+
+def _temporary_parent_prune(temporary_root: Path, parent: Path) -> None:
+    """Prune only empty resource-created staging parents below the owner root."""
+
+    current = parent
+    while current != temporary_root:
+        try:
+            current.rmdir()
+        except OSError:
+            return
+        parent_directory = current.parent
+        _directory_sync(parent_directory)
+        current = parent_directory
 
 
 def _relative_path_validate(value: str) -> str:

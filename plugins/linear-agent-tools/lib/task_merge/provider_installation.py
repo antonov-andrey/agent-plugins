@@ -220,11 +220,8 @@ class ProviderInstallationReconciler:
             version=request.expected_version,
         )
         discovery_prompt = _discovery_prompt_get(
-            expected_result=expected_discovery_result,
             cache_root=installed_cache_root,
             marketplace_source_root=marketplace.root,
-            skill_name_list=skill_name_list,
-            version=request.expected_version,
         )
         return ProviderInstallationResult(
             repository_identity=self._repository_identity,
@@ -751,23 +748,23 @@ def _expected_discovery_result_get(
 
 def _discovery_prompt_get(
     *,
-    expected_result: dict[str, object],
     cache_root: Path,
     marketplace_source_root: Path,
-    skill_name_list: list[str],
-    version: str,
 ) -> str:
     """Return the complete read-only prompt for one fresh generic Codex process."""
 
     return (
-        "This is a read-only installation-discovery task, not a workflow task. Do not activate or follow any "
-        "named skill and do not mutate files, configuration, plugins, Git, GitHub, or Linear. From the skill "
-        "catalog supplied to this fresh process, require every expected skill name below and require every "
-        f"linear-agent-tools skill source locator to be under {cache_root}. Read the ordinary manifests at "
+        "Perform one read-only installation discovery without invoking, opening, or following any skill and without "
+        "mutating files, configuration, plugins, Git, GitHub, or Linear. Use only the initial skill-catalog metadata "
+        "supplied to this fresh process plus ordinary reads of these two exact plugin manifests: "
         f"{cache_root / '.codex-plugin/plugin.json'} and "
-        f"{marketplace_source_root / _PLUGIN_RELATIVE_PATH / '.codex-plugin/plugin.json'}; require both versions "
-        f"to equal {version}. Expected skill names: {json.dumps(skill_name_list, separators=(',', ':'))}. "
-        "If every check succeeds, return exactly this one JSON object with no Markdown or extra text: "
-        f"{json.dumps(expected_result, separators=(',', ':'), sort_keys=True)}. Otherwise return one concise "
-        "plain-text failure and do not claim readiness."
+        f"{marketplace_source_root / _PLUGIN_RELATIVE_PATH / '.codex-plugin/plugin.json'}. Require both manifests to "
+        "have the same nonempty name and version. Select catalog entries solely because their absolute source locator "
+        f"has the exact shape {cache_root}/skills/<directory>/SKILL.md; do not select them from expected names. Require "
+        "at least one selected entry, each selected catalog name to start with the manifest name followed by a colon, "
+        "and no catalog entry with that prefix to have a locator outside that installed skills directory. On success "
+        "return only one JSON object with exactly these keys: schema_version=1, plugin_name from the manifest, "
+        "plugin_version from the manifest, installed_source_root equal to the installed cache root above, "
+        "skill_name_list equal to the lexicographically sorted selected catalog names, and ready=true. On any failure "
+        'return only {"ready":false,"schema_version":1}. Emit no Markdown or other text.'
     )

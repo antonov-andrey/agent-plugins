@@ -322,8 +322,14 @@ def test_provider_installation_fast_forwards_installs_and_recovers_from_exact_re
         "skill_name_list": first.skill_name_list,
         "ready": True,
     }
-    assert "Do not activate or follow any named skill" in first.discovery_prompt
-    assert EXPECTED_VERSION in first.discovery_prompt
+    assert "initial skill-catalog metadata" in first.discovery_prompt
+    assert "do not select them from expected names" in first.discovery_prompt
+    assert '{"ready":false,"schema_version":1}' in first.discovery_prompt
+    assert "Expected skill names" not in first.discovery_prompt
+    assert all(skill_name not in first.discovery_prompt for skill_name in first.skill_name_list)
+    assert (
+        json.dumps(first.expected_discovery_result, separators=(",", ":"), sort_keys=True) not in first.discovery_prompt
+    )
     assert str(fixture.home_root / ".codex/plugins/cache/agent-plugins/linear-agent-tools" / EXPECTED_VERSION) in (
         first.discovery_prompt
     )

@@ -100,10 +100,20 @@ class TaskCleanupReconciler:
             self._repository_state_load(state)
             self._terminal_contract_require(state)
             self._pull_request_reconcile(state)
-            if request.authority.scope != "attempt":
+            if request.authority.scope == "attempt":
+                self._resource_reconcile(state)
+            elif request.authority.scope == "terminal-issue":
+                # Project-lifetime retention may require the owner's published
+                # worktree and committed manifest. Complete and read it back
+                # before retiring that workspace.
+                self._resource_reconcile(state)
+                self._workspace_reconcile(state)
+            else:
+                # Project-final handlers consume merged canonical owners only
+                # after every issue workspace has retired.
                 self._workspace_reconcile(state)
                 self._project_absence_require(state)
-            self._resource_reconcile(state)
+                self._resource_reconcile(state)
         return CleanupResult(
             closed_pull_request_count=state.closed_pull_request_count,
             removed_worktree_count=state.removed_worktree_count,
@@ -113,7 +123,7 @@ class TaskCleanupReconciler:
         )
 
     def _resource_reconcile(self, state: CleanupState) -> None:
-        """Retain or delete each sorted typed resource through its fixed registry handler."""
+        """Reconcile each resource at its scope-specific owner dependency point."""
 
         deleted_lifetime_set = {
             "attempt": {"attempt"},

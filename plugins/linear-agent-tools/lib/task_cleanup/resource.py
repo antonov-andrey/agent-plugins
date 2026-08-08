@@ -198,6 +198,14 @@ class WorkflowInfrastructureDevelopmentEnvironmentCleanupHandler:
             repository.fetch()
             if not delete:
                 return self._retained_provider_root_require(repository, resource.owner_issue_identifier)
+            return self._canonical_provider_root_require(repository)
+        except TaskWorkspaceError as error:
+            raise TaskCleanupError("Workflow-infrastructure cleanup repository identity could not be proven") from error
+
+    def _canonical_provider_root_require(self, repository: WorkspaceRepository) -> Path:
+        """Return clean synchronized canonical main after owner-workspace retirement."""
+
+        try:
             if git_command_text_get(repository.main_root, ("symbolic-ref", "--quiet", "--short", "HEAD")) != "main":
                 raise TaskCleanupError("Workflow-infrastructure canonical checkout is not on main")
             if git_command_text_get(repository.main_root, ("status", "--porcelain=v1", "--untracked-files=normal")):
@@ -229,21 +237,33 @@ class WorkflowInfrastructureDevelopmentEnvironmentCleanupHandler:
         repository: WorkspaceRepository,
         owner_issue_identifier: str,
     ) -> Path:
-        """Require the pushed clean owner worktree that contains the unmerged inventory boundary."""
+        """Require the published owner boundary, reconstructing its worktree when needed."""
 
         state = repository.state_read(owner_issue_identifier)
         if state is None:
-            raise TaskCleanupError("Workflow-infrastructure owner worktree state is absent before merge")
+            return self._canonical_provider_root_require(repository)
         repository.state_identity_require(owner_issue_identifier, state)
-        task_root = repository.task_worktree_require(owner_issue_identifier, state)
+        branch_name = f"linear/{owner_issue_identifier.lower()}"
+        if not repository.exist_remote_branch(branch_name):
+            if repository.exist_local_branch(branch_name):
+                branch_commit = repository.commit_get(f"refs/heads/{branch_name}")
+                remote_main_commit = repository.commit_get("refs/remotes/origin/main")
+                if (
+                    git_command_run(
+                        repository.main_root,
+                        ("merge-base", "--is-ancestor", branch_commit, remote_main_commit),
+                        check=False,
+                    ).returncode
+                    != 0
+                ):
+                    raise TaskCleanupError("Workflow-infrastructure retired owner branch is absent from merged main")
+            return self._canonical_provider_root_require(repository)
+        task_root = repository.task_worktree_create_or_accept(owner_issue_identifier, state)
         if git_command_run(
             task_root,
             ("status", "--porcelain=v1", "-z", "--untracked-files=normal", "--ignore-submodules=none"),
         ).stdout:
             raise TaskCleanupError("Workflow-infrastructure owner worktree is not clean")
-        branch_name = f"linear/{owner_issue_identifier.lower()}"
-        if not repository.exist_remote_branch(branch_name):
-            raise TaskCleanupError("Workflow-infrastructure owner branch is not published")
         branch_commit = repository.commit_get(f"refs/heads/{branch_name}")
         if repository.commit_get(f"refs/remotes/origin/{branch_name}") != branch_commit:
             raise TaskCleanupError("Workflow-infrastructure owner worktree differs from its published branch")

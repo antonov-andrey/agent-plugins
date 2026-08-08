@@ -6,7 +6,6 @@ from collections.abc import Sequence
 import json
 import os
 from pathlib import Path
-import secrets
 import stat
 import subprocess
 
@@ -222,7 +221,8 @@ class WorkspaceRepository:
         if parent is None:
             raise TaskWorkspaceError("Workspace private state parent was not created")
         path = parent / "workspace.json"
-        temporary = path.parent / f".{path.name}.{secrets.token_hex(12)}.tmp"
+        temporary = path.parent / ".workspace.json.tmp"
+        self.state_temporary_recover(issue_identifier)
         encoded = (
             json.dumps(
                 state.payload(),
@@ -232,7 +232,11 @@ class WorkspaceRepository:
             )
             + "\n"
         ).encode("utf-8")
-        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
+            0o600,
+        )
         try:
             with os.fdopen(descriptor, "wb", closefd=True) as handle:
                 handle.write(encoded)
@@ -242,8 +246,51 @@ class WorkspaceRepository:
             os.chmod(path, 0o600)
             _directory_sync(path.parent)
         except BaseException:
-            temporary.unlink(missing_ok=True)
+            _private_temporary_path_remove(temporary)
             raise
+
+    def state_temporary_recover(self, issue_identifier: str) -> None:
+        """Remove only the deterministic owned state-write temporary file."""
+
+        parent = self._state_parent_get(issue_identifier, create=False)
+        if parent is None:
+            return
+        _private_temporary_path_remove(parent / ".workspace.json.tmp")
+
+    def bootstrap_temporary_root_get(self, issue_identifier: str, *, create: bool) -> Path | None:
+        """Return the issue-private deterministic bootstrap staging root."""
+
+        parent = self._state_parent_get(issue_identifier, create=create)
+        if parent is None:
+            return None
+        root = parent / "bootstrap"
+        try:
+            metadata = root.stat(follow_symlinks=False)
+        except FileNotFoundError:
+            if not create:
+                return None
+            root.mkdir(mode=0o700)
+            _directory_sync(parent)
+            metadata = root.stat(follow_symlinks=False)
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or metadata.st_uid != os.getuid()
+            or stat.S_IMODE(metadata.st_mode) & 0o077
+        ):
+            raise TaskWorkspaceError("Bootstrap temporary root must be one private user-owned physical directory")
+        return root
+
+    def bootstrap_temporary_root_cleanup(self, issue_identifier: str) -> None:
+        """Remove the owned staging root only when no staged or foreign entry remains."""
+
+        root = self.bootstrap_temporary_root_get(issue_identifier, create=False)
+        if root is None:
+            return
+        try:
+            root.rmdir()
+        except OSError:
+            return
+        _directory_sync(root.parent)
 
     def state_delete(self, issue_identifier: str) -> None:
         """Delete exact private state idempotently.
@@ -255,6 +302,8 @@ class WorkspaceRepository:
         parent = self._state_parent_get(issue_identifier, create=False)
         if parent is None:
             return
+        self.state_temporary_recover(issue_identifier)
+        self.bootstrap_temporary_root_cleanup(issue_identifier)
         path = parent / "workspace.json"
         path.unlink(missing_ok=True)
         if path.parent.exists():
@@ -319,6 +368,65 @@ class WorkspaceRepository:
         """Fetch current origin refs without changing a checked-out branch."""
 
         git_command_run(self.main_root, ("fetch", "--prune", "origin"))
+
+    def _remote_transport_url_pair_get(self) -> tuple[str, str]:
+        """Resolve one exact effective fetch and push destination for origin."""
+
+        url_list_by_kind: list[list[str]] = []
+        for argument_list in (
+            ("remote", "get-url", "--all", "origin"),
+            ("remote", "get-url", "--push", "--all", "origin"),
+        ):
+            try:
+                output = git_command_run(self.main_root, argument_list).stdout.decode("utf-8", errors="strict")
+            except UnicodeDecodeError as error:
+                raise TaskWorkspaceError("Git origin transport destination is not valid UTF-8") from error
+            value_list = output.splitlines()
+            if len(value_list) != 1 or not value_list[0]:
+                raise TaskWorkspaceError("Git origin requires one exact effective fetch and push destination")
+            url_list_by_kind.append(value_list)
+        fetch_url = url_list_by_kind[0][0]
+        push_url = url_list_by_kind[1][0]
+        if (
+            _workspace_origin_identity_get(fetch_url) != self.origin_identity
+            or _workspace_origin_identity_get(push_url) != self.origin_identity
+        ):
+            raise TaskWorkspaceError("Git origin fetch and push destinations differ from the repository owner")
+        return fetch_url, push_url
+
+    def _remote_fetch_exact(self, fetch_url: str) -> None:
+        """Refresh origin branch refs from one already validated explicit destination."""
+
+        git_command_run(
+            self.main_root,
+            (
+                "fetch",
+                "--no-tags",
+                "--prune",
+                fetch_url,
+                "+refs/heads/*:refs/remotes/origin/*",
+            ),
+        )
+
+    def _remote_branch_head_get(self, push_url: str, branch_name: str) -> str:
+        """Read one branch head directly from the validated effective push target."""
+
+        ref = f"refs/heads/{branch_name}"
+        output = git_command_run(self.main_root, ("ls-remote", "--refs", push_url, ref)).stdout
+        record_list = [record for record in output.splitlines() if record]
+        if not record_list:
+            return ""
+        if len(record_list) != 1 or b"\t" not in record_list[0]:
+            raise TaskWorkspaceError("Remote task branch readback is ambiguous")
+        commit_bytes, ref_bytes = record_list[0].split(b"\t", 1)
+        try:
+            commit = commit_bytes.decode("ascii")
+            actual_ref = ref_bytes.decode("utf-8", errors="strict")
+        except UnicodeDecodeError as error:
+            raise TaskWorkspaceError("Remote task branch readback is malformed") from error
+        if actual_ref != ref or not match_full_commit(commit):
+            raise TaskWorkspaceError("Remote task branch readback is malformed")
+        return commit
 
     def commit_get(self, ref: str) -> str:
         """Resolve one ref to a full commit.
@@ -432,24 +540,40 @@ class WorkspaceRepository:
             Nothing. Absence is already reconciled.
         """
 
-        self.fetch()
-        if not self.exist_remote_branch(branch_name):
+        git_command_run(self.main_root, ("check-ref-format", "--branch", branch_name))
+        fetch_url, push_url = self._remote_transport_url_pair_get()
+        self._remote_fetch_exact(fetch_url)
+        current_target_commit = self._remote_branch_head_get(push_url, branch_name)
+        if not current_target_commit:
+            if self.exist_remote_branch(branch_name):
+                raise TaskWorkspaceError("Remote task branch absence differs between fetch and push destinations")
             return
-        if not expected_commit or self.commit_get(f"refs/remotes/origin/{branch_name}") != expected_commit:
+        if (
+            not expected_commit
+            or self.commit_get(f"refs/remotes/origin/{branch_name}") != expected_commit
+            or current_target_commit != expected_commit
+        ):
             raise TaskWorkspaceError("Remote task branch differs from its durable cleanup snapshot")
+        if self._remote_transport_url_pair_get() != (fetch_url, push_url):
+            raise TaskWorkspaceError("Git origin transport destination changed before branch deletion")
+        current_target_commit = self._remote_branch_head_get(push_url, branch_name)
+        if current_target_commit != expected_commit:
+            raise TaskWorkspaceError("Remote task branch changed before exact deletion")
         completed_process = git_command_run(
             self.main_root,
             (
                 "push",
                 f"--force-with-lease=refs/heads/{branch_name}:{expected_commit}",
-                "origin",
+                push_url,
                 f":refs/heads/{branch_name}",
             ),
             check=False,
         )
         if completed_process.returncode != 0:
             raise TaskWorkspaceError("Remote task branch changed during exact deletion")
-        self.fetch()
+        if self._remote_branch_head_get(push_url, branch_name):
+            raise TaskWorkspaceError("Remote task branch remained at the validated push destination")
+        self._remote_fetch_exact(fetch_url)
         if self.exist_remote_branch(branch_name):
             raise TaskWorkspaceError("Remote task branch remained after exact deletion")
 
@@ -656,6 +780,29 @@ def match_full_commit(value: str) -> bool:
     """
 
     return len(value) in {40, 64} and all(character in "0123456789abcdef" for character in value)
+
+
+def _private_temporary_path_remove(path: Path) -> None:
+    """Remove one exact owned private temporary file without following aliases."""
+
+    try:
+        metadata = path.stat(follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    except OSError as error:
+        raise TaskWorkspaceError("Workspace private temporary state is unavailable") from error
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != os.getuid()
+        or metadata.st_nlink != 1
+        or stat.S_IMODE(metadata.st_mode) & 0o077
+    ):
+        raise TaskWorkspaceError("Workspace private temporary state is not one owned private ordinary file")
+    try:
+        path.unlink()
+        _directory_sync(path.parent)
+    except OSError as error:
+        raise TaskWorkspaceError("Workspace private temporary state could not be removed") from error
 
 
 def _directory_sync(path: Path) -> None:
