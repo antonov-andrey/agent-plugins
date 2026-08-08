@@ -1575,6 +1575,101 @@ cleanup:
     assert _git(root / ".worktree" / request.basename, "branch", "--show-current") == request.branch_name
 
 
+def test_retained_task_uses_current_schema_three_head_while_baseline_remains_ancestry_only(tmp_path: Path) -> None:
+    """A retained attempt ignores historical baseline instructions and binds its current typed head."""
+
+    repository_fixture = _repository_create(tmp_path, resources=False)
+    root = repository_fixture.root
+    historical_manifest = """schema_version: 2
+resource:
+  copy_optional_path_list: []
+  copy_required_path_list: []
+  link_optional_path_list: []
+  link_required_path_list: []
+cleanup:
+  command_argument_list:
+    - /tmp/must-never-execute
+"""
+    current_manifest = """schema_version: 3
+resource:
+  copy_optional_path_list: []
+  copy_required_path_list: []
+  link_optional_path_list: []
+  link_required_path_list: []
+cleanup:
+  handler_key_list: []
+"""
+    (root / "worktree-bootstrap.yaml").write_text(historical_manifest, encoding="utf-8")
+    _git(root, "add", "worktree-bootstrap.yaml")
+    _git(root, "commit", "-m", "Represent unsupported historical task baseline")
+    _git(root, "push", "origin", "main")
+    baseline_commit = _git(root, "rev-parse", "HEAD")
+    config = WorkspaceConfig(tmp_path.resolve())
+
+    new_request = _request(repository_fixture.remote, issue="AND-125", baseline=baseline_commit)
+    with pytest.raises(TaskWorkspaceError, match="schema_version must be 3"):
+        TaskWorkspaceTransaction(config).prepare(new_request)
+
+    retained_request = _request(repository_fixture.remote, issue="AND-126", baseline=baseline_commit)
+    repository = WorkspaceRepository.from_config(config, retained_request.repository_list[0])
+    retained_state = RepositoryWorkspaceState(baseline_commit)
+    repository.state_write(retained_request.issue_identifier, retained_state)
+    task_root = repository.task_worktree_create_or_accept(retained_request.issue_identifier, retained_state)
+    (task_root / "worktree-bootstrap.yaml").write_text(current_manifest, encoding="utf-8")
+    _git(task_root, "add", "worktree-bootstrap.yaml")
+    _git(task_root, "commit", "-m", "Adopt current typed bootstrap owner")
+    _git(task_root, "push", "-u", "origin", retained_request.branch_name)
+
+    assert TaskWorkspaceTransaction(config).validate(retained_request) == [retained_state]
+    assert TaskWorkspaceTransaction(config).prepare(retained_request) == [retained_state]
+
+    temporary_root = repository.bootstrap_temporary_root_get(retained_request.issue_identifier, create=True)
+    assert temporary_root is not None
+    _task_cleanup_reconciler(config).cleanup(
+        _canceled_cleanup_request(retained_request, issue=retained_request.issue_identifier)
+    )
+    assert not task_root.exists()
+
+
+def test_retained_task_rejects_unsupported_current_manifest_before_recovery_or_cleanup(tmp_path: Path) -> None:
+    """Historical cleanup text at the current retained head cannot authorize any recovery mutation."""
+
+    repository_fixture = _repository_create(tmp_path, resources=False)
+    root = repository_fixture.root
+    unsupported_manifest = """schema_version: 2
+resource:
+  copy_optional_path_list: []
+  copy_required_path_list: []
+  link_optional_path_list: []
+  link_required_path_list: []
+cleanup:
+  command_argument_list:
+    - /tmp/must-never-execute
+"""
+    (root / "worktree-bootstrap.yaml").write_text(unsupported_manifest, encoding="utf-8")
+    _git(root, "add", "worktree-bootstrap.yaml")
+    _git(root, "commit", "-m", "Represent unsupported retained task head")
+    _git(root, "push", "origin", "main")
+    baseline_commit = _git(root, "rev-parse", "HEAD")
+    config = WorkspaceConfig(tmp_path.resolve())
+    request = _request(repository_fixture.remote, issue="AND-127", baseline=baseline_commit)
+    repository = WorkspaceRepository.from_config(config, request.repository_list[0])
+    state = RepositoryWorkspaceState(baseline_commit)
+    repository.state_write(request.issue_identifier, state)
+    task_root = repository.task_worktree_create_or_accept(request.issue_identifier, state)
+    branch_commit = _git(task_root, "rev-parse", "HEAD")
+
+    with pytest.raises(TaskWorkspaceError, match="schema_version must be 3"):
+        TaskWorkspaceTransaction(config).validate(request)
+    with pytest.raises(TaskWorkspaceError, match="schema_version must be 3"):
+        TaskWorkspaceTransaction(config).prepare(request)
+    with pytest.raises(TaskCleanupError, match="transient state could not be safely reconciled"):
+        _task_cleanup_reconciler(config).cleanup(_canceled_cleanup_request(request, issue=request.issue_identifier))
+
+    assert task_root.is_dir()
+    assert _git(task_root, "rev-parse", "HEAD") == branch_commit
+
+
 def test_bootstrap_destination_parent_symlink_cannot_escape_task_worktree(
     tmp_path: Path,
 ) -> None:

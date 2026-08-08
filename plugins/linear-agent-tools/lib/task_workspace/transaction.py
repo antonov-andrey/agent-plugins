@@ -64,7 +64,8 @@ class TaskWorkspaceTransaction:
                 repository.state_identity_require(request.issue_identifier, state)
                 task_root = repository.task_worktree_require(request.issue_identifier, state)
                 WorkspaceSubmoduleReader(task_root).read()
-                for resource in self._bootstrap_plan_get(repository, state).resource_list:
+                task_head = repository.commit_get(f"refs/heads/linear/{request.issue_identifier.lower()}")
+                for resource in self._bootstrap_plan_get(repository, task_head).resource_list:
                     resource.ready_require(main_root=repository.main_root, task_root=task_root)
                 state_list.append(state)
             return state_list
@@ -72,31 +73,31 @@ class TaskWorkspaceTransaction:
     @staticmethod
     def _bootstrap_manifest_bytes_get(
         repository: WorkspaceRepository,
-        state: RepositoryWorkspaceState,
+        commit: str,
     ) -> bytes:
-        """Read the exact manifest bytes from one immutable task baseline."""
+        """Read the exact manifest bytes from one selected task commit."""
 
-        manifest_bytes = repository.tracked_file_bytes_get(state.baseline_commit, "worktree-bootstrap.yaml")
+        manifest_bytes = repository.tracked_file_bytes_get(commit, "worktree-bootstrap.yaml")
         if manifest_bytes is None:
-            raise TaskWorkspaceError("Repository baseline omits required worktree-bootstrap.yaml")
+            raise TaskWorkspaceError("Selected task commit omits required worktree-bootstrap.yaml")
         return manifest_bytes
 
     def _bootstrap_plan_get(
         self,
         repository: WorkspaceRepository,
-        state: RepositoryWorkspaceState,
+        commit: str,
     ) -> BootstrapPlan:
-        """Read the sole current-schema plan from the immutable attempt baseline.
+        """Read the sole current-schema plan from one selected task commit.
 
         Args:
             repository: Bound canonical checkout.
-            state: Candidate or retained first-attempt baseline.
+            commit: New-attempt baseline or exact retained task head.
 
         Returns:
             Validated current manifest plan. Unsupported historical manifests fail.
         """
 
-        manifest_bytes = self._bootstrap_manifest_bytes_get(repository, state)
+        manifest_bytes = self._bootstrap_manifest_bytes_get(repository, commit)
         return BootstrapPlan.from_manifest(manifest_bytes, main_root=repository.main_root)
 
     def _repository_prepare(
@@ -120,12 +121,13 @@ class TaskWorkspaceTransaction:
         state = repository.state_read(request.issue_identifier)
         if state is None:
             state = TaskWorkspaceStatePlanner(repository, request).plan()
-            bootstrap_plan = self._bootstrap_plan_get(repository, state)
+            self._bootstrap_plan_get(repository, state.baseline_commit)
             repository.state_write(request.issue_identifier, state)
         else:
             repository.state_identity_require(request.issue_identifier, state)
-            bootstrap_plan = self._bootstrap_plan_get(repository, state)
         task_root = repository.task_worktree_create_or_accept(request.issue_identifier, state)
+        bootstrap_commit = repository.commit_get(f"refs/heads/linear/{request.issue_identifier.lower()}")
+        bootstrap_plan = self._bootstrap_plan_get(repository, bootstrap_commit)
         WorkspaceSubmoduleReader(task_root).prepare()
         temporary_root = repository.bootstrap_temporary_root_get(request.issue_identifier, create=True)
         if temporary_root is None:
@@ -139,4 +141,6 @@ class TaskWorkspaceTransaction:
                 )
         finally:
             repository.bootstrap_temporary_root_cleanup(request.issue_identifier)
+        if repository.commit_get(f"refs/heads/linear/{request.issue_identifier.lower()}") != bootstrap_commit:
+            raise TaskWorkspaceError("Task branch changed during bootstrap materialization")
         return state

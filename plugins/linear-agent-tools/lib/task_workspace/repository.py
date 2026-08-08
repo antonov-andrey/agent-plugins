@@ -814,6 +814,36 @@ class WorkspaceRepository:
 
         return self._branch_name_by_worktree_path_map_get().get(self.task_root_get(issue_identifier))
 
+    def task_head_commit_get(self, issue_identifier: str, state: RepositoryWorkspaceState) -> str:
+        """Return one unambiguous current retained task-branch head.
+
+        Args:
+            issue_identifier: Exact Linear issue identifier.
+            state: Durable ancestry baseline for this repository.
+
+        Returns:
+            Current local or freshly fetched remote task head.
+        """
+
+        issue_identifier = issue_identifier_validate(issue_identifier)
+        self.state_identity_require(issue_identifier, state)
+        branch_name = f"linear/{issue_identifier.lower()}"
+        task_root = self.task_root_get(issue_identifier)
+        registered_branch = self.task_worktree_branch_get(issue_identifier)
+        if task_root.exists() or registered_branch is not None:
+            self.task_worktree_require(issue_identifier, state)
+        local_commit = self.commit_get(f"refs/heads/{branch_name}") if self.exist_local_branch(branch_name) else ""
+        remote_commit = (
+            self.commit_get(f"refs/remotes/origin/{branch_name}") if self.exist_remote_branch(branch_name) else ""
+        )
+        if local_commit and remote_commit and local_commit != remote_commit:
+            raise TaskWorkspaceError("Local and remote retained task heads differ")
+        task_head = local_commit or remote_commit
+        if not task_head:
+            raise TaskWorkspaceError("Current retained task branch is absent and requires explicit adoption")
+        self._ancestor_require(state.baseline_commit, task_head, label="Retained task branch")
+        return task_head
+
     def task_container_require(self, *, create: bool) -> None:
         """Require the repository-local worktree container to be a physical directory.
 

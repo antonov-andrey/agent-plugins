@@ -87,9 +87,8 @@ class TaskWorkspaceRetirement:
     def removal_require(self) -> None:
         """Require every currently present task resource to remain exact and removable."""
 
-        self._transient_cleanup()
-        task_root = self._repository.task_root_get(self._request.issue_identifier)
         self._repository.fetch()
+        task_root = self._repository.task_root_get(self._request.issue_identifier)
         registered_branch = self._repository.task_worktree_branch_get(self._request.issue_identifier)
         if task_root.exists() or registered_branch is not None:
             if registered_branch != self._branch_name:
@@ -112,11 +111,20 @@ class TaskWorkspaceRetirement:
             self._branch_removal_require(self._repository.commit_get(self._branch_name))
         if self._repository.exist_remote_branch(self._branch_name):
             self._branch_removal_require(self._repository.commit_get(f"refs/remotes/origin/{self._branch_name}"))
+        self._transient_cleanup()
 
     def _transient_cleanup(self) -> None:
         """Reconcile only deterministic issue-owned crash residue before retirement."""
 
         try:
+            task_head = self._repository.task_head_commit_get(self._request.issue_identifier, self._state)
+            manifest_bytes = self._repository.tracked_file_bytes_get(task_head, "worktree-bootstrap.yaml")
+            if manifest_bytes is None:
+                raise TaskWorkspaceError("Current task head omits its bootstrap manifest")
+            plan = BootstrapPlan.from_manifest(
+                manifest_bytes,
+                main_root=self._repository.main_root,
+            )
             self._repository.state_temporary_recover(self._request.issue_identifier)
             temporary_root = self._repository.bootstrap_temporary_root_get(
                 self._request.issue_identifier,
@@ -124,16 +132,6 @@ class TaskWorkspaceRetirement:
             )
             if temporary_root is None:
                 return
-            manifest_bytes = self._repository.tracked_file_bytes_get(
-                self._state.baseline_commit,
-                "worktree-bootstrap.yaml",
-            )
-            if manifest_bytes is None:
-                raise TaskWorkspaceError("Task workspace baseline omits its bootstrap manifest")
-            plan = BootstrapPlan.from_manifest(
-                manifest_bytes,
-                main_root=self._repository.main_root,
-            )
             for resource in plan.resource_list:
                 resource.transient_cleanup(temporary_root=temporary_root)
             self._repository.bootstrap_temporary_root_cleanup(self._request.issue_identifier)
