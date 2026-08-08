@@ -224,7 +224,6 @@ class WorkflowInfrastructureDevelopmentEnvironmentCleanupHandler:
                 git_command_run(
                     repository.main_root,
                     ("merge", "--ff-only", remote_commit),
-                    mutation=True,
                 )
             if repository.commit_get("refs/heads/main") != remote_commit or git_command_text_get(
                 repository.main_root,

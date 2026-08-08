@@ -372,7 +372,7 @@ class ProviderInstallationReconciler:
                     fetch_url,
                     f"+refs/heads/{request.base_branch}:refs/remotes/origin/{request.base_branch}",
                 ),
-                mutation=True,
+                transport_url_list=(fetch_url,),
             )
         except TaskWorkspaceError as error:
             raise ProviderInstallationError("Configured marketplace source could not fetch its merged base") from error
@@ -392,7 +392,6 @@ class ProviderInstallationReconciler:
                         "--ff-only",
                         request.merged_base_commit,
                     ),
-                    mutation=True,
                 )
             except TaskWorkspaceError as error:
                 raise ProviderInstallationError(
@@ -471,7 +470,6 @@ class ProviderInstallationReconciler:
             output = git_command_run(
                 root,
                 ("remote", "get-url", "--all", "origin"),
-                mutation=True,
             ).stdout.decode("utf-8", errors="strict")
         except (UnicodeDecodeError, TaskWorkspaceError) as error:
             raise ProviderInstallationError("Provider repository fetch destination could not be read") from error

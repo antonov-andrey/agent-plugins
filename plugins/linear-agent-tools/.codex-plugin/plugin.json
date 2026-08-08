@@ -1,6 +1,6 @@
 {
   "name": "linear-agent-tools",
-  "version": "0.1.0+codex.20260808122739",
+  "version": "0.1.0+codex.20260808140437",
   "description": "Source-independent Linear task graphs, protected local task execution, review, acceptance, atomic merge, and exact cleanup workflows.",
   "author": {
     "name": "Andrey Antonov",

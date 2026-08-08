@@ -51,7 +51,6 @@ class TaskWorkspaceRetirement:
             git_command_run(
                 self._repository.main_root,
                 ("worktree", "remove", "--force", str(task_root)),
-                mutation=True,
             )
             removed_worktree_count = 1
 
@@ -70,7 +69,6 @@ class TaskWorkspaceRetirement:
             git_command_run(
                 self._repository.main_root,
                 ("branch", "-D", self._branch_name),
-                mutation=True,
             )
             removed_local_branch_count = 1
 

@@ -10,6 +10,7 @@ from pathlib import Path
 import pwd
 import subprocess
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -19,6 +20,7 @@ if str(LIBRARY_ROOT) not in sys.path:
     sys.path.insert(0, str(LIBRARY_ROOT))
 
 import task_workspace.lock as lock_module
+import task_workspace.repository as repository_module
 from git_host.model import PullRequestSnapshot, RepositoryIdentity
 from git_host.pull_request import GitHubPullRequestBoundary
 from task_cleanup.contract import (
@@ -612,11 +614,11 @@ def test_direct_workspace_and_cleanup_models_require_strict_typed_lists(
         )
 
 
-def test_git_mutation_boundary_uses_complete_closed_environment(
+def test_every_git_command_uses_one_complete_closed_authority_boundary(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Mutation ignores ambient Git controls and disables hooks in the invocation."""
+    """Reads and mutations ignore ambient Git controls through the same invocation owner."""
 
     captured: dict[str, object] = {}
 
@@ -632,16 +634,18 @@ def test_git_mutation_boundary_uses_complete_closed_environment(
     monkeypatch.delenv("SSH_AUTH_SOCK", raising=False)
     monkeypatch.setattr(subprocess, "run", run)
 
-    git_command_run(tmp_path, ("merge", "--ff-only", "a" * 40), mutation=True)
+    git_command_run(tmp_path, ("merge-base", "--is-ancestor", "a" * 40, "b" * 40))
 
     argument_list = captured["argument_list"]
     environment = captured["environment"]
     assert isinstance(argument_list, list)
     assert isinstance(environment, dict)
-    assert argument_list[:3] == ["git", "-C", str(tmp_path)]
+    assert argument_list[:3] == ["/usr/bin/git", "-C", str(tmp_path)]
     assert "core.hooksPath=/dev/null" in argument_list
+    assert "core.useReplaceRefs=false" in argument_list
     assert "credential.helper=" in argument_list
-    assert argument_list[-3:] == ["merge", "--ff-only", "a" * 40]
+    assert "protocol.allow=never" in argument_list
+    assert argument_list[-4:] == ["merge-base", "--is-ancestor", "a" * 40, "b" * 40]
     assert environment == {
         "GCM_INTERACTIVE": "never",
         "GH_PROMPT_DISABLED": "1",
@@ -649,6 +653,7 @@ def test_git_mutation_boundary_uses_complete_closed_environment(
         "GIT_CONFIG_GLOBAL": "/dev/null",
         "GIT_CONFIG_NOSYSTEM": "1",
         "GIT_CONFIG_SYSTEM": "/dev/null",
+        "GIT_NO_LAZY_FETCH": "1",
         "GIT_NO_REPLACE_OBJECTS": "1",
         "GIT_TERMINAL_PROMPT": "0",
         "HOME": pwd.getpwuid(os.getuid()).pw_dir,
@@ -659,6 +664,64 @@ def test_git_mutation_boundary_uses_complete_closed_environment(
         "SSH_ASKPASS_REQUIRE": "never",
         "USER": pwd.getpwuid(os.getuid()).pw_name,
     }
+
+
+def test_git_network_boundary_enables_only_the_exact_destination_protocol_and_credential(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One Git network read receives only its exact HTTPS protocol and repository credential helper."""
+
+    captured: dict[str, object] = {}
+
+    def run(argument_list: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        captured["argument_list"] = argument_list
+        captured["environment"] = kwargs["env"]
+        return subprocess.CompletedProcess(argument_list, 0, b"", b"")
+
+    monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/foreign-agent.sock")
+    monkeypatch.setattr(subprocess, "run", run)
+    destination = "https://github.com/antonov-andrey/agent-plugins.git"
+
+    git_command_run(
+        tmp_path,
+        ("ls-remote", "--refs", destination, "refs/heads/main"),
+        transport_url_list=(destination,),
+    )
+
+    argument_list = captured["argument_list"]
+    environment = captured["environment"]
+    assert isinstance(argument_list, list)
+    assert isinstance(environment, dict)
+    assert "protocol.https.allow=always" in argument_list
+    assert not any(item.startswith("protocol.ssh.allow=") for item in argument_list)
+    assert (
+        "credential.https://github.com/antonov-andrey/agent-plugins.git.helper=" "!/usr/bin/gh auth git-credential"
+    ) in argument_list
+    assert not any(item.startswith("core.sshCommand=") for item in argument_list)
+    assert "SSH_AUTH_SOCK" not in environment
+
+
+def test_workspace_rejects_repository_object_alternates_before_any_task_mutation(tmp_path: Path) -> None:
+    """A repository-local alternate object store cannot participate in identity or workspace creation."""
+
+    repository_fixture = _repository_create(tmp_path, resources=False)
+    alternates_path = repository_fixture.root / ".git" / "objects" / "info" / "alternates"
+    alternates_path.write_text(str(tmp_path / "foreign-objects") + "\n", encoding="utf-8")
+    request = _request(repository_fixture.remote, issue="AND-138")
+
+    with pytest.raises(TaskWorkspaceError, match="ambient object substitution"):
+        TaskWorkspaceTransaction(WorkspaceConfig(tmp_path.resolve())).prepare(request)
+
+    assert not (repository_fixture.root / ".worktree" / "and-138").exists()
+    assert not (repository_fixture.root / ".git" / "refs" / "heads" / "linear" / "and-138").exists()
+    remote_readback = subprocess.run(
+        ["git", "ls-remote", "--heads", str(repository_fixture.remote), "linear/and-138"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert remote_readback.stdout == ""
 
 
 def test_workspace_request_rejects_duplicate_normalized_repository_identity() -> None:
@@ -1688,10 +1751,8 @@ def test_remote_branch_cleanup_rejects_divergent_push_destination_without_foreig
     with pytest.raises(TaskWorkspaceError, match="fetch and push destinations differ"):
         _task_cleanup_reconciler(config).cleanup(_canceled_cleanup_request(request, issue="AND-133"))
 
-    assert _git(root, "ls-remote", "--heads", str(repository_fixture.remote), request.branch_name).split()[0] == (
-        expected_commit
-    )
-    assert _git(root, "ls-remote", "--heads", str(foreign_remote), request.branch_name).split()[0] == expected_commit
+    assert _git(repository_fixture.remote, "rev-parse", f"refs/heads/{request.branch_name}") == expected_commit
+    assert _git(foreign_remote, "rev-parse", f"refs/heads/{request.branch_name}") == expected_commit
 
 
 def test_remote_branch_cleanup_rejects_unknown_effective_push_destination(tmp_path: Path) -> None:
@@ -1758,6 +1819,13 @@ def test_remote_branch_cleanup_disables_repository_and_ambient_pre_push_hooks(
     repository = WorkspaceRepository.from_config(config, request.repository_list[0])
     repository.fetch()
     expected_commit = repository.commit_get(f"refs/remotes/origin/{request.branch_name}")
+    foreign_remote = tmp_path / "foreign-origin.git"
+    subprocess.run(
+        ["git", "init", "--bare", "--initial-branch=main", str(foreign_remote)],
+        check=True,
+        capture_output=True,
+    )
+    _git(task_root, "push", str(foreign_remote), f"{request.branch_name}:{request.branch_name}")
 
     repository_marker = tmp_path / "repository-hook-ran"
     repository_hook = root / ".git" / "hooks" / "pre-push"
@@ -1769,15 +1837,109 @@ def test_remote_branch_cleanup_disables_repository_and_ambient_pre_push_hooks(
     ambient_hook = ambient_hook_root / "pre-push"
     ambient_hook.write_text(f"#!/bin/sh\nprintf attacked > {ambient_marker}\n", encoding="utf-8")
     ambient_hook.chmod(0o755)
+    global_home = tmp_path / "malicious-home"
+    global_home.mkdir()
+    (global_home / ".gitconfig").write_text(
+        "\n".join(
+            [
+                "[core]",
+                f"\thooksPath = {ambient_hook_root}",
+                f'[url "{foreign_remote}"]',
+                f"\tinsteadOf = {repository_fixture.remote}",
+                "[alias]",
+                "\tmerge-base = !exit 0",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
     monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
     monkeypatch.setenv("GIT_CONFIG_KEY_0", "core.hooksPath")
     monkeypatch.setenv("GIT_CONFIG_VALUE_0", str(ambient_hook_root))
+    monkeypatch.setattr(
+        repository_module.pwd,
+        "getpwuid",
+        lambda _uid: SimpleNamespace(pw_dir=str(global_home), pw_name="andrey"),
+    )
 
     repository.remote_branch_delete_exact(request.branch_name, expected_commit=expected_commit)
 
     assert _git(root, "ls-remote", "--heads", str(repository_fixture.remote), request.branch_name) == ""
+    assert _git(root, "ls-remote", "--heads", str(foreign_remote), request.branch_name).split()[0] == expected_commit
     assert not repository_marker.exists()
     assert not ambient_marker.exists()
+
+
+def test_remote_branch_cleanup_rejects_repository_url_rewrite_before_foreign_mutation(tmp_path: Path) -> None:
+    """A repository-local insteadOf rule cannot redirect an exact leased branch deletion."""
+
+    repository_fixture = _repository_create(tmp_path, resources=False)
+    root = repository_fixture.root
+    request = _request(repository_fixture.remote, issue="AND-140")
+    config = WorkspaceConfig(tmp_path.resolve())
+    TaskWorkspaceTransaction(config).prepare(request)
+    task_root = root / ".worktree" / request.basename
+    _git(task_root, "push", "-u", "origin", request.branch_name)
+    expected_commit = _git(task_root, "rev-parse", "HEAD")
+    foreign_remote = tmp_path / "foreign-origin.git"
+    subprocess.run(
+        ["git", "init", "--bare", "--initial-branch=main", str(foreign_remote)],
+        check=True,
+        capture_output=True,
+    )
+    _git(task_root, "push", str(foreign_remote), f"{request.branch_name}:{request.branch_name}")
+    repository = WorkspaceRepository.from_config(config, request.repository_list[0])
+    _git(root, "config", f"url.{foreign_remote}.insteadOf", str(repository_fixture.remote))
+
+    with pytest.raises(TaskWorkspaceError, match="ambient transport"):
+        repository.remote_branch_delete_exact(request.branch_name, expected_commit=expected_commit)
+
+    assert _git(repository_fixture.remote, "rev-parse", f"refs/heads/{request.branch_name}") == expected_commit
+    assert _git(foreign_remote, "rev-parse", f"refs/heads/{request.branch_name}") == expected_commit
+
+
+def test_cleanup_ignores_replace_ref_that_falsifies_foreign_branch_ancestry(tmp_path: Path) -> None:
+    """A replace ref cannot turn an unrelated task head into deletion-authorized history."""
+
+    repository_fixture = _repository_create(tmp_path, resources=False)
+    root = repository_fixture.root
+    request = _request(repository_fixture.remote, issue="AND-139")
+    config = WorkspaceConfig(tmp_path.resolve())
+    TaskWorkspaceTransaction(config).prepare(request)
+    task_root = root / ".worktree" / request.basename
+    (task_root / "owned.txt").write_text("owned\n", encoding="utf-8")
+    _git(task_root, "add", "owned.txt")
+    _git(task_root, "commit", "-m", "Create one legitimate task descendant")
+    legitimate_descendant = _git(task_root, "rev-parse", "HEAD")
+    tree = _git(task_root, "rev-parse", "HEAD^{tree}")
+    foreign_commit = _git(root, "commit-tree", tree, "-m", "Create unrelated foreign root")
+    _git(task_root, "reset", "--hard", foreign_commit)
+    _git(task_root, "push", "--force", "-u", "origin", request.branch_name)
+    _git(root, "replace", foreign_commit, legitimate_descendant)
+
+    ambient_ancestry = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(root),
+            "merge-base",
+            "--is-ancestor",
+            repository_fixture.baseline_commit,
+            foreign_commit,
+        ],
+        check=False,
+        capture_output=True,
+    )
+    assert ambient_ancestry.returncode == 0
+
+    with pytest.raises(TaskCleanupError, match="Owned task worktree identity changed"):
+        _task_cleanup_reconciler(config).cleanup(_canceled_cleanup_request(request, issue="AND-139"))
+
+    assert task_root.exists()
+    assert _git(root, "rev-parse", request.branch_name) == foreign_commit
+    assert _git(root, "ls-remote", "--heads", str(repository_fixture.remote), request.branch_name).split()[0] == (
+        foreign_commit
+    )
 
 
 def test_successful_cleanup_retires_branch_only_after_terminal_merged_readback(

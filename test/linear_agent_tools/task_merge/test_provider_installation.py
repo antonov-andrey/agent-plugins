@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 import os
 from pathlib import Path
@@ -351,6 +351,43 @@ def test_provider_installation_fast_forward_disables_post_merge_hooks(tmp_path: 
 
     assert _git(fixture.marketplace_root, "rev-parse", "HEAD") == fixture.merged_base_commit
     assert not marker.exists()
+
+
+def test_provider_installation_ignores_replace_ref_that_falsifies_reviewed_ancestry(tmp_path: Path) -> None:
+    """A replace ref cannot authorize an unrelated branch head as reviewed provider history."""
+
+    fixture = _provider_repository_fixture_create(tmp_path)
+    reviewed_tree = _git(fixture.bootstrap_root, "rev-parse", f"{fixture.reviewed_head_commit}^{{tree}}")
+    foreign_head = _git(
+        fixture.bootstrap_root,
+        "commit-tree",
+        reviewed_tree,
+        "-m",
+        "Create unrelated provider candidate",
+    )
+    _git(fixture.bootstrap_root, "reset", "--hard", foreign_head)
+    _git(fixture.bootstrap_root, "replace", foreign_head, fixture.reviewed_head_commit)
+    ambient_ancestry = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(fixture.bootstrap_root),
+            "merge-base",
+            "--is-ancestor",
+            fixture.reviewed_base_commit,
+            foreign_head,
+        ],
+        check=False,
+        capture_output=True,
+    )
+    assert ambient_ancestry.returncode == 0
+    runner = _CodexRunner(fixture)
+
+    with pytest.raises(ProviderInstallationError, match="does not descend"):
+        _reconciler_get(fixture, runner).reconcile(replace(fixture.request_get(), reviewed_head_commit=foreign_head))
+
+    assert _git(fixture.marketplace_root, "rev-parse", "HEAD") == fixture.reviewed_base_commit
+    assert runner.add_count == 0
 
 
 def test_provider_installation_rejects_dirty_marketplace_before_fetch_or_install(tmp_path: Path) -> None:

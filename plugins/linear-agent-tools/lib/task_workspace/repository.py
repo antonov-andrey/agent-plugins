@@ -7,8 +7,10 @@ import json
 import os
 from pathlib import Path
 import pwd
+import re
 import stat
 import subprocess
+from urllib.parse import urlsplit
 
 from git_origin.identity import GitOriginError, origin_identity_get
 from json_contract import JsonContractError, json_load_strict
@@ -20,42 +22,21 @@ from task_workspace.model import (
     issue_identifier_validate,
 )
 
-_GIT_REDIRECTION_NAME_SET = frozenset(
-    {
-        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-        "GIT_COMMON_DIR",
-        "GIT_CONFIG",
-        "GIT_CONFIG_COUNT",
-        "GIT_CONFIG_GLOBAL",
-        "GIT_CONFIG_NOSYSTEM",
-        "GIT_CONFIG_PARAMETERS",
-        "GIT_CONFIG_SYSTEM",
-        "GIT_DIR",
-        "GIT_INDEX_FILE",
-        "GIT_NAMESPACE",
-        "GIT_OBJECT_DIRECTORY",
-        "GIT_PREFIX",
-        "GIT_QUARANTINE_PATH",
-        "GIT_WORK_TREE",
-    }
-)
-_GIT_MUTATION_CONFIG_ARGUMENT_LIST = (
+_GIT_CONFIG_ARGUMENT_LIST = (
     "-c",
     "core.hooksPath=/dev/null",
     "-c",
     "core.attributesFile=/dev/null",
     "-c",
+    "core.fsmonitor=false",
+    "-c",
     "core.askPass=",
     "-c",
     "core.gitProxy=",
     "-c",
-    "core.sshCommand=/usr/bin/ssh -F /dev/null -oBatchMode=yes -oClearAllForwardings=yes",
-    "-c",
     "core.useReplaceRefs=false",
     "-c",
     "credential.helper=",
-    "-c",
-    "credential.https://github.com.helper=!/usr/bin/gh auth git-credential",
     "-c",
     "credential.interactive=never",
     "-c",
@@ -71,16 +52,6 @@ _GIT_MUTATION_CONFIG_ARGUMENT_LIST = (
     "-c",
     "protocol.allow=never",
     "-c",
-    "protocol.file.allow=always",
-    "-c",
-    "protocol.git.allow=always",
-    "-c",
-    "protocol.http.allow=always",
-    "-c",
-    "protocol.https.allow=always",
-    "-c",
-    "protocol.ssh.allow=always",
-    "-c",
     "commit.gpgSign=false",
     "-c",
     "push.gpgSign=false",
@@ -94,20 +65,73 @@ def git_command_run(
     *,
     check: bool = True,
     input_bytes: bytes | None = None,
-    mutation: bool = False,
+    transport_url_list: Sequence[str] = (),
 ) -> subprocess.CompletedProcess[bytes]:
-    """Run Git through the read or closed mutation process boundary."""
+    """Run one Git read or mutation through the same closed authority boundary.
 
-    if mutation:
-        environment_by_name_map = _git_mutation_environment_get()
-        command_prefix = ["git", "-C", str(repository), *_GIT_MUTATION_CONFIG_ARGUMENT_LIST]
-    else:
-        environment_by_name_map = os.environ.copy()
-        for name in list(environment_by_name_map):
-            if name in _GIT_REDIRECTION_NAME_SET or name.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")):
-                environment_by_name_map.pop(name, None)
-        environment_by_name_map["GIT_TERMINAL_PROMPT"] = "0"
-        command_prefix = ["git", "-C", str(repository)]
+    Args:
+        repository: Exact repository working directory.
+        argument_list: Fixed Git subcommand and arguments.
+        check: Whether a nonzero result raises a task-workspace error.
+        input_bytes: Optional bytes supplied to Git stdin.
+        transport_url_list: Exact network or file destinations required by this command.
+
+    Returns:
+        Completed Git process result.
+    """
+
+    if any(
+        argument == "-c" or argument == "--config-env" or argument.startswith("--config-env=")
+        for argument in argument_list
+    ):
+        raise TaskWorkspaceError("Git invocation config belongs to the shared command boundary")
+    protocol_set: set[str] = set()
+    credential_config_argument_list: list[str] = []
+    credential_key_set: set[str] = set()
+    for transport_url in transport_url_list:
+        protocol = _git_transport_protocol_get(transport_url)
+        protocol_set.add(protocol)
+        if protocol != "https":
+            continue
+        try:
+            identity = origin_identity_get(transport_url)
+        except GitOriginError:
+            continue
+        if not identity.startswith("github.com/"):
+            continue
+        repository_identity = identity.removeprefix("github.com/")
+        credential_key = f"credential.https://github.com/{repository_identity}.git.helper"
+        if credential_key in credential_key_set:
+            continue
+        credential_key_set.add(credential_key)
+        credential_config_argument_list.extend(
+            [
+                "-c",
+                f"{credential_key}=",
+                "-c",
+                f"{credential_key}=!/usr/bin/gh auth git-credential",
+                "-c",
+                "credential.useHttpPath=true",
+            ]
+        )
+    if "ssh" in protocol_set:
+        credential_config_argument_list.extend(
+            [
+                "-c",
+                "core.sshCommand=/usr/bin/ssh -F /dev/null -oBatchMode=yes -oClearAllForwardings=yes",
+            ]
+        )
+    environment_by_name_map = _git_environment_get(protocol_set)
+    _git_repository_substitution_validate(repository)
+    _git_repository_config_validate(repository, environment_by_name_map)
+    command_prefix = [
+        "/usr/bin/git",
+        "-C",
+        str(repository),
+        *_GIT_CONFIG_ARGUMENT_LIST,
+        *credential_config_argument_list,
+        *(argument for protocol in sorted(protocol_set) for argument in ("-c", f"protocol.{protocol}.allow=always")),
+    ]
     completed_process = subprocess.run(
         [*command_prefix, *argument_list],
         capture_output=True,
@@ -125,7 +149,16 @@ def git_command_run(
 
 
 def git_command_text_get(repository: Path, argument_list: Sequence[str], *, check: bool = True) -> str:
-    """Return strict UTF-8 output from one Git command."""
+    """Return strict UTF-8 output from one closed Git command.
+
+    Args:
+        repository: Exact repository working directory.
+        argument_list: Fixed Git subcommand and arguments.
+        check: Whether a nonzero result raises a task-workspace error.
+
+    Returns:
+        Strict decoded Git stdout without surrounding whitespace.
+    """
 
     return git_command_run(repository, argument_list, check=check).stdout.decode("utf-8", errors="strict").strip()
 
@@ -436,7 +469,6 @@ class WorkspaceRepository:
                 output = git_command_run(
                     self.main_root,
                     argument_list,
-                    mutation=True,
                 ).stdout.decode("utf-8", errors="strict")
             except UnicodeDecodeError as error:
                 raise TaskWorkspaceError("Git origin transport destination is not valid UTF-8") from error
@@ -465,7 +497,7 @@ class WorkspaceRepository:
                 fetch_url,
                 "+refs/heads/*:refs/remotes/origin/*",
             ),
-            mutation=True,
+            transport_url_list=(fetch_url,),
         )
 
     def _remote_branch_head_get(self, push_url: str, branch_name: str) -> str:
@@ -475,7 +507,7 @@ class WorkspaceRepository:
         output = git_command_run(
             self.main_root,
             ("ls-remote", "--refs", push_url, ref),
-            mutation=True,
+            transport_url_list=(push_url,),
         ).stdout
         record_list = [record for record in output.splitlines() if record]
         if not record_list:
@@ -633,7 +665,7 @@ class WorkspaceRepository:
                 f":refs/heads/{branch_name}",
             ),
             check=False,
-            mutation=True,
+            transport_url_list=(push_url,),
         )
         if completed_process.returncode != 0:
             raise TaskWorkspaceError("Remote task branch changed during exact deletion")
@@ -675,19 +707,16 @@ class WorkspaceRepository:
                         branch_name,
                         f"refs/remotes/origin/{branch_name}",
                     ),
-                    mutation=True,
                 )
             else:
                 git_command_run(
                     self.main_root,
                     ("branch", branch_name, state.baseline_commit),
-                    mutation=True,
                 )
         task_root.parent.mkdir(parents=True, exist_ok=True)
         git_command_run(
             self.main_root,
             ("worktree", "add", str(task_root), branch_name),
-            mutation=True,
         )
         return self.task_worktree_require(issue_identifier, state)
 
@@ -857,13 +886,20 @@ def match_full_commit(value: str) -> bool:
     return len(value) in {40, 64} and all(character in "0123456789abcdef" for character in value)
 
 
-def _git_mutation_environment_get() -> dict[str, str]:
-    """Build one complete minimal standard-user environment for Git mutation."""
+def _git_environment_get(protocol_set: set[str]) -> dict[str, str]:
+    """Build one complete minimal standard-user environment for every Git command.
+
+    Args:
+        protocol_set: Exact transport protocols enabled for this invocation.
+
+    Returns:
+        Closed process environment with only standard-user transport authority.
+    """
 
     try:
         account = pwd.getpwuid(os.getuid())
     except KeyError as error:
-        raise TaskWorkspaceError("Git mutation requires one operating-system user") from error
+        raise TaskWorkspaceError("Git invocation requires one operating-system user") from error
     environment_by_name_map = {
         "GCM_INTERACTIVE": "never",
         "GH_PROMPT_DISABLED": "1",
@@ -871,6 +907,7 @@ def _git_mutation_environment_get() -> dict[str, str]:
         "GIT_CONFIG_GLOBAL": "/dev/null",
         "GIT_CONFIG_NOSYSTEM": "1",
         "GIT_CONFIG_SYSTEM": "/dev/null",
+        "GIT_NO_LAZY_FETCH": "1",
         "GIT_NO_REPLACE_OBJECTS": "1",
         "GIT_TERMINAL_PROMPT": "0",
         "HOME": account.pw_dir,
@@ -881,22 +918,154 @@ def _git_mutation_environment_get() -> dict[str, str]:
         "SSH_ASKPASS_REQUIRE": "never",
         "USER": account.pw_name,
     }
+    if "ssh" not in protocol_set:
+        return environment_by_name_map
     socket_text = os.environ.get("SSH_AUTH_SOCK", "")
     if socket_text:
         socket_path = Path(socket_text)
         try:
             metadata = socket_path.stat(follow_symlinks=False)
         except OSError as error:
-            raise TaskWorkspaceError("Git mutation SSH agent socket is unavailable") from error
+            raise TaskWorkspaceError("Git invocation SSH agent socket is unavailable") from error
         if (
             not socket_path.is_absolute()
             or str(socket_path) != socket_text
             or not stat.S_ISSOCK(metadata.st_mode)
             or metadata.st_uid != os.getuid()
         ):
-            raise TaskWorkspaceError("Git mutation SSH agent socket is not one exact user-owned socket")
+            raise TaskWorkspaceError("Git invocation SSH agent socket is not one exact user-owned socket")
         environment_by_name_map["SSH_AUTH_SOCK"] = socket_text
     return environment_by_name_map
+
+
+def _git_repository_substitution_validate(repository: Path) -> None:
+    """Reject repository-local object substitution before Git resolves authority.
+
+    Args:
+        repository: Exact repository working directory.
+    """
+
+    marker = repository / ".git"
+    try:
+        marker_metadata = marker.lstat()
+    except FileNotFoundError:
+        return
+    except OSError as error:
+        raise TaskWorkspaceError("Git repository metadata is unavailable") from error
+    if stat.S_ISDIR(marker_metadata.st_mode) and not marker.is_symlink():
+        git_directory = marker
+    elif stat.S_ISREG(marker_metadata.st_mode) and not marker.is_symlink() and marker_metadata.st_nlink == 1:
+        try:
+            marker_text = marker.read_text(encoding="utf-8")
+        except OSError as error:
+            raise TaskWorkspaceError("Git worktree metadata is unavailable") from error
+        if not marker_text.startswith("gitdir: ") or "\n" in marker_text.rstrip("\n"):
+            raise TaskWorkspaceError("Git worktree metadata is malformed")
+        git_directory = Path(marker_text.removeprefix("gitdir: ").strip())
+        if not git_directory.is_absolute():
+            git_directory = repository / git_directory
+    else:
+        raise TaskWorkspaceError("Git repository metadata must be one physical directory or ordinary file")
+    try:
+        git_directory = git_directory.resolve(strict=True)
+    except OSError as error:
+        raise TaskWorkspaceError("Git repository metadata is unavailable") from error
+    if not git_directory.is_dir():
+        raise TaskWorkspaceError("Git repository metadata is not one directory")
+    common_directory = git_directory
+    common_path = git_directory / "commondir"
+    if common_path.exists():
+        try:
+            common_text = common_path.read_text(encoding="utf-8")
+        except OSError as error:
+            raise TaskWorkspaceError("Git common-directory metadata is unavailable") from error
+        if not common_text.strip() or "\n" in common_text.rstrip("\n"):
+            raise TaskWorkspaceError("Git common-directory metadata is malformed")
+        common_directory = Path(common_text.strip())
+        if not common_directory.is_absolute():
+            common_directory = git_directory / common_directory
+        try:
+            common_directory = common_directory.resolve(strict=True)
+        except OSError as error:
+            raise TaskWorkspaceError("Git common directory is unavailable") from error
+    for metadata_directory in {git_directory, common_directory}:
+        for relative_path in (
+            Path("info/grafts"),
+            Path("objects/info/alternates"),
+            Path("objects/info/http-alternates"),
+        ):
+            if os.path.lexists(metadata_directory / relative_path):
+                raise TaskWorkspaceError("Git repository contains ambient object substitution state")
+
+
+def _git_repository_config_validate(repository: Path, environment_by_name_map: dict[str, str]) -> None:
+    """Reject repository config that can redirect transport or execute checkout filters.
+
+    Args:
+        repository: Exact repository working directory.
+        environment_by_name_map: Closed standard-user Git environment.
+    """
+
+    if not os.path.lexists(repository / ".git"):
+        return
+    completed_process = subprocess.run(
+        [
+            "/usr/bin/git",
+            "-C",
+            str(repository),
+            "config",
+            "--includes",
+            "--null",
+            "--name-only",
+            "--get-regexp",
+            ".",
+        ],
+        capture_output=True,
+        check=False,
+        env=environment_by_name_map,
+        input=None,
+    )
+    if completed_process.returncode not in {0, 1}:
+        raise TaskWorkspaceError("Git repository configuration is unavailable")
+    try:
+        config_name_list = [item.decode("utf-8").lower() for item in completed_process.stdout.split(b"\0") if item]
+    except UnicodeDecodeError as error:
+        raise TaskWorkspaceError("Git repository configuration is malformed") from error
+    if any(
+        name.startswith(("credential.", "filter.", "http.", "url."))
+        or (
+            name.startswith("remote.")
+            and name.rsplit(".", 1)[-1] in {"proxy", "proxyauthmethod", "receivepack", "uploadpack", "vcs"}
+        )
+        for name in config_name_list
+    ):
+        raise TaskWorkspaceError("Git repository contains ambient transport or filter configuration")
+
+
+def _git_transport_protocol_get(transport_url: str) -> str:
+    """Return the one supported protocol required by an explicit Git destination.
+
+    Args:
+        transport_url: Exact destination supplied to the Git command.
+
+    Returns:
+        One Git protocol name enabled for the invocation.
+    """
+
+    if (
+        not isinstance(transport_url, str)
+        or not transport_url
+        or any(character in transport_url for character in "\x00\r\n")
+    ):
+        raise TaskWorkspaceError("Git transport destination is malformed")
+    if "://" not in transport_url and re.fullmatch(r"(?:[^/@:]+@)?[^/:]+:.+", transport_url):
+        return "ssh"
+    scheme = urlsplit(transport_url).scheme.lower()
+    if scheme in {"file", "git", "http", "https", "ssh"}:
+        return scheme
+    if scheme:
+        raise TaskWorkspaceError("Git transport protocol is unsupported")
+    return "file"
 
 
 def _private_temporary_path_remove(path: Path) -> None:
