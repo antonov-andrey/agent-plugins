@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+import pwd
 import subprocess
 import sys
 
@@ -698,7 +699,10 @@ def test_cleanup_request_requires_project_and_issue_owned_sorted_resources() -> 
             issue_identifier="AND-16",
             project_id=PROJECT_ID,
             authority=authority,
-            repository_list=[],
+            repository_list=[
+                RepositoryRequest(acceptance.repository, "main", ""),
+                RepositoryRequest(environment.repository, "main", ""),
+            ],
             pull_request_list=[],
             resource_list=[environment, acceptance],
             project_issue_identifier_list=["AND-16", "AND-45"],
@@ -709,10 +713,70 @@ def test_cleanup_request_requires_project_and_issue_owned_sorted_resources() -> 
             issue_identifier="AND-16",
             project_id=PROJECT_ID,
             authority=authority,
-            repository_list=[],
+            repository_list=[RepositoryRequest(environment.repository, "main", "")],
             pull_request_list=[],
             resource_list=[environment],
             project_issue_identifier_list=["AND-16"],
+        )
+
+
+def test_acceptance_cleanup_resource_rejects_a_lookalike_repository_owner() -> None:
+    """An acceptance-shaped repository name cannot replace its participating identity."""
+
+    with pytest.raises(TaskCleanupError, match="exact participating repository"):
+        CleanupRequest(
+            issue_identifier="AND-16",
+            project_id=PROJECT_ID,
+            authority=CleanupAuthority(
+                scope="terminal-issue",
+                issue_status="Done",
+                project_status="In Progress",
+                final_acceptance_done=False,
+                all_other_project_nodes_terminal=False,
+                unresolved_remediation_blocker_count=0,
+            ),
+            repository_list=[
+                RepositoryRequest("git@github.com:antonov-andrey/development-infrastructure.git", "main", "")
+            ],
+            pull_request_list=[],
+            resource_list=[
+                AcceptanceBaseBranchCleanupResource(
+                    project_id=PROJECT_ID,
+                    owner_issue_identifier="AND-16",
+                    repository="https://attacker.example/antonov-andrey/development-infrastructure",
+                    branch="acceptance/agent-development-workflow-complete-base",
+                )
+            ],
+        )
+
+
+def test_environment_cleanup_resource_rejects_a_lookalike_repository_owner() -> None:
+    """A Product-shaped repository name cannot replace its participating identity."""
+
+    with pytest.raises(TaskCleanupError, match="exact participating repository"):
+        CleanupRequest(
+            issue_identifier="AND-45",
+            project_id=PROJECT_ID,
+            authority=CleanupAuthority(
+                scope="terminal-issue",
+                issue_status="Done",
+                project_status="In Progress",
+                final_acceptance_done=False,
+                all_other_project_nodes_terminal=False,
+                unresolved_remediation_blocker_count=0,
+            ),
+            repository_list=[
+                RepositoryRequest("git@github.com:antonov-andrey/workflow-infrastructure.git", "main", "")
+            ],
+            pull_request_list=[],
+            resource_list=[
+                WorkflowInfrastructureDevelopmentEnvironmentCleanupResource(
+                    project_id=PROJECT_ID,
+                    owner_issue_identifier="AND-45",
+                    repository="https://attacker.example/antonov-andrey/workflow-infrastructure",
+                    common_prefix="2026-08-08-and-45",
+                )
+            ],
         )
 
 
@@ -963,6 +1027,49 @@ def test_worktree_container_symlink_is_rejected_before_git_mutation(
 
     assert not (outside / "and-111").exists()
     assert _git(root, "branch", "--list", "linear/and-111") == ""
+
+
+def test_issue_worktree_symlink_alias_cannot_mutate_the_registered_worktree(tmp_path: Path) -> None:
+    """Validation, adoption, and cleanup reject an alias without changing its target."""
+
+    repository_fixture = _repository_create(tmp_path, resources=False)
+    root = repository_fixture.root
+    config = WorkspaceConfig(tmp_path.resolve())
+    request = _request(repository_fixture.remote, issue="AND-132")
+    TaskWorkspaceTransaction(config).prepare(request)
+    task_root = root / ".worktree" / request.basename
+    foreign_root = tmp_path / "foreign-registered-worktree"
+    _git(root, "worktree", "move", str(task_root), str(foreign_root))
+    task_root.symlink_to(foreign_root, target_is_directory=True)
+    marker = foreign_root / "foreign-uncommitted.txt"
+    marker.write_text("preserve foreign work\n", encoding="utf-8")
+    state_path = root / ".git" / "linear-agent-tools" / "task" / request.basename / "workspace.json"
+    branch_commit = _git(foreign_root, "rev-parse", "HEAD")
+    cleanup_request = _canceled_cleanup_request(request, issue=request.issue_identifier)
+
+    with pytest.raises(TaskWorkspaceError, match="physical canonical directory"):
+        _task_cleanup_reconciler(config).cleanup(cleanup_request)
+    assert task_root.is_symlink()
+    assert foreign_root.is_dir()
+    assert marker.read_text(encoding="utf-8") == "preserve foreign work\n"
+    assert _git(foreign_root, "rev-parse", "HEAD") == branch_commit
+    assert state_path.is_file()
+
+    with pytest.raises(TaskWorkspaceError, match="physical canonical directory"):
+        TaskWorkspaceTransaction(config).validate(request)
+    assert task_root.is_symlink()
+    assert foreign_root.is_dir()
+    assert marker.read_text(encoding="utf-8") == "preserve foreign work\n"
+    assert _git(foreign_root, "rev-parse", "HEAD") == branch_commit
+    assert state_path.is_file()
+
+    with pytest.raises(TaskWorkspaceError, match="physical canonical directory"):
+        TaskWorkspaceTransaction(config).prepare(request)
+    assert task_root.is_symlink()
+    assert foreign_root.is_dir()
+    assert marker.read_text(encoding="utf-8") == "preserve foreign work\n"
+    assert _git(foreign_root, "rev-parse", "HEAD") == branch_commit
+    assert state_path.is_file()
 
 
 def test_bootstrap_manifest_comes_from_exact_baseline_not_dirty_main(
@@ -2035,6 +2142,7 @@ def test_acceptance_base_resource_is_retained_then_deleted_idempotently(tmp_path
         repository=str(repository_fixture.remote),
         branch=branch,
     )
+    repository_request = RepositoryRequest(str(repository_fixture.remote), "main", "")
     retained_request = CleanupRequest(
         issue_identifier="AND-16",
         project_id=PROJECT_ID,
@@ -2046,7 +2154,7 @@ def test_acceptance_base_resource_is_retained_then_deleted_idempotently(tmp_path
             all_other_project_nodes_terminal=False,
             unresolved_remediation_blocker_count=0,
         ),
-        repository_list=[],
+        repository_list=[repository_request],
         pull_request_list=[],
         resource_list=[resource],
     )
@@ -2061,7 +2169,7 @@ def test_acceptance_base_resource_is_retained_then_deleted_idempotently(tmp_path
             all_other_project_nodes_terminal=True,
             unresolved_remediation_blocker_count=0,
         ),
-        repository_list=[],
+        repository_list=[repository_request],
         pull_request_list=[],
         resource_list=[resource],
         project_issue_identifier_list=["AND-16"],
@@ -2077,7 +2185,10 @@ def test_acceptance_base_resource_is_retained_then_deleted_idempotently(tmp_path
     assert _git(repository_fixture.root, "ls-remote", "--heads", "origin", branch) == ""
 
 
-def test_workflow_infrastructure_resource_uses_only_fixed_typed_provider_boundary(tmp_path: Path) -> None:
+def test_workflow_infrastructure_resource_uses_only_fixed_typed_provider_boundary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The registry uses the published owner worktree before merge and canonical main after merge."""
 
     repository_fixture = _repository_create(
@@ -2105,15 +2216,17 @@ def test_workflow_infrastructure_resource_uses_only_fixed_typed_provider_boundar
     _git(task_root, "add", script.name)
     _git(task_root, "commit", "-m", "Add cleanup entrypoint")
     _git(task_root, "push", "-u", "origin", "linear/and-45")
-    call_list: list[tuple[list[str], Path, bytes]] = []
+    call_list: list[tuple[list[str], Path, bytes, dict[str, str]]] = []
     inventory_absent = False
 
     def runner(argument_list: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
         input_bytes = kwargs["input"]
         cwd = kwargs["cwd"]
+        environment_by_name_map = kwargs["env"]
         assert isinstance(input_bytes, bytes)
         assert isinstance(cwd, Path)
-        call_list.append((argument_list, cwd, input_bytes))
+        assert isinstance(environment_by_name_map, dict)
+        call_list.append((argument_list, cwd, input_bytes, environment_by_name_map))
         operation = argument_list[2]
         if operation == "destroy":
             payload = {
@@ -2136,7 +2249,15 @@ def test_workflow_infrastructure_resource_uses_only_fixed_typed_provider_boundar
             stderr=b"",
         )
 
-    registry = CleanupResourceRegistry(config, runner=runner)
+    monkeypatch.setenv("HOME", "/tmp/foreign-home")
+    monkeypatch.setenv("CODEX_HOME", "/tmp/foreign-codex-home")
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "foreign-aws-access-key")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "foreign-aws-secret-key")
+    monkeypatch.setenv("AWS_SESSION_TOKEN", "foreign-aws-session-token")
+    monkeypatch.setenv("GH_TOKEN", "foreign-github-secret")
+    monkeypatch.setenv("LINEAR_API_KEY", "foreign-linear-secret")
+    monkeypatch.setenv("UNRELATED_SECRET", "foreign-secret")
+    registry = CleanupResourceRegistry(runner=runner)
     resource = WorkflowInfrastructureDevelopmentEnvironmentCleanupResource(
         project_id=PROJECT_ID,
         owner_issue_identifier="AND-45",
@@ -2154,7 +2275,7 @@ def test_workflow_infrastructure_resource_uses_only_fixed_typed_provider_boundar
             all_other_project_nodes_terminal=False,
             unresolved_remediation_blocker_count=0,
         ),
-        repository_list=[],
+        repository_list=[repository.request],
         pull_request_list=[],
         resource_list=[resource],
     )
@@ -2169,16 +2290,37 @@ def test_workflow_infrastructure_resource_uses_only_fixed_typed_provider_boundar
             all_other_project_nodes_terminal=True,
             unresolved_remediation_blocker_count=0,
         ),
-        repository_list=[],
+        repository_list=[repository.request],
         pull_request_list=[],
         resource_list=[resource],
         project_issue_identifier_list=["AND-45"],
     )
     reconciler = _task_cleanup_reconciler(config, resources=registry)
 
+    with pytest.raises(TaskCleanupError, match="does not declare its cleanup handler"):
+        reconciler.cleanup(retained_request)
+    assert call_list == []
+
+    (task_root / "worktree-bootstrap.yaml").write_text(
+        """schema_version: 3
+resource:
+  copy_optional_path_list: []
+  copy_required_path_list: []
+  link_optional_path_list: []
+  link_required_path_list: []
+cleanup:
+  handler_key_list:
+    - workflow-infrastructure-development-environment
+""",
+        encoding="utf-8",
+    )
+    _git(task_root, "add", "worktree-bootstrap.yaml")
+    _git(task_root, "commit", "-m", "Declare cleanup handler")
+    _git(task_root, "push", "origin", "linear/and-45")
+
     retained = reconciler.cleanup(retained_request)
     inventory_absent = True
-    absent = registry.reconcile(resource, delete=False)
+    absent = registry.reconcile(resource, repository=repository, delete=False)
     _git(repository_fixture.root, "merge", "--ff-only", "linear/and-45")
     _git(repository_fixture.root, "push", "origin", "main")
     first = reconciler.cleanup(project_request)
@@ -2189,7 +2331,21 @@ def test_workflow_infrastructure_resource_uses_only_fixed_typed_provider_boundar
     assert [item.state for item in first.resource_readback_list] == ["absent"]
     assert [item.state for item in second.resource_readback_list] == ["absent"]
     assert [item[0][2] for item in call_list] == ["destroy-inventory", "destroy-inventory", "destroy", "destroy"]
-    for index, (argument_list, cwd, input_bytes) in enumerate(call_list):
+    standard_home = Path(pwd.getpwuid(os.getuid()).pw_dir)
+    expected_environment_by_name_map = {
+        "HOME": str(standard_home),
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "PATH": os.pathsep.join(
+            (
+                str(standard_home / ".local" / "bin"),
+                "/usr/local/bin",
+                "/usr/bin",
+                "/bin",
+            )
+        ),
+    }
+    for index, (argument_list, cwd, input_bytes, environment_by_name_map) in enumerate(call_list):
         expected_root = task_root if index < 2 else repository_fixture.root
         assert argument_list == [
             sys.executable,
@@ -2200,3 +2356,4 @@ def test_workflow_infrastructure_resource_uses_only_fixed_typed_provider_boundar
         ]
         assert cwd == expected_root
         assert json.loads(input_bytes) == {"schema_version": 1, "common_prefix": "2026-08-08-and-45"}
+        assert environment_by_name_map == expected_environment_by_name_map

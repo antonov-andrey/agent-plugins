@@ -38,16 +38,16 @@ class TaskWorkspaceRetirement:
         self._repository = repository
         self._request = request
         self._state = state
-        self._task_root = repository.main_root / ".worktree" / request.issue_identifier.lower()
 
     def reconcile(self) -> WorkspaceRetirementResult:
         """Retire current worktree and branches, then remove private ownership state."""
 
         self.removal_require()
-        registered_branch = self._repository.worktree_branch_get(self._task_root)
+        task_root = self._repository.task_root_get(self._request.issue_identifier)
+        registered_branch = self._repository.task_worktree_branch_get(self._request.issue_identifier)
         removed_worktree_count = 0
-        if self._task_root.exists() or registered_branch is not None:
-            git_command_run(self._repository.main_root, ("worktree", "remove", "--force", str(self._task_root)))
+        if task_root.exists() or registered_branch is not None:
+            git_command_run(self._repository.main_root, ("worktree", "remove", "--force", str(task_root)))
             removed_worktree_count = 1
 
         self._repository.fetch()
@@ -80,18 +80,22 @@ class TaskWorkspaceRetirement:
     def removal_require(self) -> None:
         """Require every currently present task resource to remain exact and removable."""
 
+        task_root = self._repository.task_root_get(self._request.issue_identifier)
         self._repository.fetch()
-        registered_branch = self._repository.worktree_branch_get(self._task_root)
-        if self._task_root.exists() or registered_branch is not None:
+        registered_branch = self._repository.task_worktree_branch_get(self._request.issue_identifier)
+        if task_root.exists() or registered_branch is not None:
             if registered_branch != self._branch_name:
                 raise TaskCleanupError("Task worktree registration differs from its issue branch")
             try:
-                self._repository.task_worktree_require(self._request.issue_identifier, self._state)
+                task_root = self._repository.task_worktree_require(
+                    self._request.issue_identifier,
+                    self._state,
+                )
             except TaskWorkspaceError as error:
                 raise TaskCleanupError("Owned task worktree identity changed before cleanup") from error
             if self._request.authority.issue_status != "Canceled":
                 dirty = git_command_run(
-                    self._task_root,
+                    task_root,
                     ("status", "--porcelain=v1", "-z", "--ignore-submodules=none"),
                 ).stdout
                 if dirty:

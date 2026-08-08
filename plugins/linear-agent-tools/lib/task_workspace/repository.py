@@ -457,7 +457,7 @@ class WorkspaceRepository:
         self,
         issue_identifier: str,
         state: RepositoryWorkspaceState,
-    ) -> None:
+    ) -> Path:
         """Create or prove the exact issue-owned branch and worktree.
 
         Args:
@@ -467,11 +467,10 @@ class WorkspaceRepository:
 
         issue_identifier_validate(issue_identifier)
         self.task_container_require(create=True)
-        task_root = self.main_root / ".worktree" / issue_identifier.lower()
+        task_root = self.task_root_get(issue_identifier)
         branch_name = f"linear/{issue_identifier.lower()}"
         if task_root.exists():
-            self.task_worktree_require(issue_identifier, state)
-            return
+            return self.task_worktree_require(issue_identifier, state)
         if self._exist_branch_checkout_elsewhere(branch_name):
             raise TaskWorkspaceError("Task branch is already checked out in another worktree")
         if not self.exist_local_branch(branch_name):
@@ -491,9 +490,9 @@ class WorkspaceRepository:
                 git_command_run(self.main_root, ("branch", branch_name, state.baseline_commit))
         task_root.parent.mkdir(parents=True, exist_ok=True)
         git_command_run(self.main_root, ("worktree", "add", str(task_root), branch_name))
-        self.task_worktree_require(issue_identifier, state)
+        return self.task_worktree_require(issue_identifier, state)
 
-    def task_worktree_require(self, issue_identifier: str, state: RepositoryWorkspaceState) -> None:
+    def task_worktree_require(self, issue_identifier: str, state: RepositoryWorkspaceState) -> Path:
         """Require exact registration, branch, origin and ancestry for an issue task root.
 
         Args:
@@ -502,13 +501,10 @@ class WorkspaceRepository:
         """
 
         issue_identifier_validate(issue_identifier)
-        self.task_container_require(create=False)
-        task_root = self.main_root / ".worktree" / issue_identifier.lower()
+        task_root = self.task_root_get(issue_identifier)
         branch_name = f"linear/{issue_identifier.lower()}"
-        try:
-            task_root = task_root.resolve(strict=True)
-        except OSError as error:
-            raise TaskWorkspaceError("Task worktree path is absent or unavailable") from error
+        if not task_root.exists():
+            raise TaskWorkspaceError("Task worktree path is absent or unavailable")
         registration = self._branch_name_by_worktree_path_map_get().get(task_root)
         if registration != branch_name:
             raise TaskWorkspaceError("Task path is absent from Git worktree registration or uses another branch")
@@ -520,18 +516,19 @@ class WorkspaceRepository:
             raise TaskWorkspaceError("Task worktree origin differs from the participating repository identity")
         head = self.commit_get(branch_name)
         self._ancestor_require(state.baseline_commit, head, label="Task branch")
+        return task_root
 
-    def worktree_branch_get(self, task_root: Path) -> str | None:
-        """Return the exact registered branch for one task path when present.
+    def task_worktree_branch_get(self, issue_identifier: str) -> str | None:
+        """Return the exact registered branch for one issue task path when present.
 
         Args:
-            task_root: Exact task-worktree path.
+            issue_identifier: Exact Linear issue identifier.
 
         Returns:
             Registered local branch name, or absence.
         """
 
-        return self._branch_name_by_worktree_path_map_get().get(task_root.resolve(strict=False))
+        return self._branch_name_by_worktree_path_map_get().get(self.task_root_get(issue_identifier))
 
     def task_container_require(self, *, create: bool) -> None:
         """Require the repository-local worktree container to be a physical directory.
@@ -560,15 +557,43 @@ class WorkspaceRepository:
 
         issue_identifier = issue_identifier_validate(issue_identifier)
         branch_name = f"linear/{issue_identifier.lower()}"
-        self.task_container_require(create=False)
-        task_root = self.main_root / ".worktree" / issue_identifier.lower()
+        task_root = self.task_root_get(issue_identifier)
         if (
             task_root.exists()
-            or self.worktree_branch_get(task_root) is not None
+            or self.task_worktree_branch_get(issue_identifier) is not None
             or self.exist_local_branch(branch_name)
             or self.exist_remote_branch(branch_name)
         ):
             raise TaskWorkspaceError("Task resources exist without private ownership proof")
+
+    def task_root_get(self, issue_identifier: str) -> Path:
+        """Return the exact issue path after rejecting filesystem aliases.
+
+        Args:
+            issue_identifier: Exact Linear issue identifier.
+
+        Returns:
+            The absent or physical canonical task-worktree path.
+        """
+
+        issue_identifier = issue_identifier_validate(issue_identifier)
+        self.task_container_require(create=False)
+        task_root = self.main_root / ".worktree" / issue_identifier.lower()
+        try:
+            metadata = task_root.stat(follow_symlinks=False)
+        except FileNotFoundError:
+            return task_root
+        except OSError as error:
+            raise TaskWorkspaceError("Task worktree path is unavailable") from error
+        if not stat.S_ISDIR(metadata.st_mode):
+            raise TaskWorkspaceError("Task worktree path must be one physical canonical directory")
+        try:
+            resolved = task_root.resolve(strict=True)
+        except OSError as error:
+            raise TaskWorkspaceError("Task worktree path is unavailable") from error
+        if resolved != task_root:
+            raise TaskWorkspaceError("Task worktree path must be one physical canonical directory")
+        return task_root
 
     def _branch_name_by_worktree_path_map_get(self) -> dict[Path, str]:
         """Return registered branch by worktree path.
@@ -582,7 +607,7 @@ class WorkspaceRepository:
         current_path: Path | None = None
         for raw in item_list:
             if raw.startswith(b"worktree "):
-                current_path = Path(raw.removeprefix(b"worktree ").decode("utf-8")).resolve(strict=False)
+                current_path = Path(raw.removeprefix(b"worktree ").decode("utf-8"))
             elif raw.startswith(b"branch ") and current_path is not None:
                 ref = raw.removeprefix(b"branch ").decode("utf-8")
                 branch_name_by_worktree_path_map[current_path] = ref.removeprefix("refs/heads/")

@@ -208,6 +208,9 @@ class CleanupRequest:
         repository_identity_list = [item.origin_identity for item in self.repository_list]
         if len(set(repository_identity_list)) != len(self.repository_list):
             raise TaskCleanupError("Cleanup request repeats one repository")
+        repository_identity_set = set(repository_identity_list)
+        if any(resource.repository not in repository_identity_set for resource in self.resource_list):
+            raise TaskCleanupError("Cleanup resource repository must match one exact participating repository")
         if len(self.pull_request_list) != len(set(self.pull_request_list)):
             raise TaskCleanupError("Cleanup request repeats one pull request")
         pull_request_repository_list = [item.repository.value for item in self.pull_request_list]

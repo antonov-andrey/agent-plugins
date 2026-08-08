@@ -41,7 +41,7 @@ class TaskWorkspaceStatePlanner:
         manifest_bytes = self._repository.tracked_file_bytes_get(baseline, "worktree-bootstrap.yaml")
         if manifest_bytes is None:
             raise TaskWorkspaceError("Repository baseline omits required worktree-bootstrap.yaml")
-        task_root = self._repository.main_root / ".worktree" / self._request.basename
-        if task_root.exists() or task_root.is_symlink():
+        task_root = self._repository.task_root_get(self._request.issue_identifier)
+        if task_root.exists():
             raise TaskWorkspaceError("Task worktree path exists without private ownership state")
         return RepositoryWorkspaceState(baseline_commit=baseline)

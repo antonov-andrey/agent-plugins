@@ -57,12 +57,12 @@ class TaskWorkspaceTransaction:
             state_list: list[RepositoryWorkspaceState] = []
             for repository_request in request.repository_list:
                 repository = WorkspaceRepository.from_config(self._config, repository_request)
+                repository.task_root_get(request.issue_identifier)
                 state = repository.state_read(request.issue_identifier)
                 if state is None:
                     raise TaskWorkspaceError("Issue workspace has no private ownership state")
                 repository.state_identity_require(request.issue_identifier, state)
-                repository.task_worktree_require(request.issue_identifier, state)
-                task_root = repository.main_root / ".worktree" / request.basename
+                task_root = repository.task_worktree_require(request.issue_identifier, state)
                 WorkspaceSubmoduleReader(task_root).read()
                 for resource in self._retained_attempt_bootstrap_plan_get(repository, state).resource_list:
                     resource.ready_require(main_root=repository.main_root, task_root=task_root)
@@ -133,6 +133,7 @@ class TaskWorkspaceTransaction:
         """
 
         repository = WorkspaceRepository.from_config(self._config, repository_request)
+        repository.task_root_get(request.issue_identifier)
         state = repository.state_read(request.issue_identifier)
         if state is None:
             state = TaskWorkspaceStatePlanner(repository, request).plan()
@@ -141,8 +142,7 @@ class TaskWorkspaceTransaction:
         else:
             repository.state_identity_require(request.issue_identifier, state)
             bootstrap_plan = self._retained_attempt_bootstrap_plan_get(repository, state)
-        repository.task_worktree_create_or_accept(request.issue_identifier, state)
-        task_root = repository.main_root / ".worktree" / request.basename
+        task_root = repository.task_worktree_create_or_accept(request.issue_identifier, state)
         WorkspaceSubmoduleReader(task_root).prepare()
         for resource in bootstrap_plan.resource_list:
             resource.materialize(main_root=repository.main_root, task_root=task_root)

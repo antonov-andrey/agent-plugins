@@ -69,7 +69,7 @@ def main(argv: list[str] | None = None) -> int:
         result = TaskCleanupReconciler(
             config,
             github=GitHubPullRequestBoundary(),
-            resources=CleanupResourceRegistry(config),
+            resources=CleanupResourceRegistry(),
         ).cleanup(_request_load(args.request_input))
     except (GitHubContractError, TaskCleanupError, TaskWorkspaceError) as error:
         print(str(error), file=sys.stderr)

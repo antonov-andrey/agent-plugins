@@ -88,7 +88,7 @@ def main(argv: list[str] | None = None) -> int:
     repository_result_list: list[dict[str, object]] = []
     for index, state in enumerate(state_list):
         repository = WorkspaceRepository.from_config(config, request.repository_list[index])
-        task_root = repository.main_root / ".worktree" / request.basename
+        task_root = repository.task_worktree_require(request.issue_identifier, state)
         repository_result_list.append(
             {
                 "baseline_commit": state.baseline_commit,

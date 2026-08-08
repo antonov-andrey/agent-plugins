@@ -70,17 +70,13 @@ class AcceptanceBaseBranchCleanupResource:
     lifetime: ClassVar[str] = "project"
 
     def __post_init__(self) -> None:
-        """Normalize the exact owner and reject a branch outside the acceptance namespace."""
+        """Normalize the exact owner repository and reject an unsafe branch identity."""
 
         project_id, owner_issue_identifier = _owner_identity_validate(
             project_id=self.project_id,
             owner_issue_identifier=self.owner_issue_identifier,
         )
         repository = _repository_identity_get(self.repository)
-        if not repository.removesuffix(".git").endswith("/development-infrastructure"):
-            raise CleanupResourceContractError(
-                "Acceptance base cleanup requires the development-infrastructure repository"
-            )
         if not isinstance(self.branch, str) or _ACCEPTANCE_BRANCH_PATTERN.fullmatch(self.branch) is None:
             raise CleanupResourceContractError("Acceptance base cleanup branch is outside its fixed namespace")
         object.__setattr__(self, "project_id", project_id)
@@ -124,17 +120,13 @@ class WorkflowInfrastructureDevelopmentEnvironmentCleanupResource:
     lifetime: ClassVar[str] = "project"
 
     def __post_init__(self) -> None:
-        """Normalize the owner and require the Product's exact dated environment identity."""
+        """Normalize the owner repository and require the exact dated environment identity."""
 
         project_id, owner_issue_identifier = _owner_identity_validate(
             project_id=self.project_id,
             owner_issue_identifier=self.owner_issue_identifier,
         )
         repository = _repository_identity_get(self.repository)
-        if not repository.removesuffix(".git").endswith("/workflow-infrastructure"):
-            raise CleanupResourceContractError(
-                "Development environment cleanup requires the workflow-infrastructure repository"
-            )
         if not isinstance(self.common_prefix, str) or _COMMON_PREFIX_PATTERN.fullmatch(self.common_prefix) is None:
             raise CleanupResourceContractError("Development environment common prefix is malformed")
         object.__setattr__(self, "project_id", project_id)

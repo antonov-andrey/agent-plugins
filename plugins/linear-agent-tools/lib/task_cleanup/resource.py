@@ -5,7 +5,9 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 import json
+import os
 from pathlib import Path
+import pwd
 import subprocess
 import sys
 
@@ -16,7 +18,8 @@ from task_cleanup.contract import (
     WorkflowInfrastructureDevelopmentEnvironmentCleanupResource,
 )
 from task_cleanup.model import TaskCleanupError
-from task_workspace.model import RepositoryRequest, TaskWorkspaceError, WorkspaceConfig
+from task_workspace.bootstrap import BootstrapPlan
+from task_workspace.model import TaskWorkspaceError
 from task_workspace.repository import WorkspaceRepository, git_command_run, git_command_text_get
 
 
@@ -44,24 +47,18 @@ class AcceptanceBaseBranchCleanupHandler:
 
     resource_type = AcceptanceBaseBranchCleanupResource
 
-    def __init__(self, config: WorkspaceConfig) -> None:
-        """Bind the canonical workspace root used for repository discovery."""
-
-        self._config = config
-
     def reconcile(
         self,
         resource: AcceptanceBaseBranchCleanupResource,
         *,
+        repository: WorkspaceRepository,
         delete: bool,
     ) -> CleanupResourceReadback:
         """Read or delete the exact retained remote branch idempotently."""
 
+        if repository.origin_identity != resource.repository:
+            raise TaskCleanupError("Acceptance base branch cleanup repository owner differs from its resource")
         try:
-            repository = WorkspaceRepository.from_config(
-                self._config,
-                RepositoryRequest(resource.repository, resource.branch, ""),
-            )
             repository.fetch()
             if not repository.exist_remote_branch(resource.branch):
                 return CleanupResourceReadback(resource, "absent")
@@ -84,24 +81,44 @@ class WorkflowInfrastructureDevelopmentEnvironmentCleanupHandler:
 
     def __init__(
         self,
-        config: WorkspaceConfig,
         *,
         runner: Callable[..., subprocess.CompletedProcess[bytes]] = subprocess.run,
     ) -> None:
-        """Bind canonical repository discovery and the injectable fixed process boundary."""
+        """Bind the fixed closed-environment Product process boundary."""
 
-        self._config = config
+        try:
+            standard_home = Path(pwd.getpwuid(os.getuid()).pw_dir)
+        except KeyError as error:
+            raise TaskCleanupError("Development environment cleanup requires one operating-system user") from error
+        if not standard_home.is_absolute() or not standard_home.is_dir():
+            raise TaskCleanupError("Development environment cleanup requires the operating-system user's home")
+        self._environment_by_name_map = {
+            "HOME": str(standard_home),
+            "LANG": "C.UTF-8",
+            "LC_ALL": "C.UTF-8",
+            "PATH": os.pathsep.join(
+                (
+                    str(standard_home / ".local" / "bin"),
+                    "/usr/local/bin",
+                    "/usr/bin",
+                    "/bin",
+                )
+            ),
+        }
         self._runner = runner
 
     def reconcile(
         self,
         resource: WorkflowInfrastructureDevelopmentEnvironmentCleanupResource,
         *,
+        repository: WorkspaceRepository,
         delete: bool,
     ) -> CleanupResourceReadback:
         """Run fixed inventory or deletion and require the Product's exact typed readback."""
 
-        provider_root = self._provider_root_ready(resource, delete=delete)
+        if repository.origin_identity != resource.repository:
+            raise TaskCleanupError("Development environment cleanup repository owner differs from its resource")
+        provider_root = self._provider_root_ready(repository, resource, delete=delete)
         operation = "destroy" if delete else "destroy-inventory"
         argument_list = [
             sys.executable,
@@ -124,6 +141,7 @@ class WorkflowInfrastructureDevelopmentEnvironmentCleanupHandler:
                 cwd=provider_root,
                 check=False,
                 capture_output=True,
+                env=self._environment_by_name_map,
                 input=request_bytes,
             )
         except OSError as error:
@@ -169,6 +187,7 @@ class WorkflowInfrastructureDevelopmentEnvironmentCleanupHandler:
 
     def _provider_root_ready(
         self,
+        repository: WorkspaceRepository,
         resource: WorkflowInfrastructureDevelopmentEnvironmentCleanupResource,
         *,
         delete: bool,
@@ -176,10 +195,6 @@ class WorkflowInfrastructureDevelopmentEnvironmentCleanupHandler:
         """Select the exact retained owner worktree or synchronized post-merge main."""
 
         try:
-            repository = WorkspaceRepository.from_config(
-                self._config,
-                RepositoryRequest(resource.repository, "main", ""),
-            )
             repository.fetch()
             if not delete:
                 return self._retained_provider_root_require(repository, resource.owner_issue_identifier)
@@ -189,6 +204,7 @@ class WorkflowInfrastructureDevelopmentEnvironmentCleanupHandler:
                 raise TaskCleanupError("Workflow-infrastructure canonical main checkout is not clean")
             local_commit = repository.commit_get("refs/heads/main")
             remote_commit = repository.commit_get("refs/remotes/origin/main")
+            self._handler_declaration_require(repository, remote_commit)
             if local_commit != remote_commit:
                 ancestor = git_command_run(
                     repository.main_root,
@@ -208,16 +224,18 @@ class WorkflowInfrastructureDevelopmentEnvironmentCleanupHandler:
         except TaskWorkspaceError as error:
             raise TaskCleanupError("Workflow-infrastructure cleanup repository identity could not be proven") from error
 
-    @staticmethod
-    def _retained_provider_root_require(repository: WorkspaceRepository, owner_issue_identifier: str) -> Path:
+    def _retained_provider_root_require(
+        self,
+        repository: WorkspaceRepository,
+        owner_issue_identifier: str,
+    ) -> Path:
         """Require the pushed clean owner worktree that contains the unmerged inventory boundary."""
 
         state = repository.state_read(owner_issue_identifier)
         if state is None:
             raise TaskCleanupError("Workflow-infrastructure owner worktree state is absent before merge")
         repository.state_identity_require(owner_issue_identifier, state)
-        repository.task_worktree_require(owner_issue_identifier, state)
-        task_root = repository.main_root / ".worktree" / owner_issue_identifier.lower()
+        task_root = repository.task_worktree_require(owner_issue_identifier, state)
         if git_command_run(
             task_root,
             ("status", "--porcelain=v1", "-z", "--untracked-files=normal", "--ignore-submodules=none"),
@@ -229,17 +247,13 @@ class WorkflowInfrastructureDevelopmentEnvironmentCleanupHandler:
         branch_commit = repository.commit_get(f"refs/heads/{branch_name}")
         if repository.commit_get(f"refs/remotes/origin/{branch_name}") != branch_commit:
             raise TaskCleanupError("Workflow-infrastructure owner worktree differs from its published branch")
-        WorkflowInfrastructureDevelopmentEnvironmentCleanupHandler._entrypoint_require(
-            repository,
-            task_root,
-            branch_commit,
-        )
+        self._entrypoint_require(repository, task_root, branch_commit)
         return task_root
 
-    @staticmethod
-    def _entrypoint_require(repository: WorkspaceRepository, provider_root: Path, commit: str) -> None:
+    def _entrypoint_require(self, repository: WorkspaceRepository, provider_root: Path, commit: str) -> None:
         """Require the invoked entrypoint to equal one ordinary file in the selected commit."""
 
+        self._handler_declaration_require(repository, commit)
         script = provider_root / "development_environment_manage.py"
         tracked_bytes = repository.tracked_file_bytes_get(commit, script.name)
         if script.is_symlink() or not script.is_file() or tracked_bytes is None:
@@ -251,29 +265,46 @@ class WorkflowInfrastructureDevelopmentEnvironmentCleanupHandler:
         if current_bytes != tracked_bytes:
             raise TaskCleanupError("Workflow-infrastructure cleanup entrypoint differs from its selected commit")
 
+    def _handler_declaration_require(self, repository: WorkspaceRepository, commit: str) -> None:
+        """Require the selected owner commit to declare this exact fixed handler."""
+
+        manifest_bytes = repository.tracked_file_bytes_get(commit, "worktree-bootstrap.yaml")
+        if manifest_bytes is None:
+            raise TaskCleanupError("Workflow-infrastructure cleanup handler declaration is absent")
+        plan = BootstrapPlan.from_manifest(manifest_bytes, main_root=repository.main_root)
+        if self.resource_type.handler_key not in plan.cleanup_handler_key_list:
+            raise TaskCleanupError("Workflow-infrastructure owner does not declare its cleanup handler")
+
 
 class CleanupResourceRegistry:
     """Resolve only fixed installed provider handlers by their declared keys."""
 
     def __init__(
         self,
-        config: WorkspaceConfig,
         *,
         runner: Callable[..., subprocess.CompletedProcess[bytes]] = subprocess.run,
     ) -> None:
         """Construct the closed handler registry."""
 
         self._handler_by_key_map = {
-            AcceptanceBaseBranchCleanupResource.handler_key: AcceptanceBaseBranchCleanupHandler(config),
+            AcceptanceBaseBranchCleanupResource.handler_key: AcceptanceBaseBranchCleanupHandler(),
             WorkflowInfrastructureDevelopmentEnvironmentCleanupResource.handler_key: (
-                WorkflowInfrastructureDevelopmentEnvironmentCleanupHandler(config, runner=runner)
+                WorkflowInfrastructureDevelopmentEnvironmentCleanupHandler(runner=runner)
             ),
         }
 
-    def reconcile(self, resource: CleanupResource, *, delete: bool) -> CleanupResourceReadback:
+    def reconcile(
+        self,
+        resource: CleanupResource,
+        *,
+        repository: WorkspaceRepository,
+        delete: bool,
+    ) -> CleanupResourceReadback:
         """Dispatch one typed resource only through its fixed provider handler."""
 
         handler = self._handler_by_key_map.get(resource.handler_key)
         if handler is None or not isinstance(resource, handler.resource_type):
             raise TaskCleanupError("Cleanup resource handler is absent from the provider registry")
-        return handler.reconcile(resource, delete=delete)
+        if repository.origin_identity != resource.repository:
+            raise TaskCleanupError("Cleanup resource repository owner differs from its participating repository")
+        return handler.reconcile(resource, repository=repository, delete=delete)

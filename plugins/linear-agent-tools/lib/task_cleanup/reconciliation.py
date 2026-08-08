@@ -90,7 +90,7 @@ class TaskCleanupReconciler:
 
         self._config = config
         self._github = github
-        self._resources = resources or CleanupResourceRegistry(config)
+        self._resources = resources or CleanupResourceRegistry()
 
     def cleanup(self, request: CleanupRequest) -> CleanupResult:
         """Reconcile every exact requested cleanup target idempotently."""
@@ -121,7 +121,14 @@ class TaskCleanupReconciler:
             "project-final": {"attempt", "issue", "project"},
         }[state.request.authority.scope]
         for resource in state.request.resource_list:
-            readback = self._resources.reconcile(resource, delete=resource.lifetime in deleted_lifetime_set)
+            repository = state.repository_by_origin_identity_map.get(resource.repository)
+            if repository is None:
+                raise TaskCleanupError("Cleanup resource has no exact participating repository owner")
+            readback = self._resources.reconcile(
+                resource,
+                repository=repository,
+                delete=resource.lifetime in deleted_lifetime_set,
+            )
             expected_state = "absent" if resource.lifetime in deleted_lifetime_set else "retained"
             if readback.state not in {expected_state, "absent"}:
                 raise TaskCleanupError("Cleanup resource readback differs from its authorized lifetime")
@@ -165,9 +172,11 @@ class TaskCleanupReconciler:
     def _repository_state_load(self, state: CleanupState) -> None:
         """Load and validate exact participating repositories under the issue lock."""
 
-        repository_list = [
-            WorkspaceRepository.from_config(self._config, item) for item in state.request.repository_list
-        ]
+        repository_list: list[WorkspaceRepository] = []
+        for item in state.request.repository_list:
+            repository = WorkspaceRepository.from_config(self._config, item)
+            repository.task_root_get(state.request.issue_identifier)
+            repository_list.append(repository)
         state.repository_by_origin_identity_map = {
             repository.origin_identity: repository for repository in repository_list
         }
