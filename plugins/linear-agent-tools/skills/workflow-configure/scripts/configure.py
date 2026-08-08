@@ -132,21 +132,8 @@ def _labels_load(path: Path) -> list[LinearLabel]:
     return normalized
 
 
-def _plan_envelope(plan: ConfigurationPlan) -> dict[str, object]:
-    """Return one fingerprinted plan envelope.
-
-    Args:
-        plan: Typed configuration plan.
-
-    Returns:
-        The result payload.
-    """
-
-    return {**plan.payload(), "plan_sha256": plan.fingerprint()}
-
-
 def _approved_plan_load(path: Path) -> ConfigurationPlan:
-    """Load and verify one exact previously displayed plan.
+    """Load one exact previously displayed plan.
 
     Args:
         path: Exact plan-output path.
@@ -156,12 +143,7 @@ def _approved_plan_load(path: Path) -> ConfigurationPlan:
     """
 
     payload = _json_load(path, label="Approved plan")
-    if not isinstance(payload, dict) or "plan_sha256" not in payload:
-        raise LinearContractError("Approved plan envelope has another shape")
-    plan_payload = {name: value for name, value in payload.items() if name != "plan_sha256"}
-    plan = ConfigurationPlan.from_payload(plan_payload)
-    if payload["plan_sha256"] != plan.fingerprint():
-        raise LinearContractError("Approved plan fingerprint differs from its content")
+    plan = ConfigurationPlan.from_payload(payload)
     if not plan.can_mutate():
         raise LinearContractError("Conflicting workflow configuration cannot be approved")
     plan.status_identifier_require()
@@ -193,7 +175,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         if args.command == "plan":
             plan = plan.status_identifier_allocate()
-            print(json.dumps(_plan_envelope(plan), ensure_ascii=False, indent=2, sort_keys=True))
+            print(json.dumps(plan.payload(), ensure_ascii=False, indent=2, sort_keys=True))
             return 0 if plan.can_mutate() else 2
         approved_plan = _approved_plan_load(args.approved_plan_input)
         if (
@@ -216,7 +198,9 @@ def main(argv: list[str] | None = None) -> int:
         json.dumps(
             {
                 "schema_version": 1,
-                "approved_plan_sha256": approved_plan.fingerprint(),
+                "team_id": approved_plan.destination.team_id,
+                "viewer_id": approved_plan.destination.viewer_id,
+                "workspace_id": approved_plan.destination.workspace_id,
                 "status": "configured",
             },
             separators=(",", ":"),

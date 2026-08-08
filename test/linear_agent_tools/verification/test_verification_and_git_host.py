@@ -510,7 +510,6 @@ def test_local_phase_baseline_uses_exact_provider_history_without_candidate_iden
 
     baseline = LocalPhaseBaseline(
         project_id="22222222-2222-4222-8222-222222222222",
-        source_fingerprint="c" * 64,
         measured_at=datetime(2026, 8, 4, 12, 30, tzinfo=timezone.utc),
         duration_seconds_by_phase_map={
             "queue": 1.0,
@@ -529,29 +528,24 @@ def test_local_phase_baseline_uses_exact_provider_history_without_candidate_iden
         replace(baseline, duration_seconds_by_phase_map={"queue": 1.0})
 
 
-def test_task_workspace_baseline_is_deterministic_migration_evidence() -> None:
-    """First dispatch remains bound to source, branch and every remote-base commit."""
+def test_task_workspace_baseline_uses_natural_issue_and_repository_identities() -> None:
+    """First dispatch retains only its issue and canonical repository base commits."""
 
     baseline = TaskWorkspaceBaseline(
         issue_identifier="AND-17",
-        source_fingerprint="d" * 64,
-        branch_name="linear/and-17",
-        baseline_commit_by_repository_url_map={
-            "git@github.com:antonov-andrey/example.git": COMMIT_ONE,
-            "ssh://git@github.com/antonov-andrey/other.git": COMMIT_TWO,
+        baseline_commit_by_repository_identity_map={
+            "ssh://git@github.com/antonov-andrey/example": COMMIT_ONE,
+            "ssh://git@github.com/antonov-andrey/other": COMMIT_TWO,
         },
     )
     rendered = TASK_WORKSPACE_BASELINE_COMMENT_CODEC.render(baseline.payload())
 
     assert TaskWorkspaceBaseline.from_payload(TASK_WORKSPACE_BASELINE_COMMENT_CODEC.payload_parse(rendered)) == baseline
-    with pytest.raises(EvidenceContractError, match="branch differs"):
-        replace(baseline, branch_name="linear/and-18")
-    with pytest.raises(EvidenceContractError, match="repeats one repository identity"):
+    with pytest.raises(EvidenceContractError, match="not canonical"):
         replace(
             baseline,
-            baseline_commit_by_repository_url_map={
+            baseline_commit_by_repository_identity_map={
                 "git@github.com:antonov-andrey/example.git": COMMIT_ONE,
-                "ssh://git@github.com/antonov-andrey/example.git": COMMIT_TWO,
             },
         )
 

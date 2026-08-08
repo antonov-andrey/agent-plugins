@@ -46,13 +46,7 @@ query LinearAgentGitStatusAutomations($teamId: String!, $after: String) {
   team(id: $teamId) {
     id
     gitAutomationStates(first: 100, after: $after, includeArchived: false) {
-      nodes {
-        id
-        event
-        branchPattern
-        state { id }
-        targetBranch { id branchPattern isRegex }
-      }
+      nodes { id }
       pageInfo { hasNextPage endCursor }
     }
   }
@@ -62,15 +56,6 @@ query LinearAgentGitStatusAutomations($teamId: String!, $after: String) {
 _WORKFLOW_STATE_CREATE = """
 mutation LinearAgentWorkflowStateCreate($input: WorkflowStateCreateInput!) {
   workflowStateCreate(input: $input) {
-    success
-    workflowState { id name type color description position }
-  }
-}
-"""
-
-_WORKFLOW_STATE_UPDATE = """
-mutation LinearAgentWorkflowStateUpdate($id: String!, $input: WorkflowStateUpdateInput!) {
-  workflowStateUpdate(id: $id, input: $input) {
     success
     workflowState { id name type color description position }
   }
@@ -346,7 +331,6 @@ class LinearWorkflowConfigurationGraphQL:
         current_graphql_plan = ConfigurationPlan(
             destination=current_plan.destination,
             issue_status_create_list=current_plan.issue_status_create_list,
-            issue_status_update_list=current_plan.issue_status_update_list,
             project_status_create_list=current_plan.project_status_create_list,
             label_create_list=[],
             git_status_automation_delete_list=current_plan.git_status_automation_delete_list,
@@ -355,7 +339,6 @@ class LinearWorkflowConfigurationGraphQL:
         approved_graphql_plan = ConfigurationPlan(
             destination=approved_plan.destination,
             issue_status_create_list=approved_plan.issue_status_create_list,
-            issue_status_update_list=approved_plan.issue_status_update_list,
             project_status_create_list=approved_plan.project_status_create_list,
             label_create_list=[],
             git_status_automation_delete_list=approved_plan.git_status_automation_delete_list,
@@ -364,12 +347,6 @@ class LinearWorkflowConfigurationGraphQL:
         current_graphql_plan.subset_require(approved_graphql_plan)
         for automation in current_plan.git_status_automation_delete_list:
             self._delete_once(automation.id)
-        approved_issue_status_update_by_id_map = {item.id: item for item in approved_plan.issue_status_update_list}
-        for status in current_plan.issue_status_update_list:
-            approved_status = approved_issue_status_update_by_id_map.get(status.id)
-            if approved_status != status:
-                raise LinearContractError("Current status migration differs from the exact approved definition")
-            self._workflow_state_update_once(approved_status)
         approved_issue_status_by_name_map = {item.name: item for item in approved_plan.issue_status_create_list}
         for status in current_plan.issue_status_create_list:
             approved_status = approved_issue_status_by_name_map[status.name]
@@ -412,10 +389,6 @@ class LinearWorkflowConfigurationGraphQL:
             expected_viewer_id=expected_viewer_id,
             expected_team_id=expected_team_id,
         )
-        _status_update_readback_require(
-            approved_status_list=approved_plan.issue_status_update_list,
-            current_status_list=current.issue_status_list,
-        )
         readback = self._reconciler.plan_get(
             WorkflowConfigurationSnapshot(
                 destination=current.destination,
@@ -428,7 +401,6 @@ class LinearWorkflowConfigurationGraphQL:
         if (
             readback.conflict_list
             or readback.issue_status_create_list
-            or readback.issue_status_update_list
             or readback.project_status_create_list
             or readback.git_status_automation_delete_list
         ):
@@ -447,39 +419,6 @@ class LinearWorkflowConfigurationGraphQL:
         result = _object_get(data, "gitAutomationStateDelete")
         if result.get("success") is not True or result.get("entityId") != identifier:
             raise LinearTransportError("Linear Git status automation deletion did not confirm exact success")
-
-    def _workflow_state_update_once(self, status: StatusDefinition) -> None:
-        """Update one exact legacy workflow state without replacing its identity.
-
-        Args:
-            status: Desired current definition carrying the legacy status ID.
-        """
-
-        uuid_validate(status.id, label="Workflow status update ID")
-        data = self._transport.execute(
-            operation_name="LinearAgentWorkflowStateUpdate",
-            document=_WORKFLOW_STATE_UPDATE,
-            variables={
-                "id": status.id,
-                "input": {
-                    "name": status.name,
-                    "color": status.color,
-                    "description": status.description,
-                    "position": status.position,
-                },
-            },
-            repeat_safe=False,
-        )
-        result = _object_get(data, "workflowStateUpdate")
-        if set(result) != {"success", "workflowState"}:
-            raise LinearTransportError("Linear workflow status update response has another shape")
-        workflow_state = _object_get(result, "workflowState")
-        try:
-            returned_status = StatusDefinition.from_graphql_node(workflow_state)
-        except LinearContractError as error:
-            raise LinearTransportError("Linear workflow status update response has another shape") from error
-        if result["success"] is not True or returned_status != status:
-            raise LinearTransportError("Linear workflow status update differs from the full approved definition")
 
     def _create_once(
         self,
@@ -524,24 +463,6 @@ def _object_get(payload: dict[str, object], name: str) -> dict[str, object]:
     if not isinstance(value, dict):
         raise LinearContractError(f"Linear field {name} must be an object")
     return value
-
-
-def _status_update_readback_require(
-    *,
-    approved_status_list: list[StatusDefinition],
-    current_status_list: list[StatusDefinition],
-) -> None:
-    """Require every in-place migration at its preserved ID and exact definition."""
-
-    current_status_list_by_id_map: dict[str, list[StatusDefinition]] = {}
-    for status in current_status_list:
-        current_status_list_by_id_map.setdefault(status.id, []).append(status)
-    for approved_status in approved_status_list:
-        matching_status_list = current_status_list_by_id_map.get(approved_status.id, [])
-        if matching_status_list != [approved_status]:
-            raise LinearContractError(
-                f"Linear workflow status {approved_status.name} read-back differs from its preserved approved identity"
-            )
 
 
 def _text_get(payload: dict[str, object], name: str) -> str:

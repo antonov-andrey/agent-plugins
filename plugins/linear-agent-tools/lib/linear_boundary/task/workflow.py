@@ -91,7 +91,7 @@ class TaskTransition:
                 raise LinearContractError("Only implementation or final acceptance may enter Review")
             if self.role_label == "task:acceptance" and not self.proof.local_phase_baseline_readback_ready:
                 raise LinearContractError(
-                    "Final acceptance requires published and byte-read local phase baseline evidence"
+                    "Final acceptance requires published and semantically provider-read local phase baseline evidence"
                 )
             if not common_ready:
                 raise LinearContractError("Review requires every delivery-applicable result and semantic handoff")

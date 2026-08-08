@@ -9,7 +9,6 @@ from urllib.parse import urlsplit, urlunsplit
 from url_identity.host import UrlHostError, canonical_host_get
 
 COMMIT_PATTERN = re.compile(r"[0-9a-f]{40,64}")
-SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 UUID_PATTERN = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 ISSUE_IDENTIFIER_PATTERN = re.compile(r"[A-Z][A-Z0-9]*-[1-9][0-9]*")
 INSTANT_PATTERN = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{6})?Z")

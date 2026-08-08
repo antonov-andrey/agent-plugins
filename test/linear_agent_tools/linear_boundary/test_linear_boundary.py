@@ -25,8 +25,6 @@ from json_contract import JsonContractError, json_load_strict
 from linear_boundary.configuration.graphql import LinearWorkflowConfigurationGraphQL
 from linear_boundary.configuration.catalog import (
     ISSUE_STATUS_DESIRED,
-    ISSUE_STATUS_LEGACY_MERGING,
-    ISSUE_STATUS_LEGACY_REVIEW,
     LABEL_DESIRED,
     PROJECT_STATUS_DESIRED,
 )
@@ -185,7 +183,7 @@ def test_status_apply_precedes_still_missing_official_mcp_labels(
     labels_path.write_text("[]\n", encoding="utf-8")
     approved_path = tmp_path / "approved.json"
     approved_path.write_text(
-        json.dumps({**approved.payload(), "plan_sha256": approved.fingerprint()}),
+        json.dumps(approved.payload()),
         encoding="utf-8",
     )
     call_list: list[ConfigurationPlan] = []
@@ -246,61 +244,6 @@ def _status_node(item: StatusDefinition, index: int) -> dict[str, object]:
     }
 
 
-def _exact_status_node(item: StatusDefinition) -> dict[str, object]:
-    """Render one status with its already approved external identity."""
-
-    return {
-        "id": item.id,
-        "name": item.name,
-        "type": item.category,
-        "color": item.color,
-        "description": item.description,
-        "position": item.position,
-    }
-
-
-def _workflow_status_update_response(item: StatusDefinition) -> dict[str, object]:
-    """Return one full successful in-place status mutation response."""
-
-    return {
-        "workflowStateUpdate": {
-            "success": True,
-            "workflowState": _exact_status_node(item),
-        }
-    }
-
-
-def _legacy_issue_status_list_get() -> list[StatusDefinition]:
-    """Return the exact pre-migration Review and Merging definitions."""
-
-    return [
-        (
-            ISSUE_STATUS_LEGACY_REVIEW
-            if item.name == "Review"
-            else ISSUE_STATUS_LEGACY_MERGING if item.name == "Merging" else item
-        )
-        for item in ISSUE_STATUS_DESIRED
-    ]
-
-
-def _legacy_status_approved_plan_get() -> ConfigurationPlan:
-    """Build the deterministic approved in-place lifecycle migration plan."""
-
-    transport = _ScriptedTransport(
-        [
-            _workflow_response(_legacy_issue_status_list_get()),
-            _git_status_automation_response([]),
-            _project_status_response(PROJECT_STATUS_DESIRED),
-        ]
-    )
-    return LinearWorkflowConfigurationGraphQL(transport, WorkflowConfigurationReconciler()).plan(
-        expected_workspace_id=WORKSPACE_ID,
-        expected_viewer_id=VIEWER_ID,
-        expected_team_id=TEAM_ID,
-        label_list=list(_existing_label(item, index) for index, item in enumerate(LABEL_DESIRED, 1)),
-    )
-
-
 def _workflow_response(
     status_list: list[StatusDefinition],
     *,
@@ -356,24 +299,10 @@ def _project_status_response(
     }
 
 
-def _git_status_automation(
-    index: int,
-    *,
-    event: str = "merge",
-    target_branch: bool = False,
-    workflow_state: bool = True,
-) -> GitStatusAutomation:
+def _git_status_automation(index: int) -> GitStatusAutomation:
     """Return one deterministic existing Git status automation rule."""
 
-    return GitStatusAutomation(
-        id=f"30000000-0000-4000-8000-{index:012d}",
-        event=event,
-        workflow_state_id=(f"31000000-0000-4000-8000-{index:012d}" if workflow_state else ""),
-        target_branch_id=(f"32000000-0000-4000-8000-{index:012d}" if target_branch else ""),
-        target_branch_pattern=("main" if target_branch else ""),
-        target_branch_is_regex=False,
-        legacy_branch_pattern="",
-    )
+    return GitStatusAutomation(id=f"30000000-0000-4000-8000-{index:012d}")
 
 
 def _git_status_automation_response(
@@ -388,24 +317,7 @@ def _git_status_automation_response(
         "team": {
             "id": TEAM_ID,
             "gitAutomationStates": {
-                "nodes": [
-                    {
-                        "id": item.id,
-                        "event": item.event,
-                        "branchPattern": item.legacy_branch_pattern or None,
-                        "state": ({"id": item.workflow_state_id} if item.workflow_state_id else None),
-                        "targetBranch": (
-                            {
-                                "id": item.target_branch_id,
-                                "branchPattern": item.target_branch_pattern,
-                                "isRegex": item.target_branch_is_regex,
-                            }
-                            if item.target_branch_id
-                            else None
-                        ),
-                    }
-                    for item in automation_list
-                ],
+                "nodes": [{"id": item.id} for item in automation_list],
                 "pageInfo": {"hasNextPage": has_next, "endCursor": end_cursor},
             },
         }
@@ -449,7 +361,6 @@ def test_configuration_plan_is_exact_and_idempotent() -> None:
     plan = WorkflowConfigurationReconciler().plan_get(partial)
 
     assert [item.name for item in plan.issue_status_create_list] == [item.name for item in ISSUE_STATUS_DESIRED[3:]]
-    assert plan.issue_status_update_list == []
     assert plan.project_status_create_list == list(PROJECT_STATUS_DESIRED)
     assert plan.label_create_list == list(LABEL_DESIRED)
     assert plan.git_status_automation_delete_list == [_git_status_automation(1)]
@@ -469,7 +380,7 @@ def test_configuration_plan_is_exact_and_idempotent() -> None:
 
 
 def test_configuration_plan_roundtrip_and_fresh_subset_guard() -> None:
-    """One approved fingerprint authorizes only an exact remaining subset."""
+    """One approved typed plan authorizes only an exact remaining subset."""
 
     approved = (
         WorkflowConfigurationReconciler()
@@ -479,7 +390,7 @@ def test_configuration_plan_roundtrip_and_fresh_subset_guard() -> None:
                 [],
                 [],
                 [],
-                [_git_status_automation(1), _git_status_automation(2, target_branch=True)],
+                [_git_status_automation(1), _git_status_automation(2)],
             )
         )
         .status_identifier_allocate()
@@ -487,7 +398,6 @@ def test_configuration_plan_roundtrip_and_fresh_subset_guard() -> None:
     parsed = ConfigurationPlan.from_payload(approved.payload())
 
     assert parsed == approved
-    assert parsed.fingerprint() == approved.fingerprint()
     approved.status_identifier_require()
     assert all(
         uuid.UUID(item.id).version == 4
@@ -500,7 +410,6 @@ def test_configuration_plan_roundtrip_and_fresh_subset_guard() -> None:
     current = ConfigurationPlan(
         destination=approved.destination,
         issue_status_create_list=[replace(item, id="") for item in approved.issue_status_create_list[1:]],
-        issue_status_update_list=[],
         project_status_create_list=[replace(item, id="") for item in approved.project_status_create_list],
         label_create_list=[],
         git_status_automation_delete_list=approved.git_status_automation_delete_list[:1],
@@ -528,64 +437,8 @@ def test_configuration_plan_roundtrip_and_fresh_subset_guard() -> None:
     with pytest.raises(LinearContractError, match="Git status automation plan changed"):
         replace(
             current,
-            git_status_automation_delete_list=[replace(current.git_status_automation_delete_list[0], event="review")],
+            git_status_automation_delete_list=[_git_status_automation(3)],
         ).subset_require(approved)
-
-
-def test_configuration_migrates_exact_legacy_review_status_without_replacing_identity() -> None:
-    """Only the recognized legacy definition becomes an in-place Review update."""
-
-    legacy_review = _existing_status(ISSUE_STATUS_LEGACY_REVIEW, 4)
-    current_issue_status_list = [
-        _existing_status(item, index) for index, item in enumerate(ISSUE_STATUS_DESIRED, 1) if item.name != "Review"
-    ]
-    current_issue_status_list.append(legacy_review)
-
-    plan = WorkflowConfigurationReconciler().plan_get(
-        WorkflowConfigurationSnapshot(_destination(), current_issue_status_list, [], [], [])
-    )
-
-    assert plan.issue_status_create_list == []
-    assert plan.issue_status_update_list == [replace(ISSUE_STATUS_DESIRED[3], id=legacy_review.id)]
-    assert plan.issue_status_update_list[0].id == legacy_review.id
-    assert plan.can_mutate()
-    plan.subset_require(plan)
-    with pytest.raises(LinearContractError, match="status update plan changed"):
-        replace(
-            plan,
-            issue_status_update_list=[replace(plan.issue_status_update_list[0], color="#000000")],
-        ).subset_require(plan)
-
-    changed_legacy = replace(legacy_review, description="foreign lifecycle")
-    conflict = WorkflowConfigurationReconciler().plan_get(
-        WorkflowConfigurationSnapshot(_destination(), [changed_legacy], [], [], [])
-    )
-    assert not conflict.can_mutate()
-    assert conflict.issue_status_update_list == []
-    assert ("issue-status", "Review", "legacy status is not the exact provider definition") in {
-        (item.kind, item.name, item.reason) for item in conflict.conflict_list
-    }
-
-    current_review = _existing_status(ISSUE_STATUS_DESIRED[3], 5)
-    duplicate = WorkflowConfigurationReconciler().plan_get(
-        WorkflowConfigurationSnapshot(_destination(), [legacy_review, current_review], [], [], [])
-    )
-    assert not duplicate.can_mutate()
-    assert ("issue-status", "Review", "current and legacy review statuses coexist") in {
-        (item.kind, item.name, item.reason) for item in duplicate.conflict_list
-    }
-
-    legacy_merging = _existing_status(ISSUE_STATUS_LEGACY_MERGING, 6)
-    merging_status_list = [
-        _existing_status(item, index) for index, item in enumerate(ISSUE_STATUS_DESIRED, 1) if item.name != "Merging"
-    ]
-    merging_status_list.append(legacy_merging)
-    merging_plan = WorkflowConfigurationReconciler().plan_get(
-        WorkflowConfigurationSnapshot(_destination(), merging_status_list, [], [], [])
-    )
-    assert merging_plan.issue_status_update_list == [
-        replace(next(item for item in ISSUE_STATUS_DESIRED if item.name == "Merging"), id=legacy_merging.id)
-    ]
 
 
 def test_configuration_rejects_wrong_category_and_foreign_label() -> None:
@@ -672,8 +525,8 @@ def test_dispatchability_distinguishes_codex_review_from_final_human_boundary() 
         replace(ready, delegate_id=VIEWER_ID)
 
 
-def test_task_state_cli_accepts_legacy_review_text_as_current_semantic_review(tmp_path: Path) -> None:
-    """An active Project remains operable on either side of status migration."""
+def test_task_state_cli_rejects_removed_legacy_review_status(tmp_path: Path) -> None:
+    """Only the current Review identity crosses the task-state boundary."""
 
     tool = LIBRARY_ROOT / "linear_boundary" / "tool" / "task.py"
     input_path = tmp_path / "dispatch.json"
@@ -699,8 +552,9 @@ def test_task_state_cli_accepts_legacy_review_text_as_current_semantic_review(tm
         text=True,
     )
 
-    assert result.returncode == 0
-    assert json.loads(result.stdout)["dispatchable"] is True
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert "unsupported value" in result.stderr
 
 
 def test_transition_requires_fresh_rework_and_complete_implementation_handoff() -> None:
@@ -1425,11 +1279,11 @@ def test_graphql_configuration_fully_paginates_and_guards_exact_destination() ->
             _workflow_response(ISSUE_STATUS_DESIRED[:4], has_next=True, end_cursor="next-page"),
             _workflow_response(ISSUE_STATUS_DESIRED[4:]),
             _git_status_automation_response(
-                [_git_status_automation(1, event="start")],
+                [_git_status_automation(1)],
                 has_next=True,
                 end_cursor="next-automation-page",
             ),
-            _git_status_automation_response([_git_status_automation(2, target_branch=True, workflow_state=False)]),
+            _git_status_automation_response([_git_status_automation(2)]),
             _project_status_response(PROJECT_STATUS_DESIRED),
         ]
     )
@@ -1444,8 +1298,8 @@ def test_graphql_configuration_fully_paginates_and_guards_exact_destination() ->
     assert [item.name for item in current.issue_status_list] == [item.name for item in ISSUE_STATUS_DESIRED]
     assert [item.name for item in current.project_status_list] == [item.name for item in PROJECT_STATUS_DESIRED]
     assert current.git_status_automation_list == [
-        _git_status_automation(1, event="start"),
-        _git_status_automation(2, target_branch=True, workflow_state=False),
+        _git_status_automation(1),
+        _git_status_automation(2),
     ]
     assert transport.call_list[1]["variables"]["after"] == "next-page"
     assert transport.call_list[3]["variables"]["after"] == "next-automation-page"
@@ -1456,8 +1310,8 @@ def test_graphql_configuration_fully_paginates_and_guards_exact_destination() ->
     assert all(item["repeat_safe"] is True for item in transport.call_list)
 
 
-def test_graphql_configuration_plan_can_discover_workspace_but_binds_its_fingerprint() -> None:
-    """The first read-only plan discovers one workspace and makes it approved-plan state."""
+def test_graphql_configuration_plan_can_discover_workspace_and_bind_its_natural_identity() -> None:
+    """The first read-only plan discovers one workspace and retains its provider identity."""
 
     transport = _ScriptedTransport(
         [
@@ -1541,175 +1395,12 @@ def test_graphql_configuration_rereads_approved_destination_before_status_mutati
     assert "status { id name type color description position }" in project_create_call["document"]
 
 
-def test_graphql_configuration_updates_legacy_lifecycle_in_place_and_reads_back_identity() -> None:
-    """Native update mutations preserve review and Merging status identities."""
-
-    legacy_issue_status_list = [
-        (
-            ISSUE_STATUS_LEGACY_REVIEW
-            if item.name == "Review"
-            else ISSUE_STATUS_LEGACY_MERGING if item.name == "Merging" else item
-        )
-        for item in ISSUE_STATUS_DESIRED
-    ]
-    planning_transport = _ScriptedTransport(
-        [
-            _workflow_response(legacy_issue_status_list),
-            _git_status_automation_response([]),
-            _project_status_response(PROJECT_STATUS_DESIRED),
-        ]
-    )
-    approved = LinearWorkflowConfigurationGraphQL(planning_transport, WorkflowConfigurationReconciler()).plan(
-        expected_workspace_id=WORKSPACE_ID,
-        expected_viewer_id=VIEWER_ID,
-        expected_team_id=TEAM_ID,
-        label_list=list(_existing_label(item, index) for index, item in enumerate(LABEL_DESIRED, 1)),
-    )
-    assert [item.name for item in approved.issue_status_update_list] == ["Review", "Merging"]
-    review_update, merging_update = approved.issue_status_update_list
-
-    transport = _ScriptedTransport(
-        [
-            _workflow_response(legacy_issue_status_list),
-            _git_status_automation_response([]),
-            _project_status_response(PROJECT_STATUS_DESIRED),
-            _workflow_status_update_response(review_update),
-            _workflow_status_update_response(merging_update),
-            _workflow_response(ISSUE_STATUS_DESIRED),
-            _git_status_automation_response([]),
-            _project_status_response(PROJECT_STATUS_DESIRED),
-        ]
-    )
-
-    LinearWorkflowConfigurationGraphQL(transport, WorkflowConfigurationReconciler()).approved_configuration_apply(
-        expected_workspace_id=WORKSPACE_ID,
-        expected_viewer_id=VIEWER_ID,
-        expected_team_id=TEAM_ID,
-        approved_plan=approved,
-    )
-
-    review_call, merging_call = transport.call_list[3:5]
-    assert review_call["operation_name"] == "LinearAgentWorkflowStateUpdate"
-    assert review_call["repeat_safe"] is False
-    assert review_call["variables"]["id"] == review_update.id
-    assert review_call["variables"]["input"]["name"] == "Review"
-    assert "type" not in review_call["variables"]["input"]
-    assert "workflowStateUpdate(id: $id" in review_call["document"]
-    assert merging_call["operation_name"] == "LinearAgentWorkflowStateUpdate"
-    assert merging_call["variables"]["id"] == merging_update.id
-    assert merging_call["variables"]["input"]["description"] == (
-        "Independently reviewed pull request heads are being merged"
-    )
-    assert not any(item["operation_name"] == "LinearAgentWorkflowStateCreate" for item in transport.call_list)
-
-
-@pytest.mark.parametrize(
-    ("field_name", "replacement", "remove_field", "message"),
-    (
-        ("position", None, True, "response has another shape"),
-        ("id", "90000000-0000-4000-8000-000000000001", False, "full approved definition"),
-        ("name", "Human Review", False, "full approved definition"),
-        ("type", "completed", False, "full approved definition"),
-        ("color", "#FFFFFF", False, "full approved definition"),
-        ("description", "Waiting for human approval", False, "full approved definition"),
-        ("position", 999.0, False, "full approved definition"),
-    ),
-)
-def test_graphql_status_migration_rejects_partial_or_altered_mutation_response(
-    field_name: str,
-    replacement: object,
-    remove_field: bool,
-    message: str,
-) -> None:
-    """Mutation success is valid only with the complete approved status definition."""
-
-    approved = _legacy_status_approved_plan_get()
-    review_update = approved.issue_status_update_list[0]
-    response_node = _exact_status_node(review_update)
-    if remove_field:
-        del response_node[field_name]
-    else:
-        response_node[field_name] = replacement
-    transport = _ScriptedTransport(
-        [
-            _workflow_response(_legacy_issue_status_list_get()),
-            _git_status_automation_response([]),
-            _project_status_response(PROJECT_STATUS_DESIRED),
-            {"workflowStateUpdate": {"success": True, "workflowState": response_node}},
-        ]
-    )
-
-    with pytest.raises(LinearTransportError, match=message):
-        LinearWorkflowConfigurationGraphQL(
-            transport,
-            WorkflowConfigurationReconciler(),
-        ).approved_configuration_apply(
-            expected_workspace_id=WORKSPACE_ID,
-            expected_viewer_id=VIEWER_ID,
-            expected_team_id=TEAM_ID,
-            approved_plan=approved,
-        )
-
-
-@pytest.mark.parametrize(
-    ("field_name", "replacement"),
-    (
-        ("id", "90000000-0000-4000-8000-000000000002"),
-        ("name", "Human Review"),
-        ("type", "completed"),
-        ("color", "#FFFFFF"),
-        ("description", "Waiting for human approval"),
-        ("position", 999.0),
-    ),
-)
-def test_graphql_status_migration_rejects_altered_final_readback(
-    field_name: str,
-    replacement: object,
-) -> None:
-    """Final readback preserves the legacy ID and every approved definition field."""
-
-    approved = _legacy_status_approved_plan_get()
-    review_update, merging_update = approved.issue_status_update_list
-    final_workflow_response = _workflow_response(ISSUE_STATUS_DESIRED)
-    team = final_workflow_response["team"]
-    assert isinstance(team, dict)
-    states = team["states"]
-    assert isinstance(states, dict)
-    node_list = states["nodes"]
-    assert isinstance(node_list, list)
-    review_node = next(item for item in node_list if isinstance(item, dict) and item.get("name") == "Review")
-    review_node[field_name] = replacement
-    transport = _ScriptedTransport(
-        [
-            _workflow_response(_legacy_issue_status_list_get()),
-            _git_status_automation_response([]),
-            _project_status_response(PROJECT_STATUS_DESIRED),
-            _workflow_status_update_response(review_update),
-            _workflow_status_update_response(merging_update),
-            final_workflow_response,
-            _git_status_automation_response([]),
-            _project_status_response(PROJECT_STATUS_DESIRED),
-        ]
-    )
-
-    with pytest.raises(LinearContractError, match="preserved approved identity"):
-        LinearWorkflowConfigurationGraphQL(
-            transport,
-            WorkflowConfigurationReconciler(),
-        ).approved_configuration_apply(
-            expected_workspace_id=WORKSPACE_ID,
-            expected_viewer_id=VIEWER_ID,
-            expected_team_id=TEAM_ID,
-            approved_plan=approved,
-        )
-
-
 def test_graphql_configuration_deletes_every_exact_git_status_automation_before_readback() -> None:
     """Provider-owned task statuses cannot be changed by default or branch Git rules."""
 
     automation_list = [
-        _git_status_automation(1, event="start"),
-        _git_status_automation(2, event="merge", target_branch=True, workflow_state=False),
+        _git_status_automation(1),
+        _git_status_automation(2),
     ]
     current_snapshot = WorkflowConfigurationSnapshot(
         destination=_destination(),

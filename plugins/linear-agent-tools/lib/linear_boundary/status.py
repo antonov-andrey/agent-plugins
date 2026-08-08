@@ -35,11 +35,8 @@ class IssueStatusName(StrEnum):
     CANCELED = "Canceled"
 
 
-LEGACY_REVIEW_STATUS_NAME = "Human Review"
-
-
 def issue_status_name_parse(value: object) -> IssueStatusName:
-    """Parse current or migration-compatible provider status text.
+    """Parse one current provider status name.
 
     Args:
         value: Exact status name read from Linear.
@@ -48,8 +45,6 @@ def issue_status_name_parse(value: object) -> IssueStatusName:
         Current semantic issue status.
     """
 
-    if value == LEGACY_REVIEW_STATUS_NAME:
-        return IssueStatusName.REVIEW
     if not isinstance(value, str):
         raise ValueError("Issue status name must be text")
     return IssueStatusName(value)
