@@ -534,8 +534,8 @@ def test_task_workspace_baseline_uses_natural_issue_and_repository_identities() 
     baseline = TaskWorkspaceBaseline(
         issue_identifier="AND-17",
         baseline_commit_by_repository_identity_map={
-            "ssh://git@github.com/antonov-andrey/example": COMMIT_ONE,
-            "ssh://git@github.com/antonov-andrey/other": COMMIT_TWO,
+            "github.com/antonov-andrey/example": COMMIT_ONE,
+            "github.com/antonov-andrey/other": COMMIT_TWO,
         },
     )
     rendered = TASK_WORKSPACE_BASELINE_COMMENT_CODEC.render(baseline.payload())

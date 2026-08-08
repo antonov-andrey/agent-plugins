@@ -589,20 +589,20 @@ def test_direct_workspace_and_cleanup_models_require_strict_typed_lists(
 
 
 def test_workspace_request_rejects_duplicate_normalized_repository_identity() -> None:
-    """Equivalent SCP and explicit SSH origins cannot create two worktrees for one repository."""
+    """Equivalent GitHub SCP and HTTPS origins cannot create two task owners."""
 
     with pytest.raises(TaskWorkspaceError, match="repeats one repository origin"):
         WorkspaceRequest(
             "AND-121",
             [
                 RepositoryRequest("git@github.com:antonov-andrey/example.git", "main", ""),
-                RepositoryRequest("ssh://git@github.com/antonov-andrey/example.git", "main", ""),
+                RepositoryRequest("https://github.com/antonov-andrey/example.git", "main", ""),
             ],
         )
 
 
 def test_cleanup_request_rejects_duplicate_normalized_repository_identity() -> None:
-    """Cleanup cannot address one physical repository twice through URL aliases."""
+    """Terminal cleanup cannot address one GitHub repository twice through transport aliases."""
 
     authority = CleanupAuthority(
         scope="terminal-issue",
@@ -619,11 +619,29 @@ def test_cleanup_request_rejects_duplicate_normalized_repository_identity() -> N
             authority=authority,
             repository_list=[
                 RepositoryRequest("git@github.com:antonov-andrey/example.git", "main", ""),
-                RepositoryRequest("ssh://git@github.com/antonov-andrey/example.git", "main", ""),
+                RepositoryRequest("https://github.com/antonov-andrey/example.git", "main", ""),
             ],
             pull_request_list=[],
             resource_list=[],
         )
+
+
+def test_workspace_discovery_rejects_two_checkouts_for_github_transport_aliases(tmp_path: Path) -> None:
+    """SCP and HTTPS checkout aliases cannot split one repository's workspace ownership."""
+
+    for name, origin in (
+        ("scp-checkout", "git@github.com:antonov-andrey/example.git"),
+        ("https-checkout", "https://github.com/antonov-andrey/example.git"),
+    ):
+        checkout = tmp_path / name
+        checkout.mkdir()
+        _git(checkout, "init", "--initial-branch=main")
+        _git(checkout, "remote", "add", "origin", origin)
+
+    request = RepositoryRequest("github.com/antonov-andrey/example", "main", "")
+
+    with pytest.raises(TaskWorkspaceError, match="found 2"):
+        WorkspaceRepository.from_config(WorkspaceConfig(tmp_path.resolve()), request)
 
 
 @pytest.mark.parametrize(
@@ -1651,7 +1669,7 @@ def test_cleanup_requires_complete_exact_pull_request_set(tmp_path: Path) -> Non
     )
 
     class Repository:
-        origin_identity = "https://github.com/antonov-andrey/example"
+        origin_identity = "github.com/antonov-andrey/example"
         request = type("Request", (), {"base_branch": "main"})()
 
     class GitHub:
@@ -1718,7 +1736,7 @@ def test_successful_cleanup_rejects_closed_unmerged_only_history(tmp_path: Path)
     )
 
     class Repository:
-        origin_identity = "https://github.com/antonov-andrey/example"
+        origin_identity = "github.com/antonov-andrey/example"
         request = RepositoryRequest("https://github.com/antonov-andrey/example.git", "main", "")
 
     class GitHub:
@@ -1797,7 +1815,7 @@ def test_successful_cleanup_selects_merged_candidate_over_closed_unmerged_histor
     )
 
     class Repository:
-        origin_identity = "https://github.com/antonov-andrey/example"
+        origin_identity = "github.com/antonov-andrey/example"
         request = RepositoryRequest("https://github.com/antonov-andrey/example.git", "main", "")
 
     class GitHub:
@@ -1863,7 +1881,7 @@ def test_canceled_cleanup_accepts_closed_history_without_issue_title(tmp_path: P
     )
 
     class Repository:
-        origin_identity = "https://github.com/antonov-andrey/example"
+        origin_identity = "github.com/antonov-andrey/example"
         request = RepositoryRequest("https://github.com/antonov-andrey/example.git", "main", "")
 
     class GitHub:
@@ -1954,7 +1972,7 @@ def test_cleanup_reconciles_complete_exact_pull_request_set(
     )
 
     class Repository:
-        origin_identity = "https://github.com/antonov-andrey/example"
+        origin_identity = "github.com/antonov-andrey/example"
         request = RepositoryRequest(
             "https://github.com/antonov-andrey/example.git",
             "main",

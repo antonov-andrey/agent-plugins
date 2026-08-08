@@ -21,16 +21,19 @@ from git_origin.identity import (
 )
 
 
-def test_origin_identity_preserves_security_relevant_url_components() -> None:
-    """Ports and SSH users cannot collapse distinct repository origins."""
+def test_origin_identity_collapses_supported_github_transport_aliases() -> None:
+    """GitHub SCP, SSH and HTTPS transports identify one owner/repository."""
 
-    assert origin_identity_get("git@github.com:owner/example.git") == "ssh://git@github.com/owner/example"
-    assert origin_identity_get("ssh://git@github.com/owner/example.git") == "ssh://git@github.com/owner/example"
-    assert origin_identity_get("ssh://git@github.com:2222/owner/example.git") == (
-        "ssh://git@github.com:2222/owner/example"
-    )
-    assert origin_identity_get("ssh://github.com/owner/example.git") == "ssh://github.com/owner/example"
-    assert origin_identity_get("ssh://deploy@github.com/owner/example.git") == "ssh://deploy@github.com/owner/example"
+    expected = "github.com/owner/example"
+    assert origin_identity_get("git@github.com:owner/example.git") == expected
+    assert origin_identity_get("ssh://git@github.com/owner/example.git") == expected
+    assert origin_identity_get("https://github.com/owner/example.git") == expected
+    assert origin_identity_get(expected) == expected
+
+
+def test_origin_identity_preserves_non_github_transport_semantics() -> None:
+    """Non-GitHub users, ports and SCP path modes remain distinct identities."""
+
     assert origin_identity_get("ssh://git@[2001:db8::1]:2222/owner/example.git") == (
         "ssh://git@[2001:db8::1]:2222/owner/example"
     )
@@ -41,10 +44,30 @@ def test_origin_identity_preserves_security_relevant_url_components() -> None:
 @pytest.mark.parametrize(
     "value",
     [
+        "ssh://git@github.com:2222/owner/example.git",
+        "ssh://github.com/owner/example.git",
+        "ssh://deploy@github.com/owner/example.git",
+        "http://github.com/owner/example.git",
+        "git://github.com/owner/example.git",
+        "ssh+scp://git@github.com/owner/example.git",
+        "git@github.com:/owner/example.git",
+        "https://github.com/owner/example/extra.git",
+        "https://github.com/owner/~example.git",
+    ],
+)
+def test_origin_identity_rejects_unsupported_or_ambiguous_github_origins(value: str) -> None:
+    """Only explicit standard GitHub transport aliases reach repository ownership."""
+
+    with pytest.raises(GitOriginError, match="GitHub repository origin"):
+        origin_identity_get(value)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
         "git@github.com:owner/example.git",
         "git@example.com:owner/example.git",
         "ssh://git@[2001:db8::1]:2222/owner/example.git",
-        "https://github.com/owner/%7Eexample.git",
     ],
 )
 def test_network_origin_identity_is_idempotent(value: str) -> None:
