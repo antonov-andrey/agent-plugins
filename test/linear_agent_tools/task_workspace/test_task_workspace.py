@@ -178,6 +178,72 @@ cleanup:
     assert plan.cleanup_handler_key_list == ["workflow-infrastructure-development-environment"]
 
 
+def test_retained_attempt_parser_accepts_only_inert_version_2_baselines(tmp_path: Path) -> None:
+    """Immutable owned attempts may recover v2 resources without restoring cleanup argv authority."""
+
+    payload_list = [
+        b"""schema_version: 2
+resource:
+  copy_optional_path_list: []
+  copy_required_path_list: []
+  link_optional_path_list: []
+  link_required_path_list: []
+""",
+        b"""schema_version: 2
+resource:
+  copy_optional_path_list: []
+  copy_required_path_list: []
+  link_optional_path_list: []
+  link_required_path_list: []
+cleanup:
+  command_argument_list:
+    - python
+    - development_environment_manage.py
+    - destroy
+    - --git-worktree
+    - "{common_prefix}"
+""",
+    ]
+
+    for payload in payload_list:
+        plan = BootstrapPlan.from_retained_attempt_manifest(payload, main_root=tmp_path)
+        assert plan.resource_list == []
+        assert plan.cleanup_handler_key_list == []
+        with pytest.raises(TaskWorkspaceError):
+            BootstrapPlan.from_manifest(payload, main_root=tmp_path)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b"""schema_version: 2
+resource:
+  copy_optional_path_list: []
+  copy_required_path_list: []
+  link_optional_path_list: []
+  link_required_path_list: []
+cleanup:
+  handler_key_list: []
+""",
+        b"""schema_version: 2
+resource:
+  copy_optional_path_list: []
+  copy_required_path_list: []
+  link_optional_path_list: []
+  link_required_path_list: []
+cleanup:
+  command_argument_list:
+    - null
+""",
+    ],
+)
+def test_retained_attempt_parser_rejects_nonhistorical_version_2_shapes(payload: bytes, tmp_path: Path) -> None:
+    """The recovery parser admits only the two exact historical v2 shapes."""
+
+    with pytest.raises(TaskWorkspaceError):
+        BootstrapPlan.from_retained_attempt_manifest(payload, main_root=tmp_path)
+
+
 @pytest.mark.parametrize(
     "payload",
     [
@@ -974,6 +1040,54 @@ cleanup:
 
     assert state.baseline_commit == _git(root, "rev-parse", "HEAD")
     assert _git(root / ".worktree" / request.basename, "branch", "--show-current") == request.branch_name
+
+
+def test_owned_version_2_attempt_recovers_while_new_attempt_requires_version_3(tmp_path: Path) -> None:
+    """A schema upgrade preserves only already-owned immutable attempt baselines."""
+
+    repository_fixture = _repository_create(tmp_path, resources=False)
+    root = repository_fixture.root
+    remote = repository_fixture.remote
+    (root / "worktree-bootstrap.yaml").write_text(
+        """schema_version: 2
+resource:
+  copy_optional_path_list: []
+  copy_required_path_list: []
+  link_optional_path_list: []
+  link_required_path_list: []
+cleanup:
+  command_argument_list:
+    - python
+    - development_environment_manage.py
+    - destroy
+    - --git-worktree
+    - "{common_prefix}"
+""",
+        encoding="utf-8",
+    )
+    _git(root, "add", "worktree-bootstrap.yaml")
+    _git(root, "commit", "-m", "Represent retained version two attempt baseline")
+    _git(root, "push", "origin", "main")
+    baseline_commit = _git(root, "rev-parse", "HEAD")
+    config = WorkspaceConfig(tmp_path.resolve())
+
+    new_request = _request(remote, issue="AND-125", baseline=baseline_commit)
+    with pytest.raises(TaskWorkspaceError, match="schema_version must be 3"):
+        TaskWorkspaceTransaction(config).prepare(new_request)
+    assert _git(root, "branch", "--list", new_request.branch_name) == ""
+
+    retained_request = _request(remote, issue="AND-126", baseline=baseline_commit)
+    repository = WorkspaceRepository.from_config(config, retained_request.repository_list[0])
+    retained_state = RepositoryWorkspaceState(baseline_commit)
+    repository.state_write(retained_request.issue_identifier, retained_state)
+    repository.task_worktree_create_or_accept(retained_request.issue_identifier, retained_state)
+
+    validated_state = TaskWorkspaceTransaction(config).validate(retained_request)
+    recovered_state = TaskWorkspaceTransaction(config).prepare(retained_request)
+
+    assert validated_state == [retained_state]
+    assert recovered_state == [retained_state]
+    assert _git(root / ".worktree" / retained_request.basename, "rev-parse", "HEAD") == baseline_commit
 
 
 def test_bootstrap_destination_parent_symlink_cannot_escape_task_worktree(

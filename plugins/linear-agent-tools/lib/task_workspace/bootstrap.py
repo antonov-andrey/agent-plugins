@@ -134,41 +134,7 @@ class BootstrapPlan:
             raise TaskWorkspaceError("worktree-bootstrap.yaml has another top-level shape")
         if payload["schema_version"] != 3:
             raise TaskWorkspaceError("worktree-bootstrap.yaml schema_version must be 3")
-        resource = payload["resource"]
-        expected_resource_fields = {
-            "copy_optional_path_list",
-            "copy_required_path_list",
-            "link_optional_path_list",
-            "link_required_path_list",
-        }
-        if not isinstance(resource, dict) or set(resource) != expected_resource_fields:
-            raise TaskWorkspaceError("Bootstrap resource mapping has another shape")
-        resource_list: list[BootstrapResource] = []
-        for kind in ("copy", "link"):
-            for required in (False, True):
-                field = f"{kind}_{'required' if required else 'optional'}_path_list"
-                path_list = resource[field]
-                if not isinstance(path_list, list) or any(not isinstance(item, str) for item in path_list):
-                    raise TaskWorkspaceError(f"Bootstrap field {field} must be a text list")
-                for relative_path in path_list:
-                    normalized = _relative_path_validate(relative_path)
-                    source = main_root / normalized
-                    if not source.exists() and not source.is_symlink():
-                        if required:
-                            raise TaskWorkspaceError(f"Required bootstrap source is absent: {normalized}")
-                        skipped = True
-                    else:
-                        skipped = False
-                    resource_list.append(
-                        BootstrapResource(
-                            relative_path=normalized,
-                            kind=kind,
-                            skipped=skipped,
-                        )
-                    )
-        path_list = [item.relative_path for item in resource_list]
-        if len(path_list) != len(set(path_list)):
-            raise TaskWorkspaceError("Bootstrap manifest repeats one resource path")
+        resource_list = _bootstrap_resource_list_get(payload["resource"], main_root=main_root)
         cleanup = payload["cleanup"]
         if not isinstance(cleanup, dict) or set(cleanup) != {"handler_key_list"}:
             raise TaskWorkspaceError("Bootstrap cleanup mapping has another shape")
@@ -188,6 +154,97 @@ class BootstrapPlan:
             resource_list=sorted(resource_list, key=lambda item: item.relative_path),
             cleanup_handler_key_list=validated_handler_key_list,
         )
+
+    @classmethod
+    def from_retained_attempt_manifest(cls, payload_bytes: bytes, *, main_root: Path) -> "BootstrapPlan":
+        """Parse a current manifest or one immutable version-2 attempt baseline.
+
+        Version 2 is accepted only through this recovery entry point after private
+        attempt ownership already exists. Its historical cleanup command is
+        validated as inert source data and never becomes cleanup authority.
+
+        Args:
+            payload_bytes: Exact ordinary blob bytes from the retained task baseline.
+            main_root: Exact canonical repository checkout.
+
+        Returns:
+            Validated materialization plan without legacy cleanup effects.
+        """
+
+        payload = _yaml_document_load(payload_bytes)
+        if isinstance(payload, dict) and payload.get("schema_version") == 3:
+            return cls.from_manifest(payload_bytes, main_root=main_root)
+        allowed_field_set_list = [
+            {"schema_version", "resource"},
+            {"schema_version", "resource", "cleanup"},
+        ]
+        if not isinstance(payload, dict) or set(payload) not in allowed_field_set_list:
+            raise TaskWorkspaceError("Retained worktree-bootstrap.yaml has another top-level shape")
+        if payload["schema_version"] != 2:
+            raise TaskWorkspaceError("Retained worktree-bootstrap.yaml schema_version must be 2 or 3")
+        cleanup = payload.get("cleanup")
+        if cleanup is not None:
+            if not isinstance(cleanup, dict) or set(cleanup) != {"command_argument_list"}:
+                raise TaskWorkspaceError("Retained bootstrap cleanup mapping has another shape")
+            command_argument_list = cleanup["command_argument_list"]
+            if (
+                not isinstance(command_argument_list, list)
+                or not command_argument_list
+                or any(not isinstance(item, str) or not item or "\x00" in item for item in command_argument_list)
+            ):
+                raise TaskWorkspaceError("Retained bootstrap cleanup command must be a non-empty text list")
+        return cls(
+            resource_list=_bootstrap_resource_list_get(payload["resource"], main_root=main_root),
+            cleanup_handler_key_list=[],
+        )
+
+
+def _bootstrap_resource_list_get(resource: object, *, main_root: Path) -> list[BootstrapResource]:
+    """Return the exact materialization resources shared by bounded schemas.
+
+    Args:
+        resource: Parsed resource mapping.
+        main_root: Exact canonical repository checkout.
+
+    Returns:
+        Sorted validated bootstrap resources.
+    """
+
+    expected_resource_fields = {
+        "copy_optional_path_list",
+        "copy_required_path_list",
+        "link_optional_path_list",
+        "link_required_path_list",
+    }
+    if not isinstance(resource, dict) or set(resource) != expected_resource_fields:
+        raise TaskWorkspaceError("Bootstrap resource mapping has another shape")
+    resource_list: list[BootstrapResource] = []
+    for kind in ("copy", "link"):
+        for required in (False, True):
+            field = f"{kind}_{'required' if required else 'optional'}_path_list"
+            path_list = resource[field]
+            if not isinstance(path_list, list) or any(not isinstance(item, str) for item in path_list):
+                raise TaskWorkspaceError(f"Bootstrap field {field} must be a text list")
+            for relative_path in path_list:
+                normalized = _relative_path_validate(relative_path)
+                source = main_root / normalized
+                if not source.exists() and not source.is_symlink():
+                    if required:
+                        raise TaskWorkspaceError(f"Required bootstrap source is absent: {normalized}")
+                    skipped = True
+                else:
+                    skipped = False
+                resource_list.append(
+                    BootstrapResource(
+                        relative_path=normalized,
+                        kind=kind,
+                        skipped=skipped,
+                    )
+                )
+    path_list = [item.relative_path for item in resource_list]
+    if len(path_list) != len(set(path_list)):
+        raise TaskWorkspaceError("Bootstrap manifest repeats one resource path")
+    return sorted(resource_list, key=lambda item: item.relative_path)
 
 
 def _yaml_document_load(payload_bytes: bytes) -> object:
