@@ -1979,6 +1979,7 @@ def test_workflow_infrastructure_resource_uses_only_fixed_typed_provider_boundar
     _git(repository_fixture.root, "push", "origin", "main")
     config = WorkspaceConfig(tmp_path.resolve())
     call_list: list[tuple[list[str], Path, bytes]] = []
+    inventory_absent = False
 
     def runner(argument_list: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
         input_bytes = kwargs["input"]
@@ -1998,8 +1999,8 @@ def test_workflow_infrastructure_resource_uses_only_fixed_typed_provider_boundar
                 "schema_version": 1,
                 "common_prefix": "2026-08-08-and-45",
                 "environment_name": "2026-08-08-and-45",
-                "external_resources_absent": False,
-                "resource_identity_list": ["docker-network:2026-08-08-and-45"],
+                "external_resources_absent": inventory_absent,
+                "resource_identity_list": ["compute-2026-08-08-and-45"],
             }
         return subprocess.CompletedProcess(
             argument_list,
@@ -2049,13 +2050,16 @@ def test_workflow_infrastructure_resource_uses_only_fixed_typed_provider_boundar
     reconciler = _task_cleanup_reconciler(config, resources=registry)
 
     retained = reconciler.cleanup(retained_request)
+    inventory_absent = True
+    absent = registry.reconcile(resource, delete=False)
     first = reconciler.cleanup(project_request)
     second = reconciler.cleanup(project_request)
 
     assert [item.state for item in retained.resource_readback_list] == ["retained"]
+    assert absent.state == "absent"
     assert [item.state for item in first.resource_readback_list] == ["absent"]
     assert [item.state for item in second.resource_readback_list] == ["absent"]
-    assert [item[0][2] for item in call_list] == ["destroy-inventory", "destroy", "destroy"]
+    assert [item[0][2] for item in call_list] == ["destroy-inventory", "destroy-inventory", "destroy", "destroy"]
     for argument_list, cwd, input_bytes in call_list:
         assert argument_list == [
             sys.executable,

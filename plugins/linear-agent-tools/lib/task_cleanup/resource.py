@@ -165,8 +165,6 @@ class WorkflowInfrastructureDevelopmentEnvironmentCleanupHandler:
             or payload["resource_identity_list"] != sorted(set(payload["resource_identity_list"]))
         ):
             raise TaskCleanupError("Development environment retention readback differs from its typed identity")
-        if payload["external_resources_absent"] != (not payload["resource_identity_list"]):
-            raise TaskCleanupError("Development environment inventory contradicts its exact absence state")
         return CleanupResourceReadback(resource, "absent" if payload["external_resources_absent"] else "retained")
 
     def _repository_ready(
