@@ -17,8 +17,6 @@ if str(LIBRARY_ROOT) not in sys.path:
 
 from git_origin.identity import (
     GitOriginError,
-    legacy_origin_identity_set_get,
-    legacy_v1_origin_identity_get,
     origin_identity_get,
 )
 
@@ -55,42 +53,6 @@ def test_network_origin_identity_is_idempotent(value: str) -> None:
     identity = origin_identity_get(value)
 
     assert origin_identity_get(identity) == identity
-
-
-@pytest.mark.parametrize(
-    ("value", "current_identity", "legacy_identity"),
-    [
-        (
-            "git@github.com:owner/example.git",
-            "ssh://git@github.com/owner/example",
-            "ssh://github.com/owner/example",
-        ),
-        (
-            "ssh://git@github.com/owner/example.git",
-            "ssh://git@github.com/owner/example",
-            "ssh://github.com/owner/example",
-        ),
-        (
-            "https://github.com/owner/%7Eexample.git",
-            "https://github.com/owner/~example",
-            "https://github.com/owner/%7Eexample",
-        ),
-        (
-            "ssh://git@[2001:0db8::1]:2222/owner/example.git",
-            "ssh://git@[2001:db8::1]:2222/owner/example",
-            "ssh://2001:0db8::1:2222/owner/example",
-        ),
-    ],
-)
-def test_legacy_v1_identity_is_derived_only_from_the_current_remote(
-    value: str,
-    current_identity: str,
-    legacy_identity: str,
-) -> None:
-    """Every supported changed network spelling has one exact recovery identity."""
-
-    assert origin_identity_get(value) == current_identity
-    assert legacy_v1_origin_identity_get(value) == legacy_identity
 
 
 def test_git_argv_and_origin_identity_preserve_scp_relative_path_mode(
@@ -137,15 +99,6 @@ def test_git_argv_and_origin_identity_preserve_scp_relative_path_mode(
     assert origin_identity_get("git@example.com:owner/example.git") != origin_identity_get(
         "ssh://git@example.com/owner/example.git"
     )
-
-
-def test_scp_relative_identity_exposes_only_exact_derived_predecessors() -> None:
-    """Recovery accepts prior owner values without trusting a state-provided alias."""
-
-    assert legacy_origin_identity_set_get("git@example.com:owner/example.git") == {
-        "ssh://example.com/owner/example",
-        "ssh://git@example.com/owner/example",
-    }
 
 
 @pytest.mark.parametrize(

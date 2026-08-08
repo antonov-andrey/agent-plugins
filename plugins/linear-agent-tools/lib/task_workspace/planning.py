@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from task_workspace.bootstrap import BootstrapPlan
 from task_workspace.model import RepositoryWorkspaceState, TaskWorkspaceError, WorkspaceRequest
 from task_workspace.repository import WorkspaceRepository, git_command_run
 
@@ -42,29 +41,7 @@ class TaskWorkspaceStatePlanner:
         manifest_bytes = self._repository.tracked_file_bytes_get(baseline, "worktree-bootstrap.yaml")
         if manifest_bytes is None:
             raise TaskWorkspaceError("Repository baseline omits required worktree-bootstrap.yaml")
-        plan = BootstrapPlan.from_manifest(manifest_bytes, main_root=self._repository.main_root)
         task_root = self._repository.main_root / ".worktree" / self._request.basename
         if task_root.exists() or task_root.is_symlink():
             raise TaskWorkspaceError("Task worktree path exists without private ownership state")
-        return RepositoryWorkspaceState(
-            issue_identifier=self._request.issue_identifier,
-            origin_identity=self._repository.origin_identity,
-            base_branch=repository_request.base_branch,
-            baseline_commit=baseline,
-            branch_name=branch_name,
-            main_root=str(self._repository.main_root),
-            task_root=str(task_root),
-            manifest_sha256=plan.manifest_sha256,
-            phase="planned",
-            resource_list=[item.planned_state() for item in plan.resource_list],
-            cleanup_argument_list=plan.cleanup_argument_list,
-            cleaned_resource_fingerprint_by_resource_key_map={},
-            cleanup_binding_completed=not plan.cleanup_argument_list,
-            cleanup_branch_snapshot_ready=False,
-            cleanup_local_branch_commit="",
-            cleanup_remote_branch_commit="",
-            cleanup_worktree_removal_ready=False,
-            worktree_removed=False,
-            remote_branch_removed=False,
-            local_branch_removed=False,
-        )
+        return RepositoryWorkspaceState(baseline_commit=baseline)

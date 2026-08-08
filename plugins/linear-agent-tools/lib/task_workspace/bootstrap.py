@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -11,7 +10,7 @@ import re
 import secrets
 import shutil
 
-from task_workspace.model import BootstrapResourceState, TaskWorkspaceError
+from task_workspace.model import TaskWorkspaceError
 
 _MAPPING_LINE_PATTERN = re.compile(r"(?P<indent> *)(?P<key>[a-z][a-z0-9_]*)\s*:(?P<value>.*)")
 _SEQUENCE_LINE_PATTERN = re.compile(r" {4}- (?P<value>.+)")
@@ -26,31 +25,10 @@ class BootstrapResource:
 
     relative_path: str
     kind: str
-    required: bool
-    source_identity: str
     skipped: bool
 
-    @classmethod
-    def from_state(cls, state: BootstrapResourceState) -> "BootstrapResource":
-        """Restore one materialization contract from durable state.
-
-        Args:
-            state: Persisted bootstrap-resource state.
-
-        Returns:
-            Exact resource contract.
-        """
-
-        return cls(
-            relative_path=state.relative_path,
-            kind=state.kind,
-            required=not state.skipped,
-            source_identity=state.source_identity,
-            skipped=state.skipped,
-        )
-
     def materialize(self, *, main_root: Path, task_root: Path) -> None:
-        """Materialize or reconcile this state-predeclared resource.
+        """Materialize or reconcile this manifest-declared resource.
 
         Args:
             main_root: Canonical source checkout.
@@ -60,8 +38,6 @@ class BootstrapResource:
         if self.skipped:
             return
         source = main_root / self.relative_path
-        if _source_identity_get(source, kind=self.kind) != self.source_identity:
-            raise TaskWorkspaceError(f"Bootstrap source changed after ownership was recorded: {self.relative_path}")
         destination_parent = _destination_parent_require(
             task_root,
             relative_path=self.relative_path,
@@ -69,7 +45,7 @@ class BootstrapResource:
         )
         destination = destination_parent / PurePosixPath(self.relative_path).name
         if destination.exists() or destination.is_symlink():
-            if _match_destination(destination, self):
+            if _match_destination(destination, source=source, kind=self.kind):
                 return
             raise TaskWorkspaceError(f"Owned bootstrap destination conflicts with its plan: {self.relative_path}")
         temporary = destination.parent / f".{destination.name}.linear-agent-{secrets.token_hex(8)}"
@@ -90,28 +66,14 @@ class BootstrapResource:
             elif temporary.is_dir():
                 shutil.rmtree(temporary)
             raise
-        if not _match_destination(destination, self):
+        if not _match_destination(destination, source=source, kind=self.kind):
             raise TaskWorkspaceError(f"Bootstrap resource read-back failed: {self.relative_path}")
 
-    def planned_state(self) -> BootstrapResourceState:
-        """Return the durable pre-mutation ownership record.
-
-        Returns:
-            Planned resource state.
-        """
-
-        return BootstrapResourceState(
-            relative_path=self.relative_path,
-            kind=self.kind,
-            source_identity=self.source_identity,
-            phase="planned",
-            skipped=self.skipped,
-        )
-
-    def ready_require(self, *, task_root: Path) -> None:
-        """Require this ready state-owned destination without repairing it.
+    def ready_require(self, *, main_root: Path, task_root: Path) -> None:
+        """Require this manifest-owned destination without repairing it.
 
         Args:
+            main_root: Canonical source checkout.
             task_root: Exact issue-owned worktree.
         """
 
@@ -123,7 +85,12 @@ class BootstrapResource:
             create=False,
         )
         destination = destination_parent / PurePosixPath(self.relative_path).name
-        if not (destination.exists() or destination.is_symlink()) or not _match_destination(destination, self):
+        source = main_root / self.relative_path
+        if not (destination.exists() or destination.is_symlink()) or not _match_destination(
+            destination,
+            source=source,
+            kind=self.kind,
+        ):
             raise TaskWorkspaceError(f"Bootstrap resource is absent or changed: {self.relative_path}")
 
 
@@ -131,15 +98,12 @@ class BootstrapResource:
 class BootstrapPlan:
     """Contain the exact validated bootstrap manifest effect."""
 
-    manifest_sha256: str
     resource_list: list[BootstrapResource]
-    cleanup_argument_list: list[str]
 
     def __post_init__(self) -> None:
         """Detach validated plan collections from parser-local mutation."""
 
         object.__setattr__(self, "resource_list", list(self.resource_list))
-        object.__setattr__(self, "cleanup_argument_list", list(self.cleanup_argument_list))
 
     @classmethod
     def from_manifest(cls, payload_bytes: bytes, *, main_root: Path) -> "BootstrapPlan":
@@ -154,10 +118,7 @@ class BootstrapPlan:
         """
 
         payload = _yaml_document_load(payload_bytes)
-        if not isinstance(payload, dict) or set(payload) not in (
-            {"schema_version", "resource"},
-            {"schema_version", "resource", "cleanup"},
-        ):
+        if not isinstance(payload, dict) or set(payload) != {"schema_version", "resource"}:
             raise TaskWorkspaceError("worktree-bootstrap.yaml has another top-level shape")
         if payload["schema_version"] != 2:
             raise TaskWorkspaceError("worktree-bootstrap.yaml schema_version must be 2")
@@ -183,41 +144,20 @@ class BootstrapPlan:
                     if not source.exists() and not source.is_symlink():
                         if required:
                             raise TaskWorkspaceError(f"Required bootstrap source is absent: {normalized}")
-                        source_identity = f"absent:{normalized}"
                         skipped = True
                     else:
-                        source_identity = _source_identity_get(source, kind=kind)
                         skipped = False
                     resource_list.append(
                         BootstrapResource(
                             relative_path=normalized,
                             kind=kind,
-                            required=required,
-                            source_identity=source_identity,
                             skipped=skipped,
                         )
                     )
         path_list = [item.relative_path for item in resource_list]
         if len(path_list) != len(set(path_list)):
             raise TaskWorkspaceError("Bootstrap manifest repeats one resource path")
-        cleanup_argument_list: list[str] = []
-        if "cleanup" in payload:
-            cleanup = payload["cleanup"]
-            if not isinstance(cleanup, dict) or set(cleanup) != {"command_argument_list"}:
-                raise TaskWorkspaceError("Bootstrap cleanup mapping has another shape")
-            arguments = cleanup["command_argument_list"]
-            if (
-                not isinstance(arguments, list)
-                or not arguments
-                or any(not isinstance(item, str) or not item or "\x00" in item for item in arguments)
-            ):
-                raise TaskWorkspaceError("Bootstrap cleanup command must use direct non-empty argv")
-            cleanup_argument_list = list(arguments)
-        return cls(
-            manifest_sha256=hashlib.sha256(payload_bytes).hexdigest(),
-            resource_list=sorted(resource_list, key=lambda item: item.relative_path),
-            cleanup_argument_list=cleanup_argument_list,
-        )
+        return cls(resource_list=sorted(resource_list, key=lambda item: item.relative_path))
 
 
 def _yaml_document_load(payload_bytes: bytes) -> object:
@@ -397,67 +337,58 @@ def _relative_path_validate(value: str) -> str:
     return value
 
 
-def _source_identity_get(path: Path, *, kind: str) -> str:
-    """Return the exact source identity required for reconciliation.
-
-    Args:
-        path: Source path.
-        kind: Copy or link.
-
-    Returns:
-        Stable identity text.
-    """
-
-    if kind == "link":
-        return f"link:{path.resolve(strict=True)}"
-    return f"copy:{_path_fingerprint(path)}"
-
-
-def _match_destination(path: Path, resource: BootstrapResource) -> bool:
-    """Return whether one pre-owned destination matches its planned identity.
+def _match_destination(path: Path, *, source: Path, kind: str) -> bool:
+    """Return whether one destination has the manifest-declared source semantics.
 
     Args:
         path: Destination path.
-        resource: Exact planned resource.
+        source: Current canonical source path.
+        kind: Copy or link materialization.
 
     Returns:
-        Whether read-back matches.
+        Whether the destination matches the source.
     """
 
-    if resource.kind == "link":
-        return path.is_symlink() and f"link:{path.resolve(strict=True)}" == resource.source_identity
-    return not path.is_symlink() and f"copy:{_path_fingerprint(path)}" == resource.source_identity
+    if kind == "link":
+        return path.is_symlink() and path.resolve(strict=True) == source.resolve(strict=True)
+    return _path_match(source, path)
 
 
-def _path_fingerprint(path: Path) -> str:
-    """Return a canonical content and mode fingerprint for one copy tree.
+def _path_match(source: Path, destination: Path) -> bool:
+    """Compare one copy source and destination directly without a stored digest.
 
     Args:
-        path: File or directory root.
+        source: Canonical copy source.
+        destination: Materialized task-worktree path.
 
     Returns:
-        Lowercase SHA-256 identity.
+        Whether type, mode, names and file content match recursively.
     """
 
-    digest = hashlib.sha256()
-    if path.is_symlink():
-        raise TaskWorkspaceError(f"Copy bootstrap source may not be a symlink: {path}")
-    entry_list = [path] if path.is_file() else [path, *sorted(path.rglob("*"))]
-    for entry in entry_list:
-        relative = "." if entry == path else entry.relative_to(path).as_posix()
-        if entry.is_symlink():
-            raise TaskWorkspaceError(f"Copy bootstrap tree may not contain symlinks: {entry}")
-        kind = "d" if entry.is_dir() else "f" if entry.is_file() else ""
-        if not kind:
-            raise TaskWorkspaceError(f"Copy bootstrap tree contains unsupported entry: {entry}")
-        digest.update(kind.encode())
-        digest.update(relative.encode("utf-8"))
-        digest.update((entry.stat().st_mode & 0o777).to_bytes(2, "big"))
-        if kind == "f":
-            with entry.open("rb") as handle:
-                while chunk := handle.read(1024 * 1024):
-                    digest.update(chunk)
-    return digest.hexdigest()
+    if source.is_symlink():
+        raise TaskWorkspaceError(f"Copy bootstrap source may not be a symlink: {source}")
+    if destination.is_symlink() or (source.stat().st_mode & 0o777) != (destination.stat().st_mode & 0o777):
+        return False
+    if source.is_file():
+        if not destination.is_file() or source.stat().st_size != destination.stat().st_size:
+            return False
+        with source.open("rb") as source_handle, destination.open("rb") as destination_handle:
+            while source_chunk := source_handle.read(1024 * 1024):
+                if destination_handle.read(1024 * 1024) != source_chunk:
+                    return False
+            return destination_handle.read(1) == b""
+    if not source.is_dir():
+        raise TaskWorkspaceError(f"Copy bootstrap source has an unsupported type: {source}")
+    if not destination.is_dir():
+        return False
+    source_child_by_name_map = {child.name: child for child in source.iterdir()}
+    destination_child_by_name_map = {child.name: child for child in destination.iterdir()}
+    if set(source_child_by_name_map) != set(destination_child_by_name_map):
+        return False
+    return all(
+        _path_match(source_child, destination_child_by_name_map[name])
+        for name, source_child in source_child_by_name_map.items()
+    )
 
 
 def _file_sync(path: Path) -> None:

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import replace
 import json
 import os
 from pathlib import Path
@@ -11,11 +10,7 @@ import secrets
 import stat
 import subprocess
 
-from git_origin.identity import (
-    GitOriginError,
-    legacy_origin_identity_set_get,
-    origin_identity_get,
-)
+from git_origin.identity import GitOriginError, origin_identity_get
 from json_contract import JsonContractError, json_load_strict
 from task_workspace.model import (
     RepositoryRequest,
@@ -123,8 +118,7 @@ class WorkspaceRepository:
             raise TaskWorkspaceError("Canonical checkout must own its physical Git common directory")
         configured_origin = git_command_text_get(self.main_root, ("remote", "get-url", "origin"))
         self.origin_identity = _workspace_origin_identity_get(configured_origin)
-        self._legacy_origin_identity_set = legacy_origin_identity_set_get(configured_origin) - {self.origin_identity}
-        if self.origin_identity != _workspace_origin_identity_get(request.origin_url):
+        if self.origin_identity != request.origin_identity:
             raise TaskWorkspaceError("Canonical checkout origin differs from the approved issue contract")
         git_command_run(self.main_root, ("check-ref-format", "--branch", request.base_branch))
 
@@ -140,7 +134,7 @@ class WorkspaceRepository:
             Unique bound repository.
         """
 
-        requested_identity = _workspace_origin_identity_get(request.origin_url)
+        requested_identity = request.origin_identity
         candidate_list: list[Path] = []
         root_candidate_list = [
             config.root,
@@ -216,14 +210,15 @@ class WorkspaceRepository:
             raise TaskWorkspaceError("Workspace private state is malformed") from error
         return RepositoryWorkspaceState.from_payload(payload)
 
-    def state_write(self, state: RepositoryWorkspaceState) -> None:
+    def state_write(self, issue_identifier: str, state: RepositoryWorkspaceState) -> None:
         """Atomically replace one private state and fsync its parent.
 
         Args:
+            issue_identifier: Exact Linear issue identifier.
             state: Exact repository workspace state.
         """
 
-        parent = self._state_parent_get(state.issue_identifier, create=True)
+        parent = self._state_parent_get(issue_identifier, create=True)
         if parent is None:
             raise TaskWorkspaceError("Workspace private state parent was not created")
         path = parent / "workspace.json"
@@ -249,51 +244,6 @@ class WorkspaceRepository:
         except BaseException:
             temporary.unlink(missing_ok=True)
             raise
-
-    def state_migrate_and_require(
-        self,
-        issue_identifier: str,
-        state: RepositoryWorkspaceState,
-    ) -> RepositoryWorkspaceState:
-        """Persist one proven predecessor identity transition, then require the current owner.
-
-        The caller holds the issue workspace lock. No other legacy spelling is
-        accepted, and every non-origin ownership field is proved before the
-        migrated state is written atomically.
-
-        Args:
-            issue_identifier: Canonical Linear issue identifier.
-            state: Typed predecessor private state read from this repository.
-
-        Returns:
-            Strict current state, migrated only from an exact derived predecessor identity.
-        """
-
-        migrated_state = self.state_current_view_require(issue_identifier, state)
-        if migrated_state is not state:
-            self.state_write(migrated_state)
-        return migrated_state
-
-    def state_current_view_require(
-        self,
-        issue_identifier: str,
-        state: RepositoryWorkspaceState,
-    ) -> RepositoryWorkspaceState:
-        """Return a strict current identity view without writing private state.
-
-        Args:
-            issue_identifier: Canonical Linear issue identifier.
-            state: Typed predecessor private state read from this repository.
-
-        Returns:
-            Current state or one in-memory view of a proven legacy identity.
-        """
-
-        migrated_state = state
-        if state.origin_identity != self.origin_identity and state.origin_identity in self._legacy_origin_identity_set:
-            migrated_state = replace(state, origin_identity=self.origin_identity)
-        self.state_identity_require(issue_identifier, migrated_state)
-        return migrated_state
 
     def state_delete(self, issue_identifier: str) -> None:
         """Delete exact private state idempotently.
@@ -361,16 +311,7 @@ class WorkspaceRepository:
             state: Current private workspace state.
         """
 
-        basename = issue_identifier.lower()
-        if (
-            state.issue_identifier != issue_identifier
-            or state.origin_identity != self.origin_identity
-            or state.base_branch != self.request.base_branch
-            or state.branch_name != f"linear/{basename}"
-            or Path(state.main_root) != self.main_root
-            or Path(state.task_root) != self.main_root / ".worktree" / basename
-        ):
-            raise TaskWorkspaceError("Private workspace state belongs to another issue or repository contract")
+        issue_identifier_validate(issue_identifier)
         if self.request.expected_baseline_commit and state.baseline_commit != self.request.expected_baseline_commit:
             raise TaskWorkspaceError("Private workspace baseline differs from Linear attempt evidence")
 
@@ -512,18 +453,24 @@ class WorkspaceRepository:
         if self.exist_remote_branch(branch_name):
             raise TaskWorkspaceError("Remote task branch remained after exact deletion")
 
-    def task_worktree_create_or_accept(self, state: RepositoryWorkspaceState) -> None:
-        """Create or prove the exact state-owned branch and worktree.
+    def task_worktree_create_or_accept(
+        self,
+        issue_identifier: str,
+        state: RepositoryWorkspaceState,
+    ) -> None:
+        """Create or prove the exact issue-owned branch and worktree.
 
         Args:
-            state: Durable pre-mutation state.
+            issue_identifier: Exact Linear issue identifier.
+            state: Durable first-attempt baseline.
         """
 
+        issue_identifier_validate(issue_identifier)
         self.task_container_require(create=True)
-        task_root = Path(state.task_root)
-        branch_name = state.branch_name
+        task_root = self.main_root / ".worktree" / issue_identifier.lower()
+        branch_name = f"linear/{issue_identifier.lower()}"
         if task_root.exists():
-            self.task_worktree_require(state)
+            self.task_worktree_require(issue_identifier, state)
             return
         if self._exist_branch_checkout_elsewhere(branch_name):
             raise TaskWorkspaceError("Task branch is already checked out in another worktree")
@@ -544,30 +491,34 @@ class WorkspaceRepository:
                 git_command_run(self.main_root, ("branch", branch_name, state.baseline_commit))
         task_root.parent.mkdir(parents=True, exist_ok=True)
         git_command_run(self.main_root, ("worktree", "add", str(task_root), branch_name))
-        self.task_worktree_require(state)
+        self.task_worktree_require(issue_identifier, state)
 
-    def task_worktree_require(self, state: RepositoryWorkspaceState) -> None:
-        """Require exact registration, branch, origin and ancestry for a task root.
+    def task_worktree_require(self, issue_identifier: str, state: RepositoryWorkspaceState) -> None:
+        """Require exact registration, branch, origin and ancestry for an issue task root.
 
         Args:
-            state: Durable workspace state.
+            issue_identifier: Exact Linear issue identifier.
+            state: Durable first-attempt baseline.
         """
 
+        issue_identifier_validate(issue_identifier)
         self.task_container_require(create=False)
+        task_root = self.main_root / ".worktree" / issue_identifier.lower()
+        branch_name = f"linear/{issue_identifier.lower()}"
         try:
-            task_root = Path(state.task_root).resolve(strict=True)
+            task_root = task_root.resolve(strict=True)
         except OSError as error:
             raise TaskWorkspaceError("Task worktree path is absent or unavailable") from error
         registration = self._branch_name_by_worktree_path_map_get().get(task_root)
-        if registration != state.branch_name:
+        if registration != branch_name:
             raise TaskWorkspaceError("Task path is absent from Git worktree registration or uses another branch")
         branch = git_command_text_get(task_root, ("symbolic-ref", "--quiet", "--short", "HEAD"))
-        if branch != state.branch_name:
+        if branch != branch_name:
             raise TaskWorkspaceError("Task worktree checked out another branch")
         origin = _workspace_origin_identity_get(git_command_text_get(task_root, ("remote", "get-url", "origin")))
-        if origin != state.origin_identity:
-            raise TaskWorkspaceError("Task worktree origin differs from private ownership state")
-        head = self.commit_get(state.branch_name)
+        if origin != self.origin_identity:
+            raise TaskWorkspaceError("Task worktree origin differs from the participating repository identity")
+        head = self.commit_get(branch_name)
         self._ancestor_require(state.baseline_commit, head, label="Task branch")
 
     def worktree_branch_get(self, task_root: Path) -> str | None:

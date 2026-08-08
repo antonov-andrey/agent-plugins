@@ -1,25 +1,15 @@
-"""Closed cleanup authority and input models."""
+"""Closed cleanup authority and natural provider identity models."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-import re
 
 from git_host.model import RepositoryIdentity
-from git_origin.identity import GitOriginError, origin_identity_get
-from task_graph.model import ResourceDeclaration, ResourceLifetime
-from task_workspace.model import (
-    RepositoryRequest,
-    WorkspaceRequest,
-    issue_identifier_validate,
-)
+from task_workspace.model import RepositoryRequest, issue_identifier_validate
 
 
 class TaskCleanupError(RuntimeError):
     """Report one unsafe, foreign or failed cleanup operation."""
-
-
-_NODE_KEY_PATTERN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 
 
 def _single_line(value: object, *, label: str) -> str:
@@ -36,15 +26,6 @@ def _single_line(value: object, *, label: str) -> str:
     if not isinstance(value, str) or not value or any(character in value for character in ("\x00", "\n", "\r")):
         raise TaskCleanupError(f"{label} must be non-empty single-line text")
     return value
-
-
-def cleanup_origin_identity_get(value: str) -> str:
-    """Return one canonical cleanup repository identity without reflecting unsafe input."""
-
-    try:
-        return origin_identity_get(value)
-    except GitOriginError as error:
-        raise TaskCleanupError("Cleanup repository URL is unsafe or unsupported") from error
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,8 +53,6 @@ class CleanupAuthority:
             "Todo",
             "In Progress",
             "Review",
-            # Migration compatibility for active Projects configured before AND-35.
-            "Human Review",
             "Rework",
             "Merging",
             "Done",
@@ -89,7 +68,8 @@ class CleanupAuthority:
         }:
             raise TaskCleanupError("Cleanup Project status is unsupported")
         if not isinstance(self.final_acceptance_done, bool) or not isinstance(
-            self.all_other_project_nodes_terminal, bool
+            self.all_other_project_nodes_terminal,
+            bool,
         ):
             raise TaskCleanupError("Cleanup proof flags must be boolean")
         if (
@@ -103,8 +83,6 @@ class CleanupAuthority:
                 "Todo",
                 "In Progress",
                 "Review",
-                # Migration compatibility for active Projects configured before AND-35.
-                "Human Review",
                 "Rework",
                 "Merging",
             }:
@@ -112,11 +90,8 @@ class CleanupAuthority:
             if self.final_acceptance_done or self.all_other_project_nodes_terminal:
                 raise TaskCleanupError("Attempt cleanup cannot claim Project-final proof")
             return
-        if self.scope == "terminal-issue" and self.issue_status not in {
-            "Done",
-            "Canceled",
-        }:
-            raise TaskCleanupError("Issue resource cleanup requires explicit terminal issue status")
+        if self.scope == "terminal-issue" and self.issue_status not in {"Done", "Canceled"}:
+            raise TaskCleanupError("Terminal issue cleanup requires explicit terminal issue status")
         if self.scope == "project-final":
             if self.project_status == "Canceled":
                 if self.issue_status != "Canceled":
@@ -166,10 +141,7 @@ class PullRequestReference:
 
         if not isinstance(payload, dict) or set(payload) != {"repository", "number"}:
             raise TaskCleanupError("Pull request reference has another shape")
-        return cls(
-            repository=RepositoryIdentity(payload["repository"]),
-            number=payload["number"],
-        )
+        return cls(repository=RepositoryIdentity(payload["repository"]), number=payload["number"])
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,15 +160,12 @@ class PullRequestTarget:
 
 @dataclass(frozen=True, slots=True)
 class CleanupRequest:
-    """Own every exact local, GitHub and declared resource cleanup target."""
+    """Own every exact local and GitHub cleanup target."""
 
     issue_identifier: str
     authority: CleanupAuthority
     repository_list: list[RepositoryRequest]
     pull_request_list: list[PullRequestReference]
-    resource_list: list[ResourceDeclaration]
-    approved_resource_fingerprint_list: list[str] = field(default_factory=list)
-    terminal_consumer_node_key_list: list[str] = field(default_factory=list)
     project_issue_identifier_list: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
@@ -208,59 +177,21 @@ class CleanupRequest:
         for label, value, expected_type in (
             ("repository", self.repository_list, RepositoryRequest),
             ("pull request", self.pull_request_list, PullRequestReference),
-            ("resource", self.resource_list, ResourceDeclaration),
         ):
             if not isinstance(value, list) or any(not isinstance(item, expected_type) for item in value):
                 raise TaskCleanupError(f"Cleanup {label} list has another shape")
         if not isinstance(self.project_issue_identifier_list, list):
             raise TaskCleanupError("Project issue identifier list must be a list")
-        repository_identity_list = [cleanup_origin_identity_get(item.origin_url) for item in self.repository_list]
+        repository_identity_list = [item.origin_identity for item in self.repository_list]
         if len(set(repository_identity_list)) != len(self.repository_list):
             raise TaskCleanupError("Cleanup request repeats one repository")
-        for resource in self.resource_list:
-            cleanup_origin_identity_get(resource.repository_url)
         if len(self.pull_request_list) != len(set(self.pull_request_list)):
             raise TaskCleanupError("Cleanup request repeats one pull request")
-        pr_repository_list = [item.repository.value for item in self.pull_request_list]
-        if len(pr_repository_list) != len(set(pr_repository_list)):
+        pull_request_repository_list = [item.repository.value for item in self.pull_request_list]
+        if len(pull_request_repository_list) != len(set(pull_request_repository_list)):
             raise TaskCleanupError("One deterministic task branch may own at most one pull request per repository")
-        resource_key_list = [item.key for item in self.resource_list]
-        if len(resource_key_list) != len(set(resource_key_list)):
-            raise TaskCleanupError("Cleanup request repeats one resource key")
-        expected_resource_fingerprint_list = sorted(item.fingerprint() for item in self.resource_list)
-        if (
-            not isinstance(self.approved_resource_fingerprint_list, list)
-            or self.approved_resource_fingerprint_list != expected_resource_fingerprint_list
-            or len(self.approved_resource_fingerprint_list) != len(set(self.approved_resource_fingerprint_list))
-        ):
-            raise TaskCleanupError(
-                "Cleanup request must bind every resource to its independently approved declaration fingerprint"
-            )
-        expected_terminal_consumer_node_key_list = sorted(
-            {
-                consumer_key
-                for item in self.resource_list
-                if item.lifetime is ResourceLifetime.ISSUE
-                for consumer_key in item.consumer_node_key_list
-            }
-        )
-        if (
-            not isinstance(self.terminal_consumer_node_key_list, list)
-            or self.terminal_consumer_node_key_list != expected_terminal_consumer_node_key_list
-            or any(_NODE_KEY_PATTERN.fullmatch(item) is None for item in self.terminal_consumer_node_key_list)
-        ):
-            raise TaskCleanupError("Cleanup request must prove every declared issue-resource consumer terminal")
-        allowed_lifetime = {
-            "attempt": {ResourceLifetime.ATTEMPT},
-            "terminal-issue": {ResourceLifetime.ATTEMPT, ResourceLifetime.ISSUE},
-            "project-final": {ResourceLifetime.PROJECT},
-        }[self.authority.scope]
-        if any(item.lifetime not in allowed_lifetime for item in self.resource_list):
-            raise TaskCleanupError("Cleanup request includes a resource outside its authorized lifetime")
         if self.authority.scope == "attempt" and self.pull_request_list:
             raise TaskCleanupError("Attempt cleanup cannot mutate pull requests")
-        if self.authority.scope != "terminal-issue" and self.terminal_consumer_node_key_list:
-            raise TaskCleanupError("Only terminal issue cleanup may carry downstream consumer proof")
         if self.project_issue_identifier_list != sorted(self.project_issue_identifier_list) or len(
             self.project_issue_identifier_list
         ) != len(set(self.project_issue_identifier_list)):
@@ -277,31 +208,7 @@ class CleanupRequest:
             raise TaskCleanupError("Only final Project cleanup may carry Project issue identifiers")
         object.__setattr__(self, "repository_list", list(self.repository_list))
         object.__setattr__(self, "pull_request_list", list(self.pull_request_list))
-        object.__setattr__(self, "resource_list", list(self.resource_list))
-        object.__setattr__(
-            self,
-            "approved_resource_fingerprint_list",
-            list(self.approved_resource_fingerprint_list),
-        )
-        object.__setattr__(
-            self,
-            "terminal_consumer_node_key_list",
-            list(self.terminal_consumer_node_key_list),
-        )
-        object.__setattr__(
-            self,
-            "project_issue_identifier_list",
-            list(self.project_issue_identifier_list),
-        )
-
-    def workspace_request(self) -> WorkspaceRequest:
-        """Return the exact participating repository workspace identity.
-
-        Returns:
-            Typed workspace request.
-        """
-
-        return WorkspaceRequest(self.issue_identifier, list(self.repository_list))
+        object.__setattr__(self, "project_issue_identifier_list", list(self.project_issue_identifier_list))
 
     @classmethod
     def from_payload(cls, payload: object) -> "CleanupRequest":
@@ -320,29 +227,15 @@ class CleanupRequest:
             "authority",
             "repository_list",
             "pull_request_list",
-            "resource_list",
-            "approved_resource_fingerprint_list",
-            "terminal_consumer_node_key_list",
             "project_issue_identifier_list",
         }
         if not isinstance(payload, dict) or set(payload) != expected or payload["schema_version"] != 1:
             raise TaskCleanupError("Cleanup request has another shape")
-        for name in (
-            "repository_list",
-            "pull_request_list",
-            "resource_list",
-            "approved_resource_fingerprint_list",
-            "terminal_consumer_node_key_list",
-            "project_issue_identifier_list",
-        ):
+        for name in ("repository_list", "pull_request_list", "project_issue_identifier_list"):
             if not isinstance(payload[name], list):
                 raise TaskCleanupError(f"Cleanup field {name} must be a list")
         if any(not isinstance(item, str) for item in payload["project_issue_identifier_list"]):
             raise TaskCleanupError("Project issue identifiers must be text")
-        if any(not isinstance(item, str) for item in payload["approved_resource_fingerprint_list"]):
-            raise TaskCleanupError("Approved resource fingerprints must be text")
-        if any(not isinstance(item, str) for item in payload["terminal_consumer_node_key_list"]):
-            raise TaskCleanupError("Terminal resource consumer keys must be text")
         authority_payload = payload["authority"]
         authority_fields = {
             "scope",
@@ -360,9 +253,6 @@ class CleanupRequest:
                 authority=CleanupAuthority(**authority_payload),
                 repository_list=[RepositoryRequest.from_payload(item) for item in payload["repository_list"]],
                 pull_request_list=[PullRequestReference.from_payload(item) for item in payload["pull_request_list"]],
-                resource_list=[ResourceDeclaration.from_payload(item) for item in payload["resource_list"]],
-                approved_resource_fingerprint_list=list(payload["approved_resource_fingerprint_list"]),
-                terminal_consumer_node_key_list=list(payload["terminal_consumer_node_key_list"]),
                 project_issue_identifier_list=list(payload["project_issue_identifier_list"]),
             )
         except (ValueError, TypeError) as error:

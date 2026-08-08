@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
 from pathlib import Path
 
-from task_workspace.bootstrap import BootstrapResource
+from task_workspace.bootstrap import BootstrapPlan
 from task_workspace.lock import IssueWorkspaceLock
 from task_workspace.model import (
     RepositoryRequest,
@@ -38,12 +37,11 @@ class TaskWorkspaceTransaction:
             request: Complete participating repository request.
 
         Returns:
-            Current bootstrap-ready states in request order.
+            Current repository baseline states in request order.
         """
 
         with IssueWorkspaceLock(self._config, request.issue_identifier):
-            state_list = [self._repository_prepare(request, repository) for repository in request.repository_list]
-            return state_list
+            return [self._repository_prepare(request, repository) for repository in request.repository_list]
 
     def validate(self, request: WorkspaceRequest) -> list[RepositoryWorkspaceState]:
         """Prove existing workspace ownership without creating or repairing state.
@@ -52,7 +50,7 @@ class TaskWorkspaceTransaction:
             request: Complete participating repository request.
 
         Returns:
-            Validated states in request order.
+            Validated repository baseline states in request order.
         """
 
         with IssueWorkspaceLock(self._config, request.issue_identifier):
@@ -62,15 +60,34 @@ class TaskWorkspaceTransaction:
                 state = repository.state_read(request.issue_identifier)
                 if state is None:
                     raise TaskWorkspaceError("Issue workspace has no private ownership state")
-                state = repository.state_current_view_require(request.issue_identifier, state)
-                if state.phase != "bootstrap-ready" or any(item.phase != "ready" for item in state.resource_list):
-                    raise TaskWorkspaceError("Issue workspace transaction is incomplete")
-                repository.task_worktree_require(state)
-                WorkspaceSubmoduleReader(Path(state.task_root)).read()
-                for resource_state in state.resource_list:
-                    BootstrapResource.from_state(resource_state).ready_require(task_root=Path(state.task_root))
+                repository.state_identity_require(request.issue_identifier, state)
+                repository.task_worktree_require(request.issue_identifier, state)
+                task_root = repository.main_root / ".worktree" / request.basename
+                WorkspaceSubmoduleReader(task_root).read()
+                for resource in self._bootstrap_plan_get(repository, state).resource_list:
+                    resource.ready_require(main_root=repository.main_root, task_root=task_root)
                 state_list.append(state)
             return state_list
+
+    def _bootstrap_plan_get(
+        self,
+        repository: WorkspaceRepository,
+        state: RepositoryWorkspaceState,
+    ) -> BootstrapPlan:
+        """Read the current materialization plan from the immutable task baseline.
+
+        Args:
+            repository: Bound canonical checkout.
+            state: Durable first-attempt baseline.
+
+        Returns:
+            Validated manifest plan.
+        """
+
+        manifest_bytes = repository.tracked_file_bytes_get(state.baseline_commit, "worktree-bootstrap.yaml")
+        if manifest_bytes is None:
+            raise TaskWorkspaceError("Repository baseline omits required worktree-bootstrap.yaml")
+        return BootstrapPlan.from_manifest(manifest_bytes, main_root=repository.main_root)
 
     def _repository_prepare(
         self,
@@ -84,45 +101,21 @@ class TaskWorkspaceTransaction:
             repository_request: One repository target.
 
         Returns:
-            Bootstrap-ready private state.
+            Current repository baseline state.
         """
 
         repository = WorkspaceRepository.from_config(self._config, repository_request)
         state = repository.state_read(request.issue_identifier)
         if state is None:
             state = TaskWorkspaceStatePlanner(repository, request).plan()
-            repository.state_write(state)
+            bootstrap_plan = self._bootstrap_plan_get(repository, state)
+            repository.state_write(request.issue_identifier, state)
         else:
-            state = repository.state_migrate_and_require(request.issue_identifier, state)
-        repository.task_worktree_create_or_accept(state)
-        if state.phase == "planned":
-            WorkspaceSubmoduleReader(Path(state.task_root)).prepare()
-            state = replace(state, phase="worktree-ready")
-            repository.state_write(state)
-        else:
-            WorkspaceSubmoduleReader(Path(state.task_root)).read()
-        resource_by_relative_path_map = {
-            item.relative_path: item
-            for item in [BootstrapResource.from_state(resource_state) for resource_state in state.resource_list]
-        }
-        for index, resource_state in enumerate(state.resource_list):
-            resource = resource_by_relative_path_map[resource_state.relative_path]
-            if resource_state.phase == "ready":
-                resource.ready_require(task_root=Path(state.task_root))
-                continue
-            resource.materialize(
-                main_root=Path(state.main_root),
-                task_root=Path(state.task_root),
-            )
-            ready_state = replace(resource_state, phase="ready")
-            state = replace(
-                state,
-                resource_list=[
-                    ready_state if item_index == index else item for item_index, item in enumerate(state.resource_list)
-                ],
-            )
-            repository.state_write(state)
-        if state.phase != "bootstrap-ready":
-            state = replace(state, phase="bootstrap-ready")
-            repository.state_write(state)
+            repository.state_identity_require(request.issue_identifier, state)
+            bootstrap_plan = self._bootstrap_plan_get(repository, state)
+        repository.task_worktree_create_or_accept(request.issue_identifier, state)
+        task_root = repository.main_root / ".worktree" / request.basename
+        WorkspaceSubmoduleReader(task_root).prepare()
+        for resource in bootstrap_plan.resource_list:
+            resource.materialize(main_root=repository.main_root, task_root=task_root)
         return state

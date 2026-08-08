@@ -31,21 +31,25 @@ class WorkspaceSubmoduleReader:
             Sorted recursive path/commit snapshot.
         """
 
-        if not _direct_gitlink_by_path_get(self._repository_root):
-            return []
-        git_command_run(self._repository_root, ("submodule", "sync", "--recursive"))
-        git_command_run(
-            self._repository_root,
-            (
-                "-c",
-                "protocol.file.allow=always",
-                "submodule",
-                "update",
-                "--init",
-                "--recursive",
-                "--checkout",
-            ),
-        )
+        missing_update_list = _missing_gitlink_update_list_get(self._repository_root)
+        if not missing_update_list:
+            return self.read()
+        for owner_root, missing_path_list in missing_update_list:
+            git_command_run(owner_root, ("submodule", "sync", "--recursive"))
+            git_command_run(
+                owner_root,
+                (
+                    "-c",
+                    "protocol.file.allow=always",
+                    "submodule",
+                    "update",
+                    "--init",
+                    "--recursive",
+                    "--checkout",
+                    "--",
+                    *missing_path_list,
+                ),
+            )
         return self.read()
 
     def read(self) -> list[WorkspaceSubmoduleState]:
@@ -88,6 +92,52 @@ class WorkspaceSubmoduleReader:
 
         visit(self._repository_root, "")
         return sorted(submodule_state_list, key=lambda item: item.relative_path)
+
+
+def _missing_gitlink_update_list_get(repository_root: Path) -> list[tuple[Path, list[str]]]:
+    """Return owner-local updates for uninitialized recursive gitlinks.
+
+    Args:
+        repository_root: Exact task-worktree root.
+
+    Returns:
+        Traversal-ordered repository roots and their direct paths to initialize.
+    """
+
+    missing_path_list_by_owner_root_map: dict[Path, list[str]] = {}
+
+    def missing_append(owner_root: Path, relative_path: str) -> None:
+        """Append one direct gitlink to its current owning repository."""
+
+        missing_path_list_by_owner_root_map.setdefault(owner_root, []).append(relative_path)
+
+    def visit(root: Path) -> None:
+        for relative_path in _direct_gitlink_by_path_get(root):
+            child = root / relative_path
+            if child.is_symlink() or not child.is_dir():
+                if not child.exists() and not child.is_symlink():
+                    missing_append(root, relative_path)
+                continue
+            top_level = git_command_text_get(child, ("rev-parse", "--show-toplevel"), check=False)
+            if not top_level:
+                missing_append(root, relative_path)
+                continue
+            try:
+                resolved_top_level = Path(top_level).resolve(strict=True)
+                resolved_child = child.resolve(strict=True)
+            except OSError:
+                missing_append(root, relative_path)
+                continue
+            if resolved_top_level != resolved_child:
+                missing_append(root, relative_path)
+                continue
+            visit(child)
+
+    visit(repository_root)
+    return [
+        (owner_root, sorted(relative_path_list))
+        for owner_root, relative_path_list in missing_path_list_by_owner_root_map.items()
+    ]
 
 
 def _direct_gitlink_by_path_get(repository_root: Path) -> dict[str, str]:

@@ -20,6 +20,7 @@ from task_workspace.model import (
     WorkspaceConfig,
     WorkspaceRequest,
 )
+from task_workspace.repository import WorkspaceRepository
 from task_workspace.submodule import WorkspaceSubmoduleReader
 from task_workspace.transaction import TaskWorkspaceTransaction
 
@@ -78,28 +79,33 @@ def main(argv: list[str] | None = None) -> int:
     args = _args_parse(argv)
     try:
         request = _request_get(args.issue_identifier, args.repositories_input)
-        transaction = TaskWorkspaceTransaction(WorkspaceConfig.from_environment())
+        config = WorkspaceConfig.from_environment()
+        transaction = TaskWorkspaceTransaction(config)
         state_list = transaction.prepare(request) if args.command == "prepare" else transaction.validate(request)
     except TaskWorkspaceError as error:
         print(str(error), file=sys.stderr)
         return 2
+    repository_result_list: list[dict[str, object]] = []
+    for index, state in enumerate(state_list):
+        repository = WorkspaceRepository.from_config(config, request.repository_list[index])
+        task_root = repository.main_root / ".worktree" / request.basename
+        repository_result_list.append(
+            {
+                "baseline_commit": state.baseline_commit,
+                "origin_identity": repository.origin_identity,
+                "recursive_submodule_commit_by_path_map": {
+                    submodule.relative_path: submodule.commit
+                    for submodule in WorkspaceSubmoduleReader(task_root).read()
+                },
+                "task_root": str(task_root),
+            }
+        )
     print(
         json.dumps(
             {
                 "schema_version": 1,
                 "branch_name": request.branch_name,
-                "repository_list": [
-                    {
-                        "baseline_commit": item.baseline_commit,
-                        "origin_identity": item.origin_identity,
-                        "recursive_submodule_commit_by_path_map": {
-                            state.relative_path: state.commit
-                            for state in WorkspaceSubmoduleReader(Path(item.task_root)).read()
-                        },
-                        "task_root": item.task_root,
-                    }
-                    for item in state_list
-                ],
+                "repository_list": repository_result_list,
             },
             separators=(",", ":"),
             sort_keys=True,
