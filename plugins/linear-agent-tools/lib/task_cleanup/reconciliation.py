@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from git_host.model import PullRequestSnapshot, RepositoryIdentity
 from git_host.pull_request import GitHubPullRequestBoundary
 from task_cleanup.model import CleanupRequest, PullRequestTarget, TaskCleanupError
+from task_cleanup.resource import CleanupResourceReadback, CleanupResourceRegistry
 from task_cleanup.workspace import TaskWorkspaceRetirement
 from task_workspace.lock import IssueWorkspaceLock
 from task_workspace.model import RepositoryWorkspaceState, TaskWorkspaceError, WorkspaceConfig
@@ -21,8 +22,9 @@ class CleanupResult:
     removed_worktree_count: int
     removed_local_branch_count: int
     removed_remote_branch_count: int
+    resource_readback_list: list[CleanupResourceReadback]
 
-    def payload(self) -> dict[str, int]:
+    def payload(self) -> dict[str, object]:
         """Return one JSON-ready result."""
 
         return {
@@ -31,6 +33,7 @@ class CleanupResult:
             "removed_local_branch_count": self.removed_local_branch_count,
             "removed_remote_branch_count": self.removed_remote_branch_count,
             "removed_worktree_count": self.removed_worktree_count,
+            "resource_readback_list": [item.payload() for item in self.resource_readback_list],
         }
 
 
@@ -45,6 +48,7 @@ class CleanupState:
     removed_worktree_count: int = 0
     removed_local_branch_count: int = 0
     removed_remote_branch_count: int = 0
+    resource_readback_list: list[CleanupResourceReadback] = field(default_factory=list)
 
     def pull_request_target_get(self, github_repository: RepositoryIdentity) -> PullRequestTarget:
         """Return the exact approved target for one participating GitHub repository."""
@@ -80,11 +84,13 @@ class TaskCleanupReconciler:
         config: WorkspaceConfig,
         *,
         github: GitHubPullRequestBoundary,
+        resources: CleanupResourceRegistry | None = None,
     ) -> None:
         """Initialize explicit external boundaries."""
 
         self._config = config
         self._github = github
+        self._resources = resources or CleanupResourceRegistry(config)
 
     def cleanup(self, request: CleanupRequest) -> CleanupResult:
         """Reconcile every exact requested cleanup target idempotently."""
@@ -97,12 +103,29 @@ class TaskCleanupReconciler:
             if request.authority.scope != "attempt":
                 self._workspace_reconcile(state)
                 self._project_absence_require(state)
+            self._resource_reconcile(state)
         return CleanupResult(
             closed_pull_request_count=state.closed_pull_request_count,
             removed_worktree_count=state.removed_worktree_count,
             removed_local_branch_count=state.removed_local_branch_count,
             removed_remote_branch_count=state.removed_remote_branch_count,
+            resource_readback_list=list(state.resource_readback_list),
         )
+
+    def _resource_reconcile(self, state: CleanupState) -> None:
+        """Retain or delete each sorted typed resource through its fixed registry handler."""
+
+        deleted_lifetime_set = {
+            "attempt": {"attempt"},
+            "terminal-issue": {"attempt", "issue"},
+            "project-final": {"attempt", "issue", "project"},
+        }[state.request.authority.scope]
+        for resource in state.request.resource_list:
+            readback = self._resources.reconcile(resource, delete=resource.lifetime in deleted_lifetime_set)
+            expected_state = "absent" if resource.lifetime in deleted_lifetime_set else "retained"
+            if readback.state not in {expected_state, "absent"}:
+                raise TaskCleanupError("Cleanup resource readback differs from its authorized lifetime")
+            state.resource_readback_list.append(readback)
 
     def _project_absence_require(self, state: CleanupState) -> None:
         """Prove every Project issue workspace absent at the final cleanup gate."""

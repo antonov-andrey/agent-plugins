@@ -11,6 +11,7 @@ import secrets
 import shutil
 import stat
 
+from task_cleanup.contract import CleanupResourceContractError, cleanup_handler_key_validate
 from task_workspace.model import TaskWorkspaceError
 
 _MAPPING_LINE_PATTERN = re.compile(r"(?P<indent> *)(?P<key>[a-z][a-z0-9_]*)\s*:(?P<value>.*)")
@@ -108,11 +109,13 @@ class BootstrapPlan:
     """Contain the exact validated bootstrap manifest effect."""
 
     resource_list: list[BootstrapResource]
+    cleanup_handler_key_list: list[str]
 
     def __post_init__(self) -> None:
         """Detach validated plan collections from parser-local mutation."""
 
         object.__setattr__(self, "resource_list", list(self.resource_list))
+        object.__setattr__(self, "cleanup_handler_key_list", list(self.cleanup_handler_key_list))
 
     @classmethod
     def from_manifest(cls, payload_bytes: bytes, *, main_root: Path) -> "BootstrapPlan":
@@ -127,10 +130,10 @@ class BootstrapPlan:
         """
 
         payload = _yaml_document_load(payload_bytes)
-        if not isinstance(payload, dict) or set(payload) != {"schema_version", "resource"}:
+        if not isinstance(payload, dict) or set(payload) != {"schema_version", "resource", "cleanup"}:
             raise TaskWorkspaceError("worktree-bootstrap.yaml has another top-level shape")
-        if payload["schema_version"] != 2:
-            raise TaskWorkspaceError("worktree-bootstrap.yaml schema_version must be 2")
+        if payload["schema_version"] != 3:
+            raise TaskWorkspaceError("worktree-bootstrap.yaml schema_version must be 3")
         resource = payload["resource"]
         expected_resource_fields = {
             "copy_optional_path_list",
@@ -166,7 +169,25 @@ class BootstrapPlan:
         path_list = [item.relative_path for item in resource_list]
         if len(path_list) != len(set(path_list)):
             raise TaskWorkspaceError("Bootstrap manifest repeats one resource path")
-        return cls(resource_list=sorted(resource_list, key=lambda item: item.relative_path))
+        cleanup = payload["cleanup"]
+        if not isinstance(cleanup, dict) or set(cleanup) != {"handler_key_list"}:
+            raise TaskWorkspaceError("Bootstrap cleanup mapping has another shape")
+        handler_key_list = cleanup["handler_key_list"]
+        if (
+            not isinstance(handler_key_list, list)
+            or any(not isinstance(item, str) for item in handler_key_list)
+            or handler_key_list != sorted(handler_key_list)
+            or len(handler_key_list) != len(set(handler_key_list))
+        ):
+            raise TaskWorkspaceError("Bootstrap cleanup handler keys must be unique and sorted")
+        try:
+            validated_handler_key_list = [cleanup_handler_key_validate(item) for item in handler_key_list]
+        except CleanupResourceContractError as error:
+            raise TaskWorkspaceError("Bootstrap cleanup handler is absent from the provider registry") from error
+        return cls(
+            resource_list=sorted(resource_list, key=lambda item: item.relative_path),
+            cleanup_handler_key_list=validated_handler_key_list,
+        )
 
 
 def _yaml_document_load(payload_bytes: bytes) -> object:

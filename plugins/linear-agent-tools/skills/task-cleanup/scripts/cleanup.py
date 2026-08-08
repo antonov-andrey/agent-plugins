@@ -18,6 +18,7 @@ from git_host.pull_request import GitHubPullRequestBoundary
 from json_contract import JsonContractError, json_load_strict
 from task_cleanup.model import CleanupRequest, TaskCleanupError
 from task_cleanup.reconciliation import TaskCleanupReconciler
+from task_cleanup.resource import CleanupResourceRegistry
 from task_workspace.model import TaskWorkspaceError, WorkspaceConfig
 
 
@@ -64,9 +65,11 @@ def main(argv: list[str] | None = None) -> int:
 
     args = _parser_get().parse_args(argv)
     try:
+        config = WorkspaceConfig.from_environment()
         result = TaskCleanupReconciler(
-            WorkspaceConfig.from_environment(),
+            config,
             github=GitHubPullRequestBoundary(),
+            resources=CleanupResourceRegistry(config),
         ).cleanup(_request_load(args.request_input))
     except (GitHubContractError, TaskCleanupError, TaskWorkspaceError) as error:
         print(str(error), file=sys.stderr)

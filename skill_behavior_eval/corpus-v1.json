@@ -452,7 +452,7 @@
       "semantic_invariant_list": [
         {
           "id": "idempotent-exact-cleanup",
-          "text": "The response treats already absent owned state as success, closes only exact linked open canceled PRs, removes only proven worktrees/branches/private state and declared direct-argv resources, and preserves all Linear history and foreign state."
+          "text": "The response treats already absent owned state as success, closes only exact linked open canceled PRs, removes only proven worktrees/branches/private state and typed resources resolved through fixed provider handlers from natural Project, issue and repository identities, and preserves all Linear history and foreign state without arbitrary argv or fingerprints."
         },
         {
           "id": "project-completion-gate",

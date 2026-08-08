@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -19,6 +20,12 @@ if str(LIBRARY_ROOT) not in sys.path:
 import task_workspace.lock as lock_module
 from git_host.model import PullRequestSnapshot, RepositoryIdentity
 from git_host.pull_request import GitHubPullRequestBoundary
+from task_cleanup.contract import (
+    AcceptanceBaseBranchCleanupResource,
+    CleanupResourceContractError,
+    WorkflowInfrastructureDevelopmentEnvironmentCleanupResource,
+    cleanup_resource_from_payload,
+)
 from task_cleanup.model import (
     CleanupAuthority,
     CleanupRequest,
@@ -26,6 +33,7 @@ from task_cleanup.model import (
     TaskCleanupError,
 )
 from task_cleanup.reconciliation import CleanupState, TaskCleanupReconciler
+from task_cleanup.resource import CleanupResourceRegistry
 from task_workspace.lock import IssueAttemptLock, IssueWorkspaceLock
 from task_workspace.model import (
     RepositoryRequest,
@@ -38,6 +46,8 @@ from task_workspace.bootstrap import BootstrapPlan, BootstrapResource
 from task_workspace.repository import WorkspaceRepository
 from task_workspace.submodule import WorkspaceSubmoduleReader
 from task_workspace.transaction import TaskWorkspaceTransaction
+
+PROJECT_ID = "70000000-0000-4000-8000-000000000001"
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,16 +82,24 @@ def _task_cleanup_reconciler(
     config: WorkspaceConfig,
     *,
     github: GitHubPullRequestBoundary | None = None,
+    resources: CleanupResourceRegistry | None = None,
 ) -> TaskCleanupReconciler:
     """Build the cleanup workflow with explicit production-equivalent boundaries."""
 
     return TaskCleanupReconciler(
         config,
         github=github or GitHubPullRequestBoundary(),
+        resources=resources,
     )
 
 
-def _repository_create(workspace: Path, *, resources: bool = True) -> RepositoryFixture:
+def _repository_create(
+    workspace: Path,
+    *,
+    resources: bool = True,
+    repository_name: str = "example",
+    remote_name: str = "example-origin.git",
+) -> RepositoryFixture:
     """Create one canonical checkout with a current YAML bootstrap contract.
 
     Args:
@@ -92,8 +110,8 @@ def _repository_create(workspace: Path, *, resources: bool = True) -> Repository
         Checkout, bare origin and initial commit.
     """
 
-    remote = workspace / "example-origin.git"
-    root = workspace / "example"
+    remote = workspace / remote_name
+    root = workspace / repository_name
     subprocess.run(
         ["git", "init", "--bare", "--initial-branch=main", str(remote)],
         check=True,
@@ -103,15 +121,17 @@ def _repository_create(workspace: Path, *, resources: bool = True) -> Repository
     _git(root, "config", "user.email", "test@example.com")
     _git(root, "config", "user.name", "Test User")
     (root / "README.md").write_text("# Example\n", encoding="utf-8")
-    manifest = """schema_version: 2
+    manifest = """schema_version: 3
 resource:
   copy_optional_path_list: []
   copy_required_path_list: []
   link_optional_path_list: []
   link_required_path_list: []
+cleanup:
+  handler_key_list: []
 """
     if resources:
-        manifest = """schema_version: 2
+        manifest = """schema_version: 3
 resource:
   copy_optional_path_list: []
   copy_required_path_list:
@@ -119,6 +139,8 @@ resource:
   link_optional_path_list:
     - secret.txt
   link_required_path_list: []
+cleanup:
+  handler_key_list: []
 """
     (root / "worktree-bootstrap.yaml").write_text(manifest, encoding="utf-8")
     _git(root, "add", "README.md", "worktree-bootstrap.yaml")
@@ -138,32 +160,37 @@ def test_bootstrap_manifest_parser_is_self_contained_and_schema_bounded(
 
     (tmp_path / "config:file").write_text("value\n", encoding="utf-8")
     plan = BootstrapPlan.from_manifest(
-        b"""schema_version: 2
+        b"""schema_version: 3
 resource:
   copy_optional_path_list: []
   copy_required_path_list:
     - "config:file"
   link_optional_path_list: []
   link_required_path_list: []
+cleanup:
+  handler_key_list:
+    - workflow-infrastructure-development-environment
 """,
         main_root=tmp_path,
     )
 
     assert [item.relative_path for item in plan.resource_list] == ["config:file"]
+    assert plan.cleanup_handler_key_list == ["workflow-infrastructure-development-environment"]
 
 
 @pytest.mark.parametrize(
     "payload",
     [
-        b"schema_version: 2\nschema_version: 2\n",
-        b"schema_version: 2\nresource:\n  copy_optional_path_list: []\n  copy_optional_path_list: []\n",
-        b"---\nschema_version: 2\n",
-        b"schema_version: &version 2\nresource: *version\n",
-        b"schema_version: 2\nresource: {copy_optional_path_list: []}\n",
-        b"schema_version: 2\nresource:\n    copy_optional_path_list: []\n",
-        b"schema_version: 2\nresource:\n  copy_optional_path_list:\n    - 'broken'quote'\n",
-        b"schema_version: 2\nresource:\n  copy_optional_path_list:\n    - #comment\n",
-        b"schema_version: 2\nresource:\n  copy_optional_path_list: []\n  copy_required_path_list: []\n  link_optional_path_list: []\n  link_required_path_list: []\ncleanup:\n  command_argument_list:\n    - destroy\n",
+        b"schema_version: 3\nschema_version: 3\n",
+        b"schema_version: 3\nresource:\n  copy_optional_path_list: []\n  copy_optional_path_list: []\n",
+        b"---\nschema_version: 3\n",
+        b"schema_version: &version 3\nresource: *version\n",
+        b"schema_version: 3\nresource: {copy_optional_path_list: []}\n",
+        b"schema_version: 3\nresource:\n    copy_optional_path_list: []\n",
+        b"schema_version: 3\nresource:\n  copy_optional_path_list:\n    - 'broken'quote'\n",
+        b"schema_version: 3\nresource:\n  copy_optional_path_list:\n    - #comment\n",
+        b"schema_version: 3\nresource:\n  copy_optional_path_list: []\n  copy_required_path_list: []\n  link_optional_path_list: []\n  link_required_path_list: []\ncleanup:\n  command_argument_list:\n    - destroy\n",
+        b"schema_version: 3\nresource:\n  copy_optional_path_list: []\n  copy_required_path_list: []\n  link_optional_path_list: []\n  link_required_path_list: []\ncleanup:\n  handler_key_list:\n    - unknown-handler\n",
     ],
 )
 def test_bootstrap_manifest_parser_rejects_yaml_outside_owned_subset(payload: bytes, tmp_path: Path) -> None:
@@ -361,6 +388,7 @@ def _canceled_cleanup_request(request: WorkspaceRequest, *, issue: str) -> Clean
 
     return CleanupRequest(
         issue_identifier=issue,
+        project_id=PROJECT_ID,
         authority=CleanupAuthority(
             scope="terminal-issue",
             issue_status="Canceled",
@@ -371,6 +399,7 @@ def _canceled_cleanup_request(request: WorkspaceRequest, *, issue: str) -> Clean
         ),
         repository_list=request.repository_list,
         pull_request_list=[],
+        resource_list=[],
     )
 
 
@@ -462,9 +491,11 @@ def test_direct_workspace_and_cleanup_models_require_strict_typed_lists(
     with pytest.raises(TaskCleanupError, match="repository list"):
         CleanupRequest(
             issue_identifier="AND-121",
+            project_id=PROJECT_ID,
             authority=authority,
             repository_list=(repository,),  # type: ignore[arg-type]
             pull_request_list=[],
+            resource_list=[],
         )
 
     with pytest.raises(TaskCleanupError, match="another shape"):
@@ -472,6 +503,7 @@ def test_direct_workspace_and_cleanup_models_require_strict_typed_lists(
             {
                 "schema_version": 1,
                 "issue_identifier": "AND-121",
+                "project_id": PROJECT_ID,
                 "authority": {
                     "scope": "terminal-issue",
                     "issue_status": "Canceled",
@@ -484,6 +516,7 @@ def test_direct_workspace_and_cleanup_models_require_strict_typed_lists(
                 "pull_request_list": [],
                 "project_issue_identifier_list": [],
                 "resource_list": [],
+                "compatibility": [],
             }
         )
 
@@ -515,12 +548,105 @@ def test_cleanup_request_rejects_duplicate_normalized_repository_identity() -> N
     with pytest.raises(TaskCleanupError, match="repeats one repository"):
         CleanupRequest(
             issue_identifier="AND-121",
+            project_id=PROJECT_ID,
             authority=authority,
             repository_list=[
                 RepositoryRequest("git@github.com:antonov-andrey/example.git", "main", ""),
                 RepositoryRequest("ssh://git@github.com/antonov-andrey/example.git", "main", ""),
             ],
             pull_request_list=[],
+            resource_list=[],
+        )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {
+            "handler_key": "unknown-handler",
+            "lifetime": "project",
+            "identity": {},
+        },
+        {
+            "handler_key": "development-infrastructure-acceptance-base-branch",
+            "lifetime": "project",
+            "command_argument_list": ["delete"],
+            "identity": {},
+        },
+        {
+            "handler_key": "development-infrastructure-acceptance-base-branch",
+            "lifetime": "issue",
+            "identity": {
+                "project_id": PROJECT_ID,
+                "owner_issue_identifier": "AND-16",
+                "repository": "git@github.com:antonov-andrey/development-infrastructure.git",
+                "branch": "acceptance/agent-development-workflow-complete-base",
+            },
+        },
+        {
+            "handler_key": "development-infrastructure-acceptance-base-branch",
+            "lifetime": "project",
+            "identity": {
+                "project_id": PROJECT_ID,
+                "owner_issue_identifier": "AND-16",
+                "repository": "git@github.com:antonov-andrey/development-infrastructure.git",
+                "branch": "acceptance/agent-development-workflow-complete-base",
+                "approval_fingerprint": "forbidden",
+            },
+        },
+    ],
+)
+def test_cleanup_resource_parser_rejects_unregistered_or_free_form_authority(payload: object) -> None:
+    """Only fixed provider handlers and their typed natural identities are accepted."""
+
+    with pytest.raises(CleanupResourceContractError):
+        cleanup_resource_from_payload(payload)
+
+
+def test_cleanup_request_requires_project_and_issue_owned_sorted_resources() -> None:
+    """Typed cleanup resources cannot cross Project ownership or arrive in unstable order."""
+
+    acceptance = AcceptanceBaseBranchCleanupResource(
+        project_id=PROJECT_ID,
+        owner_issue_identifier="AND-16",
+        repository="git@github.com:antonov-andrey/development-infrastructure.git",
+        branch="acceptance/agent-development-workflow-complete-base",
+    )
+    environment = WorkflowInfrastructureDevelopmentEnvironmentCleanupResource(
+        project_id=PROJECT_ID,
+        owner_issue_identifier="AND-45",
+        repository="git@github.com:antonov-andrey/workflow-infrastructure.git",
+        common_prefix="2026-08-08-and-45",
+    )
+    authority = CleanupAuthority(
+        scope="project-final",
+        issue_status="In Progress",
+        project_status="In Progress",
+        final_acceptance_done=True,
+        all_other_project_nodes_terminal=True,
+        unresolved_remediation_blocker_count=0,
+    )
+
+    with pytest.raises(TaskCleanupError, match="unique and sorted"):
+        CleanupRequest(
+            issue_identifier="AND-16",
+            project_id=PROJECT_ID,
+            authority=authority,
+            repository_list=[],
+            pull_request_list=[],
+            resource_list=[environment, acceptance],
+            project_issue_identifier_list=["AND-16", "AND-45"],
+        )
+
+    with pytest.raises(TaskCleanupError, match="absent from the complete issue set"):
+        CleanupRequest(
+            issue_identifier="AND-16",
+            project_id=PROJECT_ID,
+            authority=authority,
+            repository_list=[],
+            pull_request_list=[],
+            resource_list=[environment],
+            project_issue_identifier_list=["AND-16"],
         )
 
 
@@ -784,13 +910,15 @@ def test_bootstrap_manifest_comes_from_exact_baseline_not_dirty_main(
 
     remote = repository_fixture.remote
     (root / "worktree-bootstrap.yaml").write_text(
-        """schema_version: 2
+        """schema_version: 3
 resource:
   copy_optional_path_list: []
   copy_required_path_list:
     - uncommitted-required.txt
   link_optional_path_list: []
   link_required_path_list: []
+cleanup:
+  handler_key_list: []
 """,
         encoding="utf-8",
     )
@@ -827,12 +955,14 @@ def test_legacy_bootstrap_requires_adoption_then_uses_only_canonical_yaml(
     assert _git(root, "branch", "--list", "linear/and-120") == ""
     (root / "worktree-bootstrap.toml").unlink()
     (root / "worktree-bootstrap.yaml").write_text(
-        """schema_version: 2
+        """schema_version: 3
 resource:
   copy_optional_path_list: []
   copy_required_path_list: []
   link_optional_path_list: []
   link_required_path_list: []
+cleanup:
+  handler_key_list: []
 """,
         encoding="utf-8",
     )
@@ -862,13 +992,15 @@ def test_bootstrap_destination_parent_symlink_cannot_escape_task_worktree(
     source.write_text("source\n", encoding="utf-8")
     (root / "redirect").symlink_to(outside, target_is_directory=True)
     (root / "worktree-bootstrap.yaml").write_text(
-        """schema_version: 2
+        """schema_version: 3
 resource:
   copy_optional_path_list: []
   copy_required_path_list:
     - redirect/config.json
   link_optional_path_list: []
   link_required_path_list: []
+cleanup:
+  handler_key_list: []
 """,
         encoding="utf-8",
     )
@@ -1024,6 +1156,7 @@ def test_terminal_cleanup_removes_exact_workspace_and_is_idempotent(
     TaskWorkspaceTransaction(config).prepare(request)
     cleanup_request = CleanupRequest(
         issue_identifier="AND-106",
+        project_id=PROJECT_ID,
         authority=CleanupAuthority(
             scope="terminal-issue",
             issue_status="Done",
@@ -1034,6 +1167,7 @@ def test_terminal_cleanup_removes_exact_workspace_and_is_idempotent(
         ),
         repository_list=request.repository_list,
         pull_request_list=[],
+        resource_list=[],
     )
 
     first = _task_cleanup_reconciler(config).cleanup(cleanup_request)
@@ -1062,6 +1196,7 @@ def test_terminal_cleanup_recovers_from_live_state_after_partial_removal(
     _git(task_root, "push", "-u", "origin", request.branch_name)
     cleanup_request = CleanupRequest(
         issue_identifier="AND-130",
+        project_id=PROJECT_ID,
         authority=CleanupAuthority(
             scope="terminal-issue",
             issue_status="Done",
@@ -1072,6 +1207,7 @@ def test_terminal_cleanup_recovers_from_live_state_after_partial_removal(
         ),
         repository_list=request.repository_list,
         pull_request_list=[],
+        resource_list=[],
     )
     original = WorkspaceRepository.remote_branch_delete_exact
     fail_once = True
@@ -1166,6 +1302,7 @@ def test_successful_cleanup_retires_branch_only_after_terminal_merged_readback(
 
     cleanup_request = CleanupRequest(
         issue_identifier="AND-129",
+        project_id=PROJECT_ID,
         authority=CleanupAuthority(
             scope="terminal-issue",
             issue_status="Done",
@@ -1176,6 +1313,7 @@ def test_successful_cleanup_retires_branch_only_after_terminal_merged_readback(
         ),
         repository_list=workspace_request.repository_list,
         pull_request_list=[PullRequestReference(repository=repository_identity, number=17)],
+        resource_list=[],
     )
     github = GitHub()
     reconciler = _task_cleanup_reconciler(config, github=github)  # type: ignore[arg-type]
@@ -1211,6 +1349,7 @@ def test_done_cleanup_rejects_unintegrated_branch_commits(tmp_path: Path) -> Non
     _git(task_root, "commit", "-m", "Prepare unmerged candidate")
     cleanup_request = CleanupRequest(
         issue_identifier="AND-113",
+        project_id=PROJECT_ID,
         authority=CleanupAuthority(
             scope="terminal-issue",
             issue_status="Done",
@@ -1221,6 +1360,7 @@ def test_done_cleanup_rejects_unintegrated_branch_commits(tmp_path: Path) -> Non
         ),
         repository_list=request.repository_list,
         pull_request_list=[],
+        resource_list=[],
     )
 
     with pytest.raises(TaskCleanupError, match="absent from its remote base"):
@@ -1246,6 +1386,7 @@ def test_canceled_cleanup_may_remove_dirty_exact_task_state(tmp_path: Path) -> N
     )
     cleanup_request = CleanupRequest(
         issue_identifier="AND-107",
+        project_id=PROJECT_ID,
         authority=CleanupAuthority(
             scope="terminal-issue",
             issue_status="Canceled",
@@ -1256,6 +1397,7 @@ def test_canceled_cleanup_may_remove_dirty_exact_task_state(tmp_path: Path) -> N
         ),
         repository_list=request.repository_list,
         pull_request_list=[],
+        resource_list=[],
     )
 
     result = _task_cleanup_reconciler(config).cleanup(cleanup_request)
@@ -1302,6 +1444,7 @@ def test_cleanup_requires_complete_exact_pull_request_set(tmp_path: Path) -> Non
 
     request = CleanupRequest(
         issue_identifier="AND-121",
+        project_id=PROJECT_ID,
         authority=CleanupAuthority(
             scope="terminal-issue",
             issue_status="Canceled",
@@ -1312,6 +1455,7 @@ def test_cleanup_requires_complete_exact_pull_request_set(tmp_path: Path) -> Non
         ),
         repository_list=[RepositoryRequest("https://github.com/antonov-andrey/example.git", "main", "")],
         pull_request_list=[],
+        resource_list=[],
     )
 
     with pytest.raises(TaskCleanupError, match="omits or substitutes"):
@@ -1367,6 +1511,7 @@ def test_successful_cleanup_rejects_closed_unmerged_only_history(tmp_path: Path)
 
     request = CleanupRequest(
         issue_identifier="AND-121",
+        project_id=PROJECT_ID,
         authority=CleanupAuthority(
             scope="terminal-issue",
             issue_status="Done",
@@ -1377,6 +1522,7 @@ def test_successful_cleanup_rejects_closed_unmerged_only_history(tmp_path: Path)
         ),
         repository_list=[Repository.request],
         pull_request_list=[PullRequestReference(repository=repository_identity, number=8)],
+        resource_list=[],
     )
 
     with pytest.raises(TaskCleanupError, match="Closed unmerged.*never successful merge evidence"):
@@ -1444,6 +1590,7 @@ def test_successful_cleanup_selects_merged_candidate_over_closed_unmerged_histor
 
     request = CleanupRequest(
         issue_identifier="AND-121",
+        project_id=PROJECT_ID,
         authority=CleanupAuthority(
             scope="terminal-issue",
             issue_status="Done",
@@ -1454,6 +1601,7 @@ def test_successful_cleanup_selects_merged_candidate_over_closed_unmerged_histor
         ),
         repository_list=[Repository.request],
         pull_request_list=[PullRequestReference(repository=repository_identity, number=17)],
+        resource_list=[],
     )
 
     _task_cleanup_reconciler(
@@ -1514,6 +1662,7 @@ def test_canceled_cleanup_accepts_closed_history_without_issue_title(tmp_path: P
 
     request = CleanupRequest(
         issue_identifier="AND-121",
+        project_id=PROJECT_ID,
         authority=CleanupAuthority(
             scope="terminal-issue",
             issue_status="Canceled",
@@ -1524,6 +1673,7 @@ def test_canceled_cleanup_accepts_closed_history_without_issue_title(tmp_path: P
         ),
         repository_list=[Repository.request],
         pull_request_list=[PullRequestReference(repository=repository_identity, number=8)],
+        resource_list=[],
     )
     github = GitHub()
     reconciler = _task_cleanup_reconciler(
@@ -1607,6 +1757,7 @@ def test_cleanup_reconciles_complete_exact_pull_request_set(
 
     request = CleanupRequest(
         issue_identifier="AND-121",
+        project_id=PROJECT_ID,
         authority=CleanupAuthority(
             scope="terminal-issue",
             issue_status=issue_status,
@@ -1617,6 +1768,7 @@ def test_cleanup_reconciles_complete_exact_pull_request_set(
         ),
         repository_list=[Repository.request],
         pull_request_list=[PullRequestReference(repository=repository_identity, number=17)],
+        resource_list=[],
     )
     github = GitHub()
     reconciler = _task_cleanup_reconciler(
@@ -1660,9 +1812,11 @@ def test_project_final_cleanup_requires_acceptance_other_terminal_nodes_and_no_r
     )
     cleanup_request = CleanupRequest(
         issue_identifier="AND-110",
+        project_id=PROJECT_ID,
         authority=authority,
         repository_list=request.repository_list,
         pull_request_list=[],
+        resource_list=[],
         project_issue_identifier_list=["AND-110"],
     )
 
@@ -1724,6 +1878,7 @@ def test_project_final_cleanup_proves_all_project_issue_workspaces_absent(
     TaskWorkspaceTransaction(config).prepare(cleanup_node_request)
     project_cleanup = CleanupRequest(
         issue_identifier="AND-121",
+        project_id=PROJECT_ID,
         authority=CleanupAuthority(
             scope="project-final",
             issue_status="In Progress",
@@ -1734,6 +1889,7 @@ def test_project_final_cleanup_proves_all_project_issue_workspaces_absent(
         ),
         repository_list=cleanup_node_request.repository_list,
         pull_request_list=[],
+        resource_list=[],
         project_issue_identifier_list=["AND-120", "AND-121"],
     )
 
@@ -1744,3 +1900,169 @@ def test_project_final_cleanup_proves_all_project_issue_workspaces_absent(
     result = _task_cleanup_reconciler(config).cleanup(project_cleanup)
 
     assert result.removed_worktree_count == 0
+
+
+def test_acceptance_base_resource_is_retained_then_deleted_idempotently(tmp_path: Path) -> None:
+    """Project cleanup retains, then exactly deletes, the real acceptance-base resource shape."""
+
+    repository_fixture = _repository_create(
+        tmp_path,
+        resources=False,
+        repository_name="development-infrastructure",
+        remote_name="development-infrastructure.git",
+    )
+    branch = "acceptance/agent-development-workflow-6f750a05-complete-base"
+    _git(repository_fixture.root, "branch", branch)
+    _git(repository_fixture.root, "push", "origin", branch)
+    config = WorkspaceConfig(tmp_path.resolve())
+    resource = AcceptanceBaseBranchCleanupResource(
+        project_id=PROJECT_ID,
+        owner_issue_identifier="AND-16",
+        repository=str(repository_fixture.remote),
+        branch=branch,
+    )
+    retained_request = CleanupRequest(
+        issue_identifier="AND-16",
+        project_id=PROJECT_ID,
+        authority=CleanupAuthority(
+            scope="terminal-issue",
+            issue_status="Done",
+            project_status="In Progress",
+            final_acceptance_done=False,
+            all_other_project_nodes_terminal=False,
+            unresolved_remediation_blocker_count=0,
+        ),
+        repository_list=[],
+        pull_request_list=[],
+        resource_list=[resource],
+    )
+    project_request = CleanupRequest(
+        issue_identifier="AND-16",
+        project_id=PROJECT_ID,
+        authority=CleanupAuthority(
+            scope="project-final",
+            issue_status="In Progress",
+            project_status="In Progress",
+            final_acceptance_done=True,
+            all_other_project_nodes_terminal=True,
+            unresolved_remediation_blocker_count=0,
+        ),
+        repository_list=[],
+        pull_request_list=[],
+        resource_list=[resource],
+        project_issue_identifier_list=["AND-16"],
+    )
+
+    retained = _task_cleanup_reconciler(config).cleanup(retained_request)
+    first = _task_cleanup_reconciler(config).cleanup(project_request)
+    second = _task_cleanup_reconciler(config).cleanup(project_request)
+
+    assert [item.state for item in retained.resource_readback_list] == ["retained"]
+    assert [item.state for item in first.resource_readback_list] == ["absent"]
+    assert [item.state for item in second.resource_readback_list] == ["absent"]
+    assert _git(repository_fixture.root, "ls-remote", "--heads", "origin", branch) == ""
+
+
+def test_workflow_infrastructure_resource_uses_only_fixed_typed_provider_boundary(tmp_path: Path) -> None:
+    """The registry derives fixed Product invocation and exact readback from natural identity."""
+
+    repository_fixture = _repository_create(
+        tmp_path,
+        resources=False,
+        repository_name="workflow-infrastructure",
+        remote_name="workflow-infrastructure.git",
+    )
+    script = repository_fixture.root / "development_environment_manage.py"
+    script.write_text("raise SystemExit('test boundary is injected')\n", encoding="utf-8")
+    _git(repository_fixture.root, "add", script.name)
+    _git(repository_fixture.root, "commit", "-m", "Add cleanup entrypoint")
+    _git(repository_fixture.root, "push", "origin", "main")
+    config = WorkspaceConfig(tmp_path.resolve())
+    call_list: list[tuple[list[str], Path, bytes]] = []
+
+    def runner(argument_list: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        input_bytes = kwargs["input"]
+        cwd = kwargs["cwd"]
+        assert isinstance(input_bytes, bytes)
+        assert isinstance(cwd, Path)
+        call_list.append((argument_list, cwd, input_bytes))
+        operation = argument_list[2]
+        if operation == "destroy":
+            payload = {
+                "schema_version": 1,
+                "common_prefix": "2026-08-08-and-45",
+                "external_resources_absent": True,
+            }
+        else:
+            payload = {
+                "schema_version": 1,
+                "common_prefix": "2026-08-08-and-45",
+                "environment_name": "2026-08-08-and-45",
+                "external_resources_absent": False,
+                "resource_identity_list": ["docker-network:2026-08-08-and-45"],
+            }
+        return subprocess.CompletedProcess(
+            argument_list,
+            0,
+            stdout=(json.dumps(payload, separators=(",", ":"), sort_keys=True) + "\n").encode("utf-8"),
+            stderr=b"",
+        )
+
+    registry = CleanupResourceRegistry(config, runner=runner)
+    resource = WorkflowInfrastructureDevelopmentEnvironmentCleanupResource(
+        project_id=PROJECT_ID,
+        owner_issue_identifier="AND-45",
+        repository=str(repository_fixture.remote),
+        common_prefix="2026-08-08-and-45",
+    )
+    retained_request = CleanupRequest(
+        issue_identifier="AND-45",
+        project_id=PROJECT_ID,
+        authority=CleanupAuthority(
+            scope="attempt",
+            issue_status="In Progress",
+            project_status="In Progress",
+            final_acceptance_done=False,
+            all_other_project_nodes_terminal=False,
+            unresolved_remediation_blocker_count=0,
+        ),
+        repository_list=[],
+        pull_request_list=[],
+        resource_list=[resource],
+    )
+    project_request = CleanupRequest(
+        issue_identifier="AND-45",
+        project_id=PROJECT_ID,
+        authority=CleanupAuthority(
+            scope="project-final",
+            issue_status="In Progress",
+            project_status="In Progress",
+            final_acceptance_done=True,
+            all_other_project_nodes_terminal=True,
+            unresolved_remediation_blocker_count=0,
+        ),
+        repository_list=[],
+        pull_request_list=[],
+        resource_list=[resource],
+        project_issue_identifier_list=["AND-45"],
+    )
+    reconciler = _task_cleanup_reconciler(config, resources=registry)
+
+    retained = reconciler.cleanup(retained_request)
+    first = reconciler.cleanup(project_request)
+    second = reconciler.cleanup(project_request)
+
+    assert [item.state for item in retained.resource_readback_list] == ["retained"]
+    assert [item.state for item in first.resource_readback_list] == ["absent"]
+    assert [item.state for item in second.resource_readback_list] == ["absent"]
+    assert [item[0][2] for item in call_list] == ["destroy-inventory", "destroy", "destroy"]
+    for argument_list, cwd, input_bytes in call_list:
+        assert argument_list == [
+            sys.executable,
+            str(repository_fixture.root / "development_environment_manage.py"),
+            argument_list[2],
+            "--git-worktree",
+            "2026-08-08-and-45",
+        ]
+        assert cwd == repository_fixture.root
+        assert json.loads(input_bytes) == {"schema_version": 1, "common_prefix": "2026-08-08-and-45"}

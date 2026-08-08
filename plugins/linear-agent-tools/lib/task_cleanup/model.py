@@ -5,7 +5,16 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from git_host.model import RepositoryIdentity
-from task_workspace.model import RepositoryRequest, issue_identifier_validate
+from linear_boundary.contract import LinearContractError, uuid_validate
+from task_cleanup.contract import (
+    AcceptanceBaseBranchCleanupResource,
+    CleanupResource,
+    CleanupResourceContractError,
+    WorkflowInfrastructureDevelopmentEnvironmentCleanupResource,
+    cleanup_resource_from_payload,
+    cleanup_resource_identity_key,
+)
+from task_workspace.model import RepositoryRequest, TaskWorkspaceError, issue_identifier_validate
 
 
 class TaskCleanupError(RuntimeError):
@@ -163,15 +172,21 @@ class CleanupRequest:
     """Own every exact local and GitHub cleanup target."""
 
     issue_identifier: str
+    project_id: str
     authority: CleanupAuthority
     repository_list: list[RepositoryRequest]
     pull_request_list: list[PullRequestReference]
+    resource_list: list[CleanupResource]
     project_issue_identifier_list: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         """Validate one complete cleanup request."""
 
-        issue_identifier_validate(self.issue_identifier)
+        try:
+            issue_identifier_validate(self.issue_identifier)
+            uuid_validate(self.project_id, label="Cleanup Project ID")
+        except (LinearContractError, TaskWorkspaceError) as error:
+            raise TaskCleanupError("Cleanup owner identity is malformed") from error
         if not isinstance(self.authority, CleanupAuthority):
             raise TaskCleanupError("Cleanup authority has another shape")
         for label, value, expected_type in (
@@ -180,6 +195,14 @@ class CleanupRequest:
         ):
             if not isinstance(value, list) or any(not isinstance(item, expected_type) for item in value):
                 raise TaskCleanupError(f"Cleanup {label} list has another shape")
+        resource_type_tuple = (
+            AcceptanceBaseBranchCleanupResource,
+            WorkflowInfrastructureDevelopmentEnvironmentCleanupResource,
+        )
+        if not isinstance(self.resource_list, list) or any(
+            not isinstance(item, resource_type_tuple) for item in self.resource_list
+        ):
+            raise TaskCleanupError("Cleanup resource list has another shape")
         if not isinstance(self.project_issue_identifier_list, list):
             raise TaskCleanupError("Project issue identifier list must be a list")
         repository_identity_list = [item.origin_identity for item in self.repository_list]
@@ -192,22 +215,41 @@ class CleanupRequest:
             raise TaskCleanupError("One deterministic task branch may own at most one pull request per repository")
         if self.authority.scope == "attempt" and self.pull_request_list:
             raise TaskCleanupError("Attempt cleanup cannot mutate pull requests")
+        resource_identity_key_list = [cleanup_resource_identity_key(item) for item in self.resource_list]
+        if resource_identity_key_list != sorted(resource_identity_key_list) or len(resource_identity_key_list) != len(
+            set(resource_identity_key_list)
+        ):
+            raise TaskCleanupError("Cleanup typed resource identities must be unique and sorted")
+        for resource in self.resource_list:
+            if resource.project_id != self.project_id:
+                raise TaskCleanupError("Cleanup resource belongs to another Project")
+            if self.authority.scope != "project-final" and resource.owner_issue_identifier != self.issue_identifier:
+                raise TaskCleanupError("Non-final cleanup resource belongs to another issue")
         if self.project_issue_identifier_list != sorted(self.project_issue_identifier_list) or len(
             self.project_issue_identifier_list
         ) != len(set(self.project_issue_identifier_list)):
             raise TaskCleanupError("Project issue identifiers must be unique and sorted")
         for identifier in self.project_issue_identifier_list:
-            issue_identifier_validate(identifier)
+            try:
+                issue_identifier_validate(identifier)
+            except TaskWorkspaceError as error:
+                raise TaskCleanupError("Project issue identifier is malformed") from error
         if self.authority.scope == "project-final":
             if (
                 not self.project_issue_identifier_list
                 or self.issue_identifier not in self.project_issue_identifier_list
             ):
                 raise TaskCleanupError("Final Project cleanup requires its complete issue identifier set")
+            if any(
+                resource.owner_issue_identifier not in self.project_issue_identifier_list
+                for resource in self.resource_list
+            ):
+                raise TaskCleanupError("Final Project cleanup resource owner is absent from the complete issue set")
         elif self.project_issue_identifier_list:
             raise TaskCleanupError("Only final Project cleanup may carry Project issue identifiers")
         object.__setattr__(self, "repository_list", list(self.repository_list))
         object.__setattr__(self, "pull_request_list", list(self.pull_request_list))
+        object.__setattr__(self, "resource_list", list(self.resource_list))
         object.__setattr__(self, "project_issue_identifier_list", list(self.project_issue_identifier_list))
 
     @classmethod
@@ -224,14 +266,16 @@ class CleanupRequest:
         expected = {
             "schema_version",
             "issue_identifier",
+            "project_id",
             "authority",
             "repository_list",
             "pull_request_list",
+            "resource_list",
             "project_issue_identifier_list",
         }
         if not isinstance(payload, dict) or set(payload) != expected or payload["schema_version"] != 1:
             raise TaskCleanupError("Cleanup request has another shape")
-        for name in ("repository_list", "pull_request_list", "project_issue_identifier_list"):
+        for name in ("repository_list", "pull_request_list", "resource_list", "project_issue_identifier_list"):
             if not isinstance(payload[name], list):
                 raise TaskCleanupError(f"Cleanup field {name} must be a list")
         if any(not isinstance(item, str) for item in payload["project_issue_identifier_list"]):
@@ -250,10 +294,12 @@ class CleanupRequest:
         try:
             return cls(
                 issue_identifier=payload["issue_identifier"],
+                project_id=payload["project_id"],
                 authority=CleanupAuthority(**authority_payload),
                 repository_list=[RepositoryRequest.from_payload(item) for item in payload["repository_list"]],
                 pull_request_list=[PullRequestReference.from_payload(item) for item in payload["pull_request_list"]],
+                resource_list=[cleanup_resource_from_payload(item) for item in payload["resource_list"]],
                 project_issue_identifier_list=list(payload["project_issue_identifier_list"]),
             )
-        except (ValueError, TypeError) as error:
+        except (CleanupResourceContractError, ValueError, TypeError) as error:
             raise TaskCleanupError("Cleanup request contains an unsupported enum or field value") from error
