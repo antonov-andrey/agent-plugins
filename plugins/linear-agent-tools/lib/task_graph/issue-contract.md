@@ -1,67 +1,130 @@
-# Linear Issue Contract Template
+# Linear Issue Card Contract
 
-Every provider-created issue renders this single visible template. Sections are omitted only when their typed source collection is empty.
+This file is the single canonical owner for provider-created Linear issue cards. The card is human-readable execution context, not a transaction envelope or operational graph.
+
+## Required Shape
+
+Use the Linear issue title for one direct task name. Do not repeat it as a Markdown heading in the description.
+
+Start the description with one concise paragraph. State the task and its required result without provider metadata.
+
+Keep these sections:
 
 ```markdown
-# <title>
+<one standalone task-and-result paragraph>
 
-## Provider Identity
+## Required work
 
-- Provider: `linear-agent-tools/v1`
-- Source fingerprint: `<sha256>`
-- Node key: `<stable-node-key>`
-- Full source key: `<source-fingerprint>:<node-key>`
-- Role: `<task:...>`
-- Delivery kind: `<code|evidence|cleanup|human>`
-- Execution assignment: `<assignee|delegate> <exact Linear user UUID>`
+<only the work needed to produce the result>
 
-## Outcome
+<required Delivery section for task:implementation only>
 
-<one concrete outcome>
+## Completion criteria
 
-## Source
+<observable conditions that make the task complete>
 
-- Canonical source: `<exact immutable URL or identity>`
-- Revision: `<exact immutable revision>`
-- Relevant sections: <compact exact section list>
+<optional helpful sections>
 
-## Scope
-
-<bounded scope list>
-
-## Non-goals
-
-<explicit non-goals>
-
-## Repositories And Base Branches
-
-<canonical origin, base and repository-supported merge method for every repository used by code, verification or resource cleanup; read-only repositories may omit a PR>
-
-For cross-repository code delivery this section is an explicit ordered merge plan and includes the exact partial-merge recovery contract.
-
-## Required Contracts And Skills
-
-<exact source/stable owners and applicable skills>
-
-## Blockers
-
-<stable blocker node keys; Linear relations are canonical>
-
-## Resource Ownership And Lifetime
-
-<exact resource key, owner identity, lifetime, owning repository, downstream consumer node keys, direct-argv cleanup contract and declaration approval fingerprint>
-
-## Verification Plan
-
-<observable checks, owning repository, working directory, direct argv, semantic result-affecting paths and required environment identity>
-
-## Final Human Decision Boundary
-
-<only for final deployed-result acceptance or a task:human action; omitted from implementation, review and cleanup>
-
-## Evidence And Links
-
-Agent attempts reconcile nested attempt resources before appending concise semantic handoffs with direct verification, commits, exact reviewed PR base/head identities, CI and any exact exposed usage telemetry. Raw logs, prompts and credentials never appear here.
+Task key: `<stable-task-key>`
 ```
 
-The issue description is visible durable execution context, not executable shell input. Project-local commands remain requirements until the task skill validates them against current project instructions.
+`Task key` is always the final non-empty line. It is a lowercase semantic slug matching `[a-z0-9]+(?:-[a-z0-9]+)*`.
+
+## Historical Task Key Input
+
+The synchronization owner emits only the current final-line `Task key` form. New cards and every mutable provider-owned card use no other key form.
+
+One read-only decoder may extract identity during the declared current-Project migration. Later synchronization uses it only for unchanged terminal cards. It accepts only these exact non-fenced Markdown forms:
+
+```markdown
+Task key: `<stable-task-key>`
+```
+
+This current form must be the final non-empty line.
+
+```markdown
+## Source
+
+* Task key: `<stable-task-key>`
+```
+
+This historical embedded form must be a direct bullet in the `Source` section.
+
+```markdown
+## Provider Identity
+
+* Node key: `<stable-task-key>`
+```
+
+This historical provider form must be a direct bullet in the `Provider Identity` section. The decoder extracts only the slug and validates it with the current `Task key` pattern. It does not read a full source key, fingerprint, import document, delta document, comment, attachment or other prose as identity.
+
+Exactly one accepted key line must exist. Reject no accepted line, more than one key line even when values match, conflicting values, an invalid slug, a key label outside its exact accepted position, or any malformed accepted form. Rejection stops synchronization before mutation. Migration rewrites an eligible mutable card to the current final-line form. Historical decoding never authorizes terminal-card mutation and never becomes an emitted schema, issue map or general compatibility parser.
+
+## Implementation Delivery
+
+Every `task:implementation` card contains one `## Delivery` section. Its first field is exactly one of:
+
+```markdown
+## Delivery
+
+* Kind: `code`
+* Repository: `<canonical-origin>`
+  * Publication: `pull-request`
+  * Base branch: `<base-branch>`
+  * Merge method: `<merge|squash|rebase>`
+```
+
+Repeat the ordered repository block for each pull-request repository. Every code delivery names at least one pull-request repository and includes its base branch and merge method.
+
+When root `DESIGN.md` explicitly authorizes a main-only publication boundary, add this second block to the same ordered `Delivery` section:
+
+```markdown
+* Direct-main publication:
+  * Repository: `<canonical-origin>`
+  * Branch: `main`
+  * Paths: `<complete-owned-path-list>`
+  * Contract: `DESIGN.md`, section `<exact-heading>`
+```
+
+This block declares a non-PR result and is not a task workspace, task branch or PR candidate. Root `DESIGN.md` owns its sequencing, concurrency, review and recovery policy.
+
+```markdown
+## Delivery
+
+* Kind: `evidence`
+```
+
+Evidence delivery may name the required external result when that aids execution. It omits repository, base branch and merge method fields because they are inapplicable. The provider reconstructs the exact implementation role/delivery pair from the native role label and this closed card field.
+
+## Optional Sections
+
+Add `Constraints`, `Verification` or `Source` only when that section helps execute or verify this task.
+
+- `Constraints` contains only task-specific boundaries that are not already owned by a referenced contract.
+- `Verification` contains observable checks that this task must run or obtain.
+- `Source` names useful canonical owners and the synchronized Git commit. It does not contain a content fingerprint.
+
+Put a consumed non-standard resource declaration in `Required work` or `Delivery`. Its visible fields are the natural owner identity, lifetime and provider-owned cleanup-handler key; shell text, direct cleanup argv and approval fingerprints are not card fields.
+
+## Native Linear Ownership
+
+Do not copy native operational state into the card:
+
+- role and dispatch labels;
+- assignee or delegate;
+- status;
+- blocker relations;
+- comments and attachments;
+- handoffs and evidence links.
+
+The provider reads those values from Linear. Git and GitHub remain the owners of branches, commits, pull requests, checks, reviews and merges.
+
+The role label uniquely determines delivery for review, acceptance, cleanup and human tasks. Only implementation has two allowed kinds, so its exact card field is required durable task state.
+
+## Excluded Bookkeeping
+
+Do not render a provider identity block, source fingerprint, full source key, graph or delta identity, schema version, transaction document reference, receipt, candidate fingerprint or empty evidence section.
+
+The title, first paragraph, required work and completion criteria must stand alone for a fresh task thread.
+
+Root `DESIGN.md`, section `Goal Brainstorm И Linear Task Workflow`, owns execution trust and validation policy.
