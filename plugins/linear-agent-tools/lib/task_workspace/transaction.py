@@ -64,7 +64,7 @@ class TaskWorkspaceTransaction:
                 repository.state_identity_require(request.issue_identifier, state)
                 task_root = repository.task_worktree_require(request.issue_identifier, state)
                 WorkspaceSubmoduleReader(task_root).read()
-                for resource in self._retained_attempt_bootstrap_plan_get(repository, state).resource_list:
+                for resource in self._bootstrap_plan_get(repository, state).resource_list:
                     resource.ready_require(main_root=repository.main_root, task_root=task_root)
                 state_list.append(state)
             return state_list
@@ -81,41 +81,23 @@ class TaskWorkspaceTransaction:
             raise TaskWorkspaceError("Repository baseline omits required worktree-bootstrap.yaml")
         return manifest_bytes
 
-    def _new_attempt_bootstrap_plan_get(
+    def _bootstrap_plan_get(
         self,
         repository: WorkspaceRepository,
         state: RepositoryWorkspaceState,
     ) -> BootstrapPlan:
-        """Read a current-schema plan before recording new attempt ownership.
+        """Read the sole current-schema plan from the immutable attempt baseline.
 
         Args:
             repository: Bound canonical checkout.
-            state: Candidate first-attempt baseline.
+            state: Candidate or retained first-attempt baseline.
 
         Returns:
-            Validated current manifest plan.
+            Validated current manifest plan. Unsupported historical manifests fail.
         """
 
         manifest_bytes = self._bootstrap_manifest_bytes_get(repository, state)
         return BootstrapPlan.from_manifest(manifest_bytes, main_root=repository.main_root)
-
-    def _retained_attempt_bootstrap_plan_get(
-        self,
-        repository: WorkspaceRepository,
-        state: RepositoryWorkspaceState,
-    ) -> BootstrapPlan:
-        """Read a bounded plan after immutable attempt ownership exists.
-
-        Args:
-            repository: Bound canonical checkout.
-            state: Durable first-attempt baseline.
-
-        Returns:
-            Validated current or retained version-2 materialization plan.
-        """
-
-        manifest_bytes = self._bootstrap_manifest_bytes_get(repository, state)
-        return BootstrapPlan.from_retained_attempt_manifest(manifest_bytes, main_root=repository.main_root)
 
     def _repository_prepare(
         self,
@@ -138,11 +120,11 @@ class TaskWorkspaceTransaction:
         state = repository.state_read(request.issue_identifier)
         if state is None:
             state = TaskWorkspaceStatePlanner(repository, request).plan()
-            bootstrap_plan = self._new_attempt_bootstrap_plan_get(repository, state)
+            bootstrap_plan = self._bootstrap_plan_get(repository, state)
             repository.state_write(request.issue_identifier, state)
         else:
             repository.state_identity_require(request.issue_identifier, state)
-            bootstrap_plan = self._retained_attempt_bootstrap_plan_get(repository, state)
+            bootstrap_plan = self._bootstrap_plan_get(repository, state)
         task_root = repository.task_worktree_create_or_accept(request.issue_identifier, state)
         WorkspaceSubmoduleReader(task_root).prepare()
         temporary_root = repository.bootstrap_temporary_root_get(request.issue_identifier, create=True)

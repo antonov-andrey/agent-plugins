@@ -19,6 +19,9 @@ LIBRARY_ROOT = REPOSITORY_ROOT / "plugins" / "linear-agent-tools" / "lib"
 if str(LIBRARY_ROOT) not in sys.path:
     sys.path.insert(0, str(LIBRARY_ROOT))
 
+import task_workspace.repository as repository_module
+from git_origin.identity import origin_identity_get
+from git_origin.transport import GitTransportDestination
 from task_merge.provider_installation import (
     ProviderInstallationError,
     ProviderInstallationReconciler,
@@ -32,6 +35,36 @@ OLD_VERSION = "0.1.0+codex.old"
 EXPECTED_VERSION = "0.1.0+codex.test-new"
 PLUGIN_RELATIVE_PATH = Path("plugins/linear-agent-tools")
 INSTALL_SCRIPT = REPOSITORY_ROOT / "plugins/linear-agent-tools/skills/task-merge/scripts/provider_install.py"
+
+
+@pytest.fixture(autouse=True)
+def _local_repository_transport_test_boundary(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Inject local bare remotes only into this provider-installation test harness."""
+
+    strict_destination_get = repository_module.git_transport_destination_get
+    strict_relative_destination_get = repository_module.git_relative_transport_destination_get
+
+    def destination_get(value: str) -> GitTransportDestination:
+        path = Path(value)
+        if path.is_absolute():
+            return GitTransportDestination(
+                identity=origin_identity_get(value),
+                protocol="file",
+                style="file",
+                url=value,
+            )
+        return strict_destination_get(value)
+
+    def relative_destination_get(
+        parent: GitTransportDestination,
+        value: str,
+    ) -> GitTransportDestination:
+        if parent.protocol == "file":
+            return destination_get(value)
+        return strict_relative_destination_get(parent, value)
+
+    monkeypatch.setattr(repository_module, "git_transport_destination_get", destination_get)
+    monkeypatch.setattr(repository_module, "git_relative_transport_destination_get", relative_destination_get)
 
 
 def _git(repository_root: Path, *argument_list: str) -> str:
@@ -312,31 +345,32 @@ def test_provider_installation_fast_forwards_installs_and_recovers_from_exact_re
         "linear-agent-tools:task-cleanup",
         "linear-agent-tools:task-merge",
     ]
-    assert first.expected_discovery_result == {
-        "schema_version": 1,
-        "plugin_name": "linear-agent-tools",
-        "plugin_version": EXPECTED_VERSION,
-        "installed_source_root": str(
-            fixture.home_root / ".codex/plugins/cache/agent-plugins/linear-agent-tools" / EXPECTED_VERSION
-        ),
-        "skill_name_list": first.skill_name_list,
-        "ready": True,
+    assert first.enabled
+    assert first.marketplace_source_root == str(fixture.marketplace_root)
+    assert first.installed_cache_root == str(
+        fixture.home_root / ".codex/plugins/cache/agent-plugins/linear-agent-tools" / EXPECTED_VERSION
+    )
+    assert set(first.payload()) == {
+        "base_branch",
+        "enabled",
+        "install_performed",
+        "installed_cache_root",
+        "installed_version",
+        "marketplace_name",
+        "marketplace_source_root",
+        "merged_base_commit",
+        "plugin_name",
+        "previous_version",
+        "repository_identity",
+        "reviewed_base_commit",
+        "reviewed_head_commit",
+        "schema_version",
+        "skill_name_list",
     }
-    assert "initial skill-catalog metadata" in first.discovery_prompt
-    assert "do not select them from expected names" in first.discovery_prompt
-    assert '{"ready":false,"schema_version":1}' in first.discovery_prompt
-    assert "Expected skill names" not in first.discovery_prompt
-    assert all(skill_name not in first.discovery_prompt for skill_name in first.skill_name_list)
-    assert (
-        json.dumps(first.expected_discovery_result, separators=(",", ":"), sort_keys=True) not in first.discovery_prompt
-    )
-    assert str(fixture.home_root / ".codex/plugins/cache/agent-plugins/linear-agent-tools" / EXPECTED_VERSION) in (
-        first.discovery_prompt
-    )
 
 
-def test_provider_installation_fast_forward_disables_post_merge_hooks(tmp_path: Path) -> None:
-    """Merged-source recovery ignores a malicious repository-local post-merge hook."""
+def test_provider_installation_rejects_repository_local_post_merge_hook_before_git(tmp_path: Path) -> None:
+    """Merged-source recovery fails closed before a malicious repository-local hook can execute."""
 
     fixture = _provider_repository_fixture_create(tmp_path)
     hook_root = tmp_path / "malicious-hooks"
@@ -347,9 +381,10 @@ def test_provider_installation_fast_forward_disables_post_merge_hooks(tmp_path: 
     hook_path.chmod(0o755)
     _git(fixture.marketplace_root, "config", "core.hooksPath", str(hook_root))
 
-    _reconciler_get(fixture, _CodexRunner(fixture)).reconcile(fixture.request_get())
+    with pytest.raises(ProviderInstallationError, match="identity could not be read"):
+        _reconciler_get(fixture, _CodexRunner(fixture)).reconcile(fixture.request_get())
 
-    assert _git(fixture.marketplace_root, "rev-parse", "HEAD") == fixture.merged_base_commit
+    assert _git(fixture.marketplace_root, "rev-parse", "HEAD") == fixture.reviewed_base_commit
     assert not marker.exists()
 
 

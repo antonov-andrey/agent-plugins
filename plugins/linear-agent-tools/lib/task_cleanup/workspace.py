@@ -130,7 +130,7 @@ class TaskWorkspaceRetirement:
             )
             if manifest_bytes is None:
                 raise TaskWorkspaceError("Task workspace baseline omits its bootstrap manifest")
-            plan = BootstrapPlan.from_retained_attempt_manifest(
+            plan = BootstrapPlan.from_manifest(
                 manifest_bytes,
                 main_root=self._repository.main_root,
             )

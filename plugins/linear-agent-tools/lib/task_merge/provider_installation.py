@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
-import json
 import os
 from pathlib import Path
 import pwd
@@ -99,7 +98,7 @@ class ProviderInstallationRequest:
 
 @dataclass(frozen=True, slots=True)
 class ProviderInstallationResult:
-    """Expose exact merged source, installed cache, and fresh discovery inputs."""
+    """Expose exact merged source and deterministic installed-provider readback."""
 
     repository_identity: str
     base_branch: str
@@ -112,14 +111,13 @@ class ProviderInstallationResult:
     previous_version: str
     installed_version: str
     installed_cache_root: str
+    enabled: bool
     skill_name_list: list[str]
     install_performed: bool
-    discovery_prompt: str
-    expected_discovery_result: dict[str, object]
     schema_version: int = 1
 
     def payload(self) -> dict[str, object]:
-        """Return the direct semantic readback consumed before the fresh process."""
+        """Return the direct semantic installation readback."""
 
         return asdict(self)
 
@@ -214,15 +212,6 @@ class ProviderInstallationReconciler:
         if self._skill_name_list_get(source_plugin_root) != skill_name_list:
             raise ProviderInstallationError("Merged lifecycle provider skill discovery source changed")
 
-        expected_discovery_result = _expected_discovery_result_get(
-            cache_root=installed_cache_root,
-            skill_name_list=skill_name_list,
-            version=request.expected_version,
-        )
-        discovery_prompt = _discovery_prompt_get(
-            cache_root=installed_cache_root,
-            marketplace_source_root=marketplace.root,
-        )
         return ProviderInstallationResult(
             repository_identity=self._repository_identity,
             base_branch=request.base_branch,
@@ -235,10 +224,9 @@ class ProviderInstallationReconciler:
             previous_version=previous_version,
             installed_version=installed_version,
             installed_cache_root=str(installed_cache_root),
+            enabled=True,
             skill_name_list=skill_name_list,
             install_performed=install_performed,
-            discovery_prompt=discovery_prompt,
-            expected_discovery_result=expected_discovery_result,
         )
 
     def _bootstrap_authority_require(self, request: ProviderInstallationRequest) -> tuple[str, list[str]]:
@@ -747,45 +735,3 @@ def _ordinary_file_map_get(root: Path) -> dict[str, Path] | None:
                 continue
             result[relative_path.as_posix()] = path
     return result
-
-
-def _expected_discovery_result_get(
-    *,
-    cache_root: Path,
-    skill_name_list: list[str],
-    version: str,
-) -> dict[str, object]:
-    """Return the exact semantic result required from fresh generic discovery."""
-
-    return {
-        "schema_version": 1,
-        "plugin_name": _PLUGIN_NAME,
-        "plugin_version": version,
-        "installed_source_root": str(cache_root),
-        "skill_name_list": skill_name_list,
-        "ready": True,
-    }
-
-
-def _discovery_prompt_get(
-    *,
-    cache_root: Path,
-    marketplace_source_root: Path,
-) -> str:
-    """Return the complete read-only prompt for one fresh generic Codex process."""
-
-    return (
-        "Perform one read-only installation discovery without invoking, opening, or following any skill and without "
-        "mutating files, configuration, plugins, Git, GitHub, or Linear. Use only the initial skill-catalog metadata "
-        "supplied to this fresh process plus ordinary reads of these two exact plugin manifests: "
-        f"{cache_root / '.codex-plugin/plugin.json'} and "
-        f"{marketplace_source_root / _PLUGIN_RELATIVE_PATH / '.codex-plugin/plugin.json'}. Require both manifests to "
-        "have the same nonempty name and version. Select catalog entries solely because their absolute source locator "
-        f"has the exact shape {cache_root}/skills/<directory>/SKILL.md; do not select them from expected names. Require "
-        "at least one selected entry, each selected catalog name to start with the manifest name followed by a colon, "
-        "and no catalog entry with that prefix to have a locator outside that installed skills directory. On success "
-        "return only one JSON object with exactly these keys: schema_version=1, plugin_name from the manifest, "
-        "plugin_version from the manifest, installed_source_root equal to the installed cache root above, "
-        "skill_name_list equal to the lexicographically sorted selected catalog names, and ready=true. On any failure "
-        'return only {"ready":false,"schema_version":1}. Emit no Markdown or other text.'
-    )

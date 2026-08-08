@@ -54,7 +54,7 @@ python3 ~/.codex/skills/.system/plugin-creator/scripts/update_plugin_cachebuster
 env -u CODEX_HOME codex plugin add linear-agent-tools@agent-plugins
 ```
 
-During a lifecycle-provider merge, do not run that reinstall against a stale local marketplace source. The retained reviewed `task-merge` provider first runs its fixed `scripts/provider_install.py` boundary, which synchronizes the configured clean base worktree to the exact merged commit and performs the normal install only when needed. Its returned complete prompt names no skill or expected skill list and is passed directly from the canonical non-Git workspace root to a fresh generic max `codex exec --skip-git-repo-check` process with closed stdin and native waiting; that process derives exact structured availability from installed catalog locators and the two manifests. The issue does not reach `Done` until this result matches the provider's exact expected discovery result.
+During a lifecycle-provider merge, do not run that reinstall against a stale local marketplace source. The retained reviewed `task-merge` provider first runs its fixed `scripts/provider_install.py` boundary, which synchronizes the configured clean base worktree to the exact merged commit and performs the normal standard-home install only when needed. The same boundary deterministically rereads the configured marketplace source, exact plugin version and enabled state, versioned cache, and merged tracked provider files. No proof-only Codex model call follows this installation readback; live harness behavior verification remains owned by `AND-36`.
 
 ## Manual Linear Workflow
 
