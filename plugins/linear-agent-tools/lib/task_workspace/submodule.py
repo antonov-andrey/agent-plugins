@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 
 from task_workspace.model import TaskWorkspaceError, WorkspaceSubmoduleState
 from task_workspace.repository import (
+    git_config_file_record_list_get,
     git_command_run,
     git_command_text_get,
+    git_relative_transport_destination_parse,
+    git_repository_origin_transport_pair_get,
     match_full_commit,
 )
 
@@ -38,18 +42,19 @@ class WorkspaceSubmoduleReader:
                 if processed_owner_path_set.intersection(owner_path_set):
                     raise TaskWorkspaceError("Submodule initialization did not create one declared checkout")
                 processed_owner_path_set.update(owner_path_set)
-                git_command_run(owner_root, ("submodule", "init", "--", *missing_path_list))
-                git_command_run(owner_root, ("submodule", "sync", "--", *missing_path_list))
+                transport_by_name_map = _submodule_transport_by_name_map_get(owner_root, missing_path_list)
                 git_command_run(
                     owner_root,
                     (
                         "submodule",
                         "update",
+                        "--init",
                         "--checkout",
                         "--",
                         *missing_path_list,
                     ),
-                    transport_url_list=_submodule_transport_url_list_get(owner_root, missing_path_list),
+                    submodule_transport_by_name_map=transport_by_name_map,
+                    transport_url_list=tuple(sorted(set(transport_by_name_map.values()))),
                 )
         return self.read()
 
@@ -63,7 +68,11 @@ class WorkspaceSubmoduleReader:
         submodule_state_list: list[WorkspaceSubmoduleState] = []
 
         def visit(root: Path, parent_path: str) -> None:
-            for relative_path, expected_commit in _direct_gitlink_by_path_get(root).items():
+            declaration_by_path_map = _submodule_declaration_by_path_get(root)
+            gitlink_by_path_map = _direct_gitlink_by_path_get(root)
+            if set(declaration_by_path_map) != set(gitlink_by_path_map):
+                raise TaskWorkspaceError("Submodule declaration differs from the exact index gitlinks")
+            for relative_path, expected_commit in gitlink_by_path_map.items():
                 full_path = f"{parent_path}/{relative_path}" if parent_path else relative_path
                 child = root / relative_path
                 if child.is_symlink() or not child.is_dir():
@@ -113,7 +122,11 @@ def _missing_gitlink_update_list_get(repository_root: Path) -> list[tuple[Path, 
         missing_path_list_by_owner_root_map.setdefault(owner_root, []).append(relative_path)
 
     def visit(root: Path) -> None:
-        for relative_path in _direct_gitlink_by_path_get(root):
+        declaration_by_path_map = _submodule_declaration_by_path_get(root)
+        gitlink_by_path_map = _direct_gitlink_by_path_get(root)
+        if set(declaration_by_path_map) != set(gitlink_by_path_map):
+            raise TaskWorkspaceError("Submodule declaration differs from the exact index gitlinks")
+        for relative_path in gitlink_by_path_map:
             child = root / relative_path
             if child.is_symlink() or not child.is_dir():
                 if not child.exists() and not child.is_symlink():
@@ -141,15 +154,15 @@ def _missing_gitlink_update_list_get(repository_root: Path) -> list[tuple[Path, 
     ]
 
 
-def _submodule_transport_url_list_get(repository_root: Path, relative_path_list: list[str]) -> list[str]:
-    """Return exact declared submodule destinations for one update invocation.
+def _submodule_transport_by_name_map_get(repository_root: Path, relative_path_list: list[str]) -> dict[str, str]:
+    """Return exact resolved submodule destinations for one update invocation.
 
     Args:
         repository_root: Exact repository that owns the current gitlinks.
         relative_path_list: Direct initialized gitlink paths updated by the invocation.
 
     Returns:
-        Duplicate-free sorted transport destinations from its tracked declaration.
+        Canonical transport destinations keyed by exact submodule name.
     """
 
     if (
@@ -158,61 +171,61 @@ def _submodule_transport_url_list_get(repository_root: Path, relative_path_list:
         or len(relative_path_list) != len(set(relative_path_list))
     ):
         raise TaskWorkspaceError("Submodule update path list is malformed")
-    completed_process = git_command_run(
-        repository_root,
-        (
-            "config",
-            "--file",
-            ".gitmodules",
-            "--no-includes",
-            "--null",
-            "--get-regexp",
-            r"^submodule\..*\.path$",
-        ),
-        check=False,
-    )
-    if completed_process.returncode not in {0, 1}:
-        raise TaskWorkspaceError("Submodule transport declaration is malformed")
-    if completed_process.returncode == 1:
-        raise TaskWorkspaceError("Submodule transport declaration is missing")
-    try:
-        record_list = [record for record in completed_process.stdout.split(b"\0") if record]
-        key_value_list = [record.split(b"\n", 1) for record in record_list]
-        path_by_name_map = {
-            key.removeprefix(b"submodule.").removesuffix(b".path").decode("utf-8"): value.decode("utf-8")
-            for key, value in key_value_list
-        }
-    except (UnicodeDecodeError, ValueError) as error:
-        raise TaskWorkspaceError("Submodule transport declaration is malformed") from error
-    if (
-        not path_by_name_map
-        or len(path_by_name_map) != len(record_list)
-        or len(path_by_name_map.values()) != len(set(path_by_name_map.values()))
-        or any(not name or any(ord(character) < 32 for character in name) for name in path_by_name_map)
-    ):
-        raise TaskWorkspaceError("Submodule transport declaration is ambiguous")
-    name_by_path_map = {path: name for name, path in path_by_name_map.items()}
-    if any(relative_path not in name_by_path_map for relative_path in relative_path_list):
+    declaration_by_path_map = _submodule_declaration_by_path_get(repository_root)
+    if any(relative_path not in declaration_by_path_map for relative_path in relative_path_list):
         raise TaskWorkspaceError("Submodule transport declaration is missing one initialized path")
-    url_list: list[str] = []
-    for relative_path in relative_path_list:
-        name = name_by_path_map[relative_path]
-        url_process = git_command_run(
-            repository_root,
-            ("config", "--local", "--null", "--get-all", f"submodule.{name}.url"),
-            check=False,
-        )
-        value_list = [value for value in url_process.stdout.split(b"\0") if value]
-        if url_process.returncode != 0 or len(value_list) != 1:
-            raise TaskWorkspaceError("Submodule transport configuration is missing or ambiguous")
-        try:
-            url = value_list[0].decode("utf-8")
-        except UnicodeDecodeError as error:
-            raise TaskWorkspaceError("Submodule transport configuration is malformed") from error
-        if not url or any(character in url for character in "\x00\r\n"):
-            raise TaskWorkspaceError("Submodule transport configuration is malformed")
-        url_list.append(url)
-    return sorted(set(url_list))
+    return {
+        declaration_by_path_map[relative_path][0]: declaration_by_path_map[relative_path][1]
+        for relative_path in relative_path_list
+    }
+
+
+def _submodule_declaration_by_path_get(repository_root: Path) -> dict[str, tuple[str, str]]:
+    """Parse and resolve every direct submodule declaration before invoking Git."""
+
+    record_list = git_config_file_record_list_get(repository_root / ".gitmodules", required=False)
+    if not record_list:
+        return {}
+    value_list_by_name_and_field_map: dict[tuple[str, str], list[str]] = {}
+    allowed_field_set = {"branch", "fetchrecursesubmodules", "ignore", "path", "shallow", "update", "url"}
+    for config_name, value in record_list:
+        if not config_name.startswith("submodule.") or "." not in config_name.removeprefix("submodule."):
+            raise TaskWorkspaceError("Submodule transport declaration is malformed")
+        name_and_field = config_name.removeprefix("submodule.")
+        name, field = name_and_field.rsplit(".", 1)
+        if (
+            not name
+            or re.fullmatch(r"[A-Za-z0-9._/-]+", name) is None
+            or any(part in {"", ".", ".."} for part in name.split("/"))
+            or field not in allowed_field_set
+            or (field == "update" and value.startswith("!"))
+        ):
+            raise TaskWorkspaceError("Submodule transport declaration is unsafe")
+        value_list_by_name_and_field_map.setdefault((name, field), []).append(value)
+
+    name_set = {name for name, _field in value_list_by_name_and_field_map}
+    origin_pair = git_repository_origin_transport_pair_get(repository_root)
+    if origin_pair is None:
+        raise TaskWorkspaceError("Submodule owner has no validated origin")
+    declaration_by_path_map: dict[str, tuple[str, str]] = {}
+    for name in name_set:
+        path_value_list = value_list_by_name_and_field_map.get((name, "path"), [])
+        url_value_list = value_list_by_name_and_field_map.get((name, "url"), [])
+        if len(path_value_list) != 1 or len(url_value_list) != 1:
+            raise TaskWorkspaceError("Submodule transport declaration is missing or ambiguous")
+        relative_path = path_value_list[0]
+        if (
+            not relative_path
+            or relative_path.startswith(("/", "-"))
+            or "\\" in relative_path
+            or any(ord(character) < 32 or ord(character) == 127 for character in relative_path)
+            or any(part in {"", ".", ".."} for part in relative_path.split("/"))
+            or relative_path in declaration_by_path_map
+        ):
+            raise TaskWorkspaceError("Submodule transport declaration has an unsafe or repeated path")
+        destination = git_relative_transport_destination_parse(origin_pair[0], url_value_list[0])
+        declaration_by_path_map[relative_path] = (name, destination.url)
+    return declaration_by_path_map
 
 
 def _direct_gitlink_by_path_get(repository_root: Path) -> dict[str, str]:

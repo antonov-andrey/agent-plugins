@@ -21,8 +21,11 @@ if str(LIBRARY_ROOT) not in sys.path:
 
 import task_workspace.lock as lock_module
 import task_workspace.repository as repository_module
+import task_workspace.submodule as submodule_module
 from git_host.model import PullRequestSnapshot, RepositoryIdentity
 from git_host.pull_request import GitHubPullRequestBoundary
+from git_origin.identity import origin_identity_get
+from git_origin.transport import GitTransportDestination
 from task_cleanup.contract import (
     AcceptanceBaseBranchCleanupResource,
     CleanupResourceContractError,
@@ -51,6 +54,36 @@ from task_workspace.submodule import WorkspaceSubmoduleReader
 from task_workspace.transaction import TaskWorkspaceTransaction
 
 PROJECT_ID = "70000000-0000-4000-8000-000000000001"
+
+
+@pytest.fixture(autouse=True)
+def _local_repository_transport_test_boundary(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Inject local bare remotes only into this real-Git workspace test harness."""
+
+    strict_destination_get = repository_module.git_transport_destination_get
+    strict_relative_destination_get = repository_module.git_relative_transport_destination_get
+
+    def destination_get(value: str) -> GitTransportDestination:
+        path = Path(value)
+        if path.is_absolute():
+            return GitTransportDestination(
+                identity=origin_identity_get(value),
+                protocol="file",
+                style="file",
+                url=value,
+            )
+        return strict_destination_get(value)
+
+    def relative_destination_get(
+        parent: GitTransportDestination,
+        value: str,
+    ) -> GitTransportDestination:
+        if parent.protocol == "file":
+            return destination_get(value)
+        return strict_relative_destination_get(parent, value)
+
+    monkeypatch.setattr(repository_module, "git_transport_destination_get", destination_get)
+    monkeypatch.setattr(repository_module, "git_relative_transport_destination_get", relative_destination_get)
 
 
 @dataclass(frozen=True, slots=True)
@@ -655,11 +688,14 @@ def test_every_git_command_uses_one_complete_closed_authority_boundary(
         "GIT_CONFIG_SYSTEM": "/dev/null",
         "GIT_NO_LAZY_FETCH": "1",
         "GIT_NO_REPLACE_OBJECTS": "1",
+        "GIT_PAGER": "cat",
+        "GIT_PROTOCOL_FROM_USER": "0",
         "GIT_TERMINAL_PROMPT": "0",
         "HOME": pwd.getpwuid(os.getuid()).pw_dir,
         "LANG": "C.UTF-8",
         "LC_ALL": "C.UTF-8",
         "LOGNAME": pwd.getpwuid(os.getuid()).pw_name,
+        "PAGER": "cat",
         "PATH": "/usr/bin:/bin",
         "SSH_ASKPASS_REQUIRE": "never",
         "USER": pwd.getpwuid(os.getuid()).pw_name,
@@ -700,6 +736,199 @@ def test_git_network_boundary_enables_only_the_exact_destination_protocol_and_cr
     ) in argument_list
     assert not any(item.startswith("core.sshCommand=") for item in argument_list)
     assert "SSH_AUTH_SOCK" not in environment
+
+
+@pytest.mark.parametrize(
+    "destination",
+    [
+        "ext::/bin/false",
+        "helper::https://github.com/antonov-andrey/agent-plugins.git",
+        "https://token@github.com/antonov-andrey/agent-plugins.git",
+        "file:///tmp/foreign.git",
+        "https://github.com/antonov-andrey/agent-plugins.git\nignored",
+    ],
+)
+def test_git_network_boundary_rejects_unapproved_destination_before_process_execution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    destination: str,
+) -> None:
+    """Helper, credential, local, and control-bearing destinations never reach Git."""
+
+    def run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        raise AssertionError((args, kwargs))
+
+    monkeypatch.setattr(subprocess, "run", run)
+
+    with pytest.raises(TaskWorkspaceError):
+        git_command_run(
+            tmp_path,
+            ("ls-remote", "--refs", destination, "refs/heads/main"),
+            transport_url_list=(destination,),
+        )
+
+
+def test_git_network_boundary_rejects_hidden_destination_without_transport_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A caller cannot hide helper syntax outside the parsed destination list."""
+
+    def run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        raise AssertionError((args, kwargs))
+
+    monkeypatch.setattr(subprocess, "run", run)
+
+    with pytest.raises(TaskWorkspaceError, match="omits its exact approved destination"):
+        git_command_run(tmp_path, ("ls-remote", "ext::/bin/false"))
+
+
+@pytest.mark.parametrize(
+    "argument_list",
+    [
+        ("fetch", "--upload-pack=/tmp/foreign", "https://github.com/owner/example.git"),
+        ("fetch", "--upload-pack", "/tmp/foreign", "https://github.com/owner/example.git"),
+        ("fetch", "-u", "/tmp/foreign", "https://github.com/owner/example.git"),
+        ("push", "--receive-pack=/tmp/foreign", "https://github.com/owner/example.git"),
+        ("push", "--exec", "/tmp/foreign", "https://github.com/owner/example.git"),
+    ],
+)
+def test_git_network_boundary_rejects_command_selected_transport_helpers_before_process_execution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    argument_list: tuple[str, ...],
+) -> None:
+    """Long, split, and short helper-selection options cannot reach Git."""
+
+    def run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        raise AssertionError((args, kwargs))
+
+    monkeypatch.setattr(subprocess, "run", run)
+
+    with pytest.raises(TaskWorkspaceError, match="external transport helper"):
+        git_command_run(
+            tmp_path,
+            argument_list,
+            transport_url_list=("https://github.com/owner/example.git",),
+        )
+
+
+def test_git_submodule_boundary_rejects_transport_authority_not_derived_from_exact_declarations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A submodule update enables exactly its declaration-derived destinations."""
+
+    def run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        raise AssertionError((args, kwargs))
+
+    monkeypatch.setattr(subprocess, "run", run)
+    provider_url = "https://github.com/owner/provider.git"
+    foreign_url = "ssh://git@github.com/foreign/provider.git"
+
+    with pytest.raises(TaskWorkspaceError, match="underived destination"):
+        git_command_run(
+            tmp_path,
+            ("submodule", "update", "--init", "--checkout", "--", "vendor/provider"),
+            submodule_transport_by_name_map={"vendor/provider": provider_url},
+            transport_url_list=(provider_url, foreign_url),
+        )
+
+
+@pytest.mark.parametrize(
+    ("config_name", "config_value"),
+    [
+        ("protocol.ext.allow", "always"),
+        ("protocol.https.allow", "always"),
+        ("core.sshCommand", "/tmp/foreign-ssh"),
+        ("core.hooksPath", "/tmp/foreign-hooks"),
+        ("credential.helper", "!/tmp/foreign-credential"),
+        ("remote.origin.vcs", "foreign"),
+        ("submodule.provider.update", "!/tmp/foreign-update"),
+    ],
+)
+def test_workspace_rejects_ambient_protocol_and_external_helper_config_before_git(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_name: str,
+    config_value: str,
+) -> None:
+    """Repository config cannot reopen protocols or executable helper boundaries."""
+
+    repository_fixture = _repository_create(tmp_path, resources=False)
+    _git(repository_fixture.root, "config", config_name, config_value)
+    request = _request(repository_fixture.remote, issue="AND-139")
+
+    def run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        raise AssertionError((args, kwargs))
+
+    monkeypatch.setattr(subprocess, "run", run)
+
+    with pytest.raises(TaskWorkspaceError, match="ambient transport, helper, or filter"):
+        WorkspaceRepository.from_config(WorkspaceConfig(tmp_path.resolve()), request.repository_list[0])
+
+
+@pytest.mark.parametrize(
+    "destination",
+    [
+        "ext::/bin/false",
+        "helper::https://github.com/owner/provider.git",
+        "https://token@github.com/owner/provider.git",
+        "git://github.com/owner/provider.git",
+    ],
+)
+def test_submodule_reader_rejects_malicious_declared_url_before_git(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    destination: str,
+) -> None:
+    """Every tracked submodule URL is parsed before index or update Git commands."""
+
+    repository_fixture = _repository_create(tmp_path, resources=False)
+    _submodule_add(tmp_path, repository_fixture.root)
+    _git(
+        repository_fixture.root,
+        "config",
+        "-f",
+        ".gitmodules",
+        "submodule.vendor/provider.url",
+        destination,
+    )
+
+    def run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        raise AssertionError((args, kwargs))
+
+    monkeypatch.setattr(submodule_module, "git_command_run", run)
+
+    with pytest.raises(TaskWorkspaceError):
+        WorkspaceSubmoduleReader(repository_fixture.root).read()
+
+
+def test_submodule_relative_url_resolves_from_exact_parent_before_update(tmp_path: Path) -> None:
+    """The update receives one canonical absolute URL derived from its validated parent."""
+
+    repository_fixture = _repository_create(tmp_path, resources=False)
+    _submodule_add(tmp_path, repository_fixture.root)
+    _git(
+        repository_fixture.root,
+        "remote",
+        "set-url",
+        "origin",
+        "https://github.com/owner/parent.git",
+    )
+    _git(
+        repository_fixture.root,
+        "config",
+        "-f",
+        ".gitmodules",
+        "submodule.vendor/provider.url",
+        "../provider.git",
+    )
+
+    assert submodule_module._submodule_transport_by_name_map_get(
+        repository_fixture.root,
+        ["vendor/provider"],
+    ) == {"vendor/provider": "https://github.com/owner/provider.git"}
 
 
 def test_workspace_rejects_repository_object_alternates_before_any_task_mutation(tmp_path: Path) -> None:

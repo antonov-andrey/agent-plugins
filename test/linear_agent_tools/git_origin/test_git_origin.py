@@ -19,6 +19,11 @@ from git_origin.identity import (
     GitOriginError,
     origin_identity_get,
 )
+from git_origin.transport import (
+    GitTransportError,
+    git_relative_transport_destination_get,
+    git_transport_destination_get,
+)
 
 
 def test_origin_identity_collapses_supported_github_transport_aliases() -> None:
@@ -30,6 +35,109 @@ def test_origin_identity_collapses_supported_github_transport_aliases() -> None:
     assert origin_identity_get("https://github.com/owner/EXAMPLE.git") == expected
     assert origin_identity_get("github.com/Owner/Example") == expected
     assert origin_identity_get(expected) == expected
+
+
+@pytest.mark.parametrize(
+    ("value", "protocol", "canonical_url"),
+    [
+        (
+            "https://github.com/Owner/Example",
+            "https",
+            "https://github.com/owner/example.git",
+        ),
+        (
+            "ssh://git@github.com/Owner/Example.git",
+            "ssh",
+            "ssh://git@github.com/owner/example.git",
+        ),
+        (
+            "git@github.com:Owner/Example.git",
+            "ssh",
+            "git@github.com:owner/example.git",
+        ),
+    ],
+)
+def test_git_transport_accepts_only_canonicalizable_github_ssh_and_https(
+    value: str,
+    protocol: str,
+    canonical_url: str,
+) -> None:
+    """Execution transport retains GitHub identity while closing protocol authority."""
+
+    destination = git_transport_destination_get(value)
+
+    assert destination.identity == "github.com/owner/example"
+    assert destination.protocol == protocol
+    assert destination.url == canonical_url
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "ext::/bin/false",
+        "helper::https://github.com/owner/example.git",
+        "https://token@github.com/owner/example.git",
+        "https://token:secret@github.com/owner/example.git",
+        "http://github.com/owner/example.git",
+        "git://github.com/owner/example.git",
+        "file:///tmp/example.git",
+        "/tmp/example.git",
+        "../example.git",
+        "ssh://git@example.com/owner/example.git",
+        "https://github.com/owner/example.git\nignored",
+        "https://github.com/owner/example.git\x7f",
+        "https://github.com/owner/example.git\u2028ignored",
+    ],
+)
+def test_git_transport_rejects_helpers_credentials_local_and_ambiguous_forms(value: str) -> None:
+    """Only the closed GitHub SSH/HTTPS transport set can reach Git."""
+
+    with pytest.raises(GitTransportError):
+        git_transport_destination_get(value)
+
+
+@pytest.mark.parametrize(
+    ("parent_url", "relative_url", "expected_url"),
+    [
+        (
+            "https://github.com/owner/parent.git",
+            "../provider.git",
+            "https://github.com/owner/provider.git",
+        ),
+        (
+            "ssh://git@github.com/owner/parent.git",
+            "../../shared/provider.git",
+            "ssh://git@github.com/shared/provider.git",
+        ),
+        (
+            "git@github.com:owner/parent.git",
+            "../provider",
+            "git@github.com:owner/provider.git",
+        ),
+    ],
+)
+def test_relative_submodule_transport_resolves_against_validated_parent_repository(
+    parent_url: str,
+    relative_url: str,
+    expected_url: str,
+) -> None:
+    """Dot-relative declarations become one absolute destination in the parent's transport."""
+
+    parent = git_transport_destination_get(parent_url)
+
+    assert git_relative_transport_destination_get(parent, relative_url).url == expected_url
+
+
+@pytest.mark.parametrize(
+    "value", ["./child.git", "../../../escape.git", "../provider.git?ref=main", "../bad\\repo.git"]
+)
+def test_relative_submodule_transport_rejects_nonrepository_or_escaping_forms(value: str) -> None:
+    """Relative submodule syntax cannot escape or produce an ambiguous GitHub path."""
+
+    parent = git_transport_destination_get("https://github.com/owner/parent.git")
+
+    with pytest.raises(GitTransportError):
+        git_relative_transport_destination_get(parent, value)
 
 
 def test_origin_identity_preserves_non_github_transport_semantics() -> None:
