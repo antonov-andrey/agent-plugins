@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import pwd
+import shutil
 import subprocess
 import sys
 from types import SimpleNamespace
@@ -194,9 +195,7 @@ def test_bootstrap_manifest_parser_is_self_contained_and_schema_bounded(
 ) -> None:
     """The installable plugin parses only its owned YAML schema without PyYAML."""
 
-    (tmp_path / "config:file").write_text("value\n", encoding="utf-8")
-    plan = BootstrapPlan.from_manifest(
-        b"""schema_version: 3
+    plan = BootstrapPlan.from_manifest(b"""schema_version: 3
 resource:
   copy_optional_path_list: []
   copy_required_path_list:
@@ -206,12 +205,91 @@ resource:
 cleanup:
   handler_key_list:
     - workflow-infrastructure-development-environment
-""",
-        main_root=tmp_path,
-    )
+""")
 
     assert [item.relative_path for item in plan.resource_list] == ["config:file"]
+    assert plan.resource_list[0].required
     assert plan.cleanup_handler_key_list == ["workflow-infrastructure-development-environment"]
+
+
+def test_bootstrap_plan_validates_all_declarations_before_source_materialization(tmp_path: Path) -> None:
+    """A later missing required source cannot hide handlers or permit an earlier write."""
+
+    main_root = tmp_path / "main"
+    task_root = tmp_path / "task"
+    temporary_root = tmp_path / "private"
+    main_root.mkdir()
+    task_root.mkdir()
+    temporary_root.mkdir(mode=0o700)
+    (main_root / "a-present.txt").write_text("present\n", encoding="utf-8")
+    plan = BootstrapPlan.from_manifest(b"""schema_version: 3
+resource:
+  copy_optional_path_list: []
+  copy_required_path_list:
+    - a-present.txt
+    - z-missing.txt
+  link_optional_path_list: []
+  link_required_path_list: []
+cleanup:
+  handler_key_list:
+    - workflow-infrastructure-development-environment
+""")
+
+    assert plan.cleanup_handler_key_list == ["workflow-infrastructure-development-environment"]
+    with pytest.raises(TaskWorkspaceError, match="Required bootstrap source is absent: z-missing.txt"):
+        plan.materialize(
+            main_root=main_root.resolve(),
+            task_root=task_root.resolve(),
+            temporary_root=temporary_root.resolve(),
+        )
+
+    assert list(task_root.iterdir()) == []
+    assert list(temporary_root.iterdir()) == []
+
+
+def test_missing_optional_bootstrap_source_removes_only_owned_stale_state(tmp_path: Path) -> None:
+    """Optional-source recovery removes its destination and residue without following a foreign link."""
+
+    main_root = tmp_path / "main"
+    task_root = tmp_path / "task"
+    temporary_root = tmp_path / "private"
+    foreign_root = tmp_path / "foreign"
+    main_root.mkdir()
+    (task_root / "owned").mkdir(parents=True)
+    temporary_root.mkdir(mode=0o700)
+    (temporary_root / "owned").mkdir(mode=0o700)
+    foreign_root.mkdir()
+    foreign_file = foreign_root / "preserved.txt"
+    foreign_file.write_text("foreign\n", encoding="utf-8")
+    destination = task_root / "owned" / "optional.txt"
+    destination.symlink_to(foreign_file)
+    stale_temporary = temporary_root / "owned" / "optional.txt"
+    stale_temporary.write_text("stale\n", encoding="utf-8")
+    foreign_sibling = temporary_root / "foreign.txt"
+    foreign_sibling.write_text("preserve\n", encoding="utf-8")
+    plan = BootstrapPlan.from_manifest(b"""schema_version: 3
+resource:
+  copy_optional_path_list: []
+  copy_required_path_list: []
+  link_optional_path_list:
+    - owned/optional.txt
+  link_required_path_list: []
+cleanup:
+  handler_key_list: []
+""")
+
+    plan.materialize(
+        main_root=main_root.resolve(),
+        task_root=task_root.resolve(),
+        temporary_root=temporary_root.resolve(),
+    )
+    plan.ready_require(main_root=main_root.resolve(), task_root=task_root.resolve())
+
+    assert not destination.exists()
+    assert not destination.is_symlink()
+    assert not stale_temporary.exists()
+    assert foreign_file.read_text(encoding="utf-8") == "foreign\n"
+    assert foreign_sibling.read_text(encoding="utf-8") == "preserve\n"
 
 
 @pytest.mark.parametrize(
@@ -230,11 +308,11 @@ cleanup:
         b"schema_version: 3\nresource:\n  copy_optional_path_list: []\n  copy_required_path_list: []\n  link_optional_path_list: []\n  link_required_path_list: []\ncleanup:\n  handler_key_list:\n    - unknown-handler\n",
     ],
 )
-def test_bootstrap_manifest_parser_rejects_yaml_outside_owned_subset(payload: bytes, tmp_path: Path) -> None:
+def test_bootstrap_manifest_parser_rejects_yaml_outside_owned_subset(payload: bytes) -> None:
     """Ambiguous general-YAML features cannot enter the bootstrap contract."""
 
     with pytest.raises(TaskWorkspaceError):
-        BootstrapPlan.from_manifest(payload, main_root=tmp_path)
+        BootstrapPlan.from_manifest(payload)
 
 
 def test_copy_bootstrap_rejects_source_root_symlink_before_destination_creation(tmp_path: Path) -> None:
@@ -253,7 +331,7 @@ def test_copy_bootstrap_rejects_source_root_symlink_before_destination_creation(
     existing_destination = task_root / "owned" / "resource"
     existing_destination.mkdir(parents=True)
     (existing_destination / "preserved.txt").write_text("preserved\n", encoding="utf-8")
-    resource = BootstrapResource(relative_path="owned/resource", kind="copy", skipped=False)
+    resource = BootstrapResource(relative_path="owned/resource", kind="copy", required=True)
 
     with pytest.raises(TaskWorkspaceError, match="source may not be a symlink"):
         resource.materialize(
@@ -280,7 +358,7 @@ def test_copy_bootstrap_rejects_nested_symlink_before_destination_creation(tmp_p
     foreign = tmp_path / "foreign.txt"
     foreign.write_text("foreign\n", encoding="utf-8")
     (source_root / "nested-link").symlink_to(foreign)
-    resource = BootstrapResource(relative_path="owned/resource", kind="copy", skipped=False)
+    resource = BootstrapResource(relative_path="owned/resource", kind="copy", required=True)
 
     with pytest.raises(TaskWorkspaceError, match="source may not be a symlink"):
         resource.materialize(
@@ -304,7 +382,7 @@ def test_copy_bootstrap_rejects_unsupported_source_type_before_destination_creat
     temporary_root = tmp_path / "private"
     temporary_root.mkdir(mode=0o700)
     os.mkfifo(source_root / "pipe")
-    resource = BootstrapResource(relative_path="owned/resource", kind="copy", skipped=False)
+    resource = BootstrapResource(relative_path="owned/resource", kind="copy", required=True)
 
     with pytest.raises(TaskWorkspaceError, match="source has an unsupported type"):
         resource.materialize(
@@ -329,7 +407,7 @@ def test_copy_bootstrap_materializes_and_reads_back_one_valid_tree(tmp_path: Pat
     source_file = source_root / "nested" / "config.json"
     source_file.write_text('{"mode":"test"}\n', encoding="utf-8")
     source_file.chmod(0o640)
-    resource = BootstrapResource(relative_path="owned/resource", kind="copy", skipped=False)
+    resource = BootstrapResource(relative_path="owned/resource", kind="copy", required=True)
 
     resource.materialize(
         main_root=main_root.resolve(),
@@ -804,6 +882,37 @@ def test_workspace_rejects_ambient_protocol_and_external_helper_config_before_gi
 
 
 @pytest.mark.parametrize(
+    ("config_name", "config_value"),
+    [
+        ("credential.helper", "!/tmp/foreign-credential"),
+        ("core.hooksPath", "/tmp/foreign-hooks"),
+        ("protocol.ext.allow", "always"),
+        ("url.https://attacker.example/.insteadOf", "https://github.com/"),
+    ],
+)
+def test_workspace_rejects_effective_main_worktree_config_before_git(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    config_name: str,
+    config_value: str,
+) -> None:
+    """A main checkout cannot hide executable or transport authority in config.worktree."""
+
+    repository_fixture = _repository_create(tmp_path, resources=False)
+    _git(repository_fixture.root, "config", "extensions.worktreeConfig", "true")
+    _git(repository_fixture.root, "config", "--worktree", config_name, config_value)
+    request = _request(repository_fixture.remote, issue="AND-140")
+
+    def run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        raise AssertionError((args, kwargs))
+
+    monkeypatch.setattr(subprocess, "run", run)
+
+    with pytest.raises(TaskWorkspaceError, match="ambient transport, helper, or filter"):
+        WorkspaceRepository.from_config(WorkspaceConfig(tmp_path.resolve()), request.repository_list[0])
+
+
+@pytest.mark.parametrize(
     "destination",
     [
         "ext::/bin/false",
@@ -829,14 +938,66 @@ def test_submodule_reader_rejects_malicious_declared_url_before_git(
         "submodule.vendor/provider.url",
         destination,
     )
+    _git(repository_fixture.root, "add", ".gitmodules")
+    _git(repository_fixture.root, "commit", "-m", "Commit malicious submodule destination")
 
     def run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
         raise AssertionError((args, kwargs))
 
-    monkeypatch.setattr(submodule_module, "git_command_run", run)
+    monkeypatch.setattr(subprocess, "run", run)
 
     with pytest.raises(TaskWorkspaceError):
         WorkspaceSubmoduleReader(repository_fixture.root).read()
+
+
+@pytest.mark.parametrize("staged", [False, True])
+def test_submodule_prepare_rejects_dirty_or_staged_gitmodules_before_update(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    staged: bool,
+) -> None:
+    """Only committed submodule declarations can select a destination for gitlink recovery."""
+
+    repository_fixture = _repository_create(tmp_path, resources=False)
+    _submodule_add(tmp_path, repository_fixture.root)
+    shutil.rmtree(repository_fixture.root / "vendor" / "provider")
+    _git(
+        repository_fixture.root,
+        "config",
+        "-f",
+        ".gitmodules",
+        "submodule.vendor/provider.url",
+        "https://github.com/attacker/provider",
+    )
+    _git(
+        repository_fixture.root,
+        "config",
+        "-f",
+        ".gitmodules",
+        "submodule.vendor/provider.branch",
+        "foreign",
+    )
+    if staged:
+        _git(repository_fixture.root, "add", ".gitmodules")
+    original = submodule_module.git_command_run
+    argument_list_list: list[tuple[str, ...]] = []
+
+    def run(
+        repository: Path,
+        argument_list: tuple[str, ...],
+        **kwargs: object,
+    ) -> subprocess.CompletedProcess[bytes]:
+        argument_list_list.append(argument_list)
+        if argument_list[:2] == ("submodule", "update"):
+            raise AssertionError("Submodule update reached Git with uncommitted authority")
+        return original(repository, argument_list, **kwargs)
+
+    monkeypatch.setattr(submodule_module, "git_command_run", run)
+
+    with pytest.raises(TaskWorkspaceError, match="clean committed .gitmodules"):
+        WorkspaceSubmoduleReader(repository_fixture.root).prepare()
+
+    assert all(argument_list[:2] != ("submodule", "update") for argument_list in argument_list_list)
 
 
 def test_submodule_relative_url_resolves_from_exact_parent_before_update(tmp_path: Path) -> None:
@@ -859,6 +1020,14 @@ def test_submodule_relative_url_resolves_from_exact_parent_before_update(tmp_pat
         "submodule.vendor/provider.url",
         "../provider.git",
     )
+    _git(
+        repository_fixture.root,
+        "config",
+        "submodule.vendor/provider.url",
+        "../provider.git",
+    )
+    _git(repository_fixture.root, "add", ".gitmodules")
+    _git(repository_fixture.root, "commit", "-m", "Use relative provider destination")
 
     assert submodule_module._submodule_transport_by_name_map_get(
         repository_fixture.root,

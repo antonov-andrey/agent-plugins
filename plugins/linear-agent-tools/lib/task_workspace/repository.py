@@ -1104,30 +1104,21 @@ def _git_repository_substitution_validate(repository: Path) -> None:
                 raise TaskWorkspaceError("Git repository contains ambient object substitution state")
 
 
-def git_config_file_record_list_get(path: Path, *, required: bool = True) -> list[tuple[str, str]]:
-    """Read one strict physical Git-format config without invoking Git.
+def git_config_bytes_record_list_get(payload_bytes: bytes) -> list[tuple[str, str]]:
+    """Parse one strict Git-format configuration payload.
 
     Args:
-        path: Exact config file path.
-        required: Whether the file must exist.
+        payload_bytes: Exact configuration bytes.
 
     Returns:
         Ordered canonical config-name/value records.
     """
 
+    if not isinstance(payload_bytes, bytes):
+        raise TaskWorkspaceError("Git configuration payload must be bytes")
     try:
-        metadata = path.stat(follow_symlinks=False)
-    except FileNotFoundError:
-        if required:
-            raise TaskWorkspaceError("Git configuration file is missing")
-        return []
-    except OSError as error:
-        raise TaskWorkspaceError("Git configuration file is unavailable") from error
-    if not stat.S_ISREG(metadata.st_mode) or path.is_symlink() or metadata.st_nlink != 1:
-        raise TaskWorkspaceError("Git configuration must be one physical ordinary file")
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError) as error:
+        text = payload_bytes.decode("utf-8")
+    except UnicodeDecodeError as error:
         raise TaskWorkspaceError("Git configuration file is malformed") from error
     if "\x00" in text or "\r" in text:
         raise TaskWorkspaceError("Git configuration file contains control characters")
@@ -1182,6 +1173,34 @@ def git_config_file_record_list_get(path: Path, *, required: bool = True) -> lis
     return record_list
 
 
+def git_config_file_record_list_get(path: Path, *, required: bool = True) -> list[tuple[str, str]]:
+    """Read one strict physical Git-format config without invoking Git.
+
+    Args:
+        path: Exact config file path.
+        required: Whether the file must exist.
+
+    Returns:
+        Ordered canonical config-name/value records.
+    """
+
+    try:
+        metadata = path.stat(follow_symlinks=False)
+    except FileNotFoundError:
+        if required:
+            raise TaskWorkspaceError("Git configuration file is missing")
+        return []
+    except OSError as error:
+        raise TaskWorkspaceError("Git configuration file is unavailable") from error
+    if not stat.S_ISREG(metadata.st_mode) or path.is_symlink() or metadata.st_nlink != 1:
+        raise TaskWorkspaceError("Git configuration must be one physical ordinary file")
+    try:
+        payload_bytes = path.read_bytes()
+    except OSError as error:
+        raise TaskWorkspaceError("Git configuration file is malformed") from error
+    return git_config_bytes_record_list_get(payload_bytes)
+
+
 def _git_repository_config_record_list_get(repository: Path) -> list[tuple[str, str]]:
     """Return repository/common/worktree config records without invoking Git."""
 
@@ -1190,8 +1209,7 @@ def _git_repository_config_record_list_get(repository: Path) -> list[tuple[str, 
         return []
     git_directory, common_directory = metadata_directory_pair
     record_list = git_config_file_record_list_get(common_directory / "config")
-    if git_directory != common_directory:
-        record_list.extend(git_config_file_record_list_get(git_directory / "config.worktree", required=False))
+    record_list.extend(git_config_file_record_list_get(git_directory / "config.worktree", required=False))
     return record_list
 
 

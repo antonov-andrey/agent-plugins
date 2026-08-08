@@ -26,7 +26,43 @@ class BootstrapResource:
 
     relative_path: str
     kind: str
-    skipped: bool
+    required: bool
+
+    def __post_init__(self) -> None:
+        """Require one complete canonical resource declaration."""
+
+        normalized = _relative_path_validate(self.relative_path)
+        if self.kind not in {"copy", "link"} or not isinstance(self.required, bool):
+            raise TaskWorkspaceError("Bootstrap resource declaration is malformed")
+        object.__setattr__(self, "relative_path", normalized)
+
+    def exist_source(self, *, main_root: Path) -> bool:
+        """Validate the current source and return whether it exists.
+
+        Args:
+            main_root: Canonical source checkout.
+
+        Returns:
+            Whether the declared source currently exists.
+        """
+
+        source = main_root / self.relative_path
+        try:
+            source.lstat()
+        except FileNotFoundError:
+            if self.required:
+                raise TaskWorkspaceError(f"Required bootstrap source is absent: {self.relative_path}")
+            return False
+        except OSError as error:
+            raise TaskWorkspaceError(f"Bootstrap source cannot be inspected: {source}") from error
+        if self.kind == "copy":
+            _copy_source_validate(source)
+        else:
+            try:
+                source.resolve(strict=True)
+            except OSError as error:
+                raise TaskWorkspaceError(f"Link bootstrap source cannot be resolved: {source}") from error
+        return True
 
     def materialize(self, *, main_root: Path, task_root: Path, temporary_root: Path) -> None:
         """Materialize or reconcile this manifest-declared resource.
@@ -37,7 +73,21 @@ class BootstrapResource:
             temporary_root: Issue-private deterministic staging root.
         """
 
-        if self.skipped:
+        source_exists = self.exist_source(main_root=main_root)
+        source = main_root / self.relative_path
+        if not source_exists:
+            self.transient_cleanup(temporary_root=temporary_root)
+            destination_parent = _destination_parent_require(
+                task_root,
+                relative_path=self.relative_path,
+                create=False,
+            )
+            if destination_parent is None:
+                return
+            destination = destination_parent / PurePosixPath(self.relative_path).name
+            _destination_path_remove(destination)
+            if destination.exists() or destination.is_symlink():
+                raise TaskWorkspaceError(f"Optional bootstrap destination remains present: {self.relative_path}")
             return
         temporary_parent = _temporary_parent_require(
             temporary_root,
@@ -49,14 +99,13 @@ class BootstrapResource:
         temporary = temporary_parent / PurePosixPath(self.relative_path).name
         _temporary_path_remove(temporary)
         try:
-            source = main_root / self.relative_path
-            if self.kind == "copy":
-                _copy_source_validate(source)
             destination_parent = _destination_parent_require(
                 task_root,
                 relative_path=self.relative_path,
                 create=True,
             )
+            if destination_parent is None:
+                raise TaskWorkspaceError("Bootstrap destination parent was not created")
             destination = destination_parent / PurePosixPath(self.relative_path).name
             if destination.exists() or destination.is_symlink():
                 if _match_destination(destination, source=source, kind=self.kind):
@@ -87,8 +136,6 @@ class BootstrapResource:
     def transient_cleanup(self, *, temporary_root: Path) -> None:
         """Remove only this resource's deterministic owned crash residue."""
 
-        if self.skipped:
-            return
         temporary_parent = _temporary_parent_require(
             temporary_root,
             relative_path=self.relative_path,
@@ -107,15 +154,22 @@ class BootstrapResource:
             task_root: Exact issue-owned worktree.
         """
 
-        if self.skipped:
-            return
+        source_exists = self.exist_source(main_root=main_root)
         destination_parent = _destination_parent_require(
             task_root,
             relative_path=self.relative_path,
             create=False,
         )
+        if destination_parent is None:
+            if source_exists:
+                raise TaskWorkspaceError(f"Bootstrap resource is absent or changed: {self.relative_path}")
+            return
         destination = destination_parent / PurePosixPath(self.relative_path).name
         source = main_root / self.relative_path
+        if not source_exists:
+            if destination.exists() or destination.is_symlink():
+                raise TaskWorkspaceError(f"Optional bootstrap destination is stale: {self.relative_path}")
+            return
         if not (destination.exists() or destination.is_symlink()) or not _match_destination(
             destination,
             source=source,
@@ -134,19 +188,65 @@ class BootstrapPlan:
     def __post_init__(self) -> None:
         """Detach validated plan collections from parser-local mutation."""
 
+        if not isinstance(self.resource_list, list) or any(
+            not isinstance(item, BootstrapResource) for item in self.resource_list
+        ):
+            raise TaskWorkspaceError("Bootstrap resource list has another shape")
+        if not isinstance(self.cleanup_handler_key_list, list) or any(
+            not isinstance(item, str) for item in self.cleanup_handler_key_list
+        ):
+            raise TaskWorkspaceError("Bootstrap cleanup handler list has another shape")
         object.__setattr__(self, "resource_list", list(self.resource_list))
         object.__setattr__(self, "cleanup_handler_key_list", list(self.cleanup_handler_key_list))
 
+    def materialize(self, *, main_root: Path, task_root: Path, temporary_root: Path) -> None:
+        """Validate every binding before reconciling declared resources.
+
+        Args:
+            main_root: Canonical source checkout.
+            task_root: Exact issue-owned worktree.
+            temporary_root: Issue-private deterministic staging root.
+        """
+
+        for resource in self.resource_list:
+            resource.exist_source(main_root=main_root)
+        for resource in self.resource_list:
+            resource.materialize(
+                main_root=main_root,
+                task_root=task_root,
+                temporary_root=temporary_root,
+            )
+
+    def ready_require(self, *, main_root: Path, task_root: Path) -> None:
+        """Require every declaration's current source and destination state.
+
+        Args:
+            main_root: Canonical source checkout.
+            task_root: Exact issue-owned worktree.
+        """
+
+        for resource in self.resource_list:
+            resource.ready_require(main_root=main_root, task_root=task_root)
+
+    def transient_cleanup(self, *, temporary_root: Path) -> None:
+        """Remove only declared deterministic crash residue.
+
+        Args:
+            temporary_root: Issue-private deterministic staging root.
+        """
+
+        for resource in self.resource_list:
+            resource.transient_cleanup(temporary_root=temporary_root)
+
     @classmethod
-    def from_manifest(cls, payload_bytes: bytes, *, main_root: Path) -> "BootstrapPlan":
-        """Parse and bind one exact committed YAML bootstrap manifest.
+    def from_manifest(cls, payload_bytes: bytes) -> "BootstrapPlan":
+        """Parse one exact committed YAML bootstrap declaration.
 
         Args:
             payload_bytes: Exact ordinary blob bytes from the task baseline commit.
-            main_root: Exact canonical repository checkout.
 
         Returns:
-            Validated materialization plan.
+            Validated declarations independent of current source availability.
         """
 
         payload = _yaml_document_load(payload_bytes)
@@ -154,7 +254,7 @@ class BootstrapPlan:
             raise TaskWorkspaceError("worktree-bootstrap.yaml has another top-level shape")
         if payload["schema_version"] != 3:
             raise TaskWorkspaceError("worktree-bootstrap.yaml schema_version must be 3")
-        resource_list = _bootstrap_resource_list_get(payload["resource"], main_root=main_root)
+        resource_list = _bootstrap_resource_list_get(payload["resource"])
         cleanup = payload["cleanup"]
         if not isinstance(cleanup, dict) or set(cleanup) != {"handler_key_list"}:
             raise TaskWorkspaceError("Bootstrap cleanup mapping has another shape")
@@ -176,13 +276,11 @@ class BootstrapPlan:
         )
 
 
-def _bootstrap_resource_list_get(resource: object, *, main_root: Path) -> list[BootstrapResource]:
+def _bootstrap_resource_list_get(resource: object) -> list[BootstrapResource]:
     """Return the exact materialization resources from the current schema.
 
     Args:
         resource: Parsed resource mapping.
-        main_root: Exact canonical repository checkout.
-
     Returns:
         Sorted validated bootstrap resources.
     """
@@ -204,18 +302,11 @@ def _bootstrap_resource_list_get(resource: object, *, main_root: Path) -> list[B
                 raise TaskWorkspaceError(f"Bootstrap field {field} must be a text list")
             for relative_path in path_list:
                 normalized = _relative_path_validate(relative_path)
-                source = main_root / normalized
-                if not source.exists() and not source.is_symlink():
-                    if required:
-                        raise TaskWorkspaceError(f"Required bootstrap source is absent: {normalized}")
-                    skipped = True
-                else:
-                    skipped = False
                 resource_list.append(
                     BootstrapResource(
                         relative_path=normalized,
                         kind=kind,
-                        skipped=skipped,
+                        required=required,
                     )
                 )
     path_list = [item.relative_path for item in resource_list]
@@ -349,7 +440,7 @@ def _destination_parent_require(
     *,
     relative_path: str,
     create: bool,
-) -> Path:
+) -> Path | None:
     """Return a physical destination parent without following repository symlinks.
 
     Args:
@@ -358,7 +449,7 @@ def _destination_parent_require(
         create: Whether missing physical parent directories may be created.
 
     Returns:
-        Exact physical destination parent.
+        Exact physical destination parent, or none when an optional lookup parent is absent.
     """
 
     if task_root.is_symlink() or not task_root.is_dir() or task_root.resolve(strict=True) != task_root:
@@ -370,13 +461,40 @@ def _destination_parent_require(
             raise TaskWorkspaceError(f"Bootstrap destination parent is not a physical directory: {relative_path}")
         if not child.exists():
             if not create:
-                raise TaskWorkspaceError(f"Bootstrap destination parent is absent: {relative_path}")
+                return None
             child.mkdir(mode=0o755)
             _directory_sync(current)
         if child.resolve(strict=True) != child:
             raise TaskWorkspaceError(f"Bootstrap destination parent escapes the task root: {relative_path}")
         current = child
     return current
+
+
+def _destination_path_remove(path: Path) -> None:
+    """Remove one exact manifest-owned destination without following aliases.
+
+    Args:
+        path: Exact declared destination path.
+    """
+
+    try:
+        metadata = path.stat(follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    except OSError as error:
+        raise TaskWorkspaceError("Optional bootstrap destination is unavailable") from error
+    try:
+        if stat.S_ISLNK(metadata.st_mode) or stat.S_ISREG(metadata.st_mode):
+            path.unlink()
+        elif stat.S_ISDIR(metadata.st_mode):
+            shutil.rmtree(path)
+        else:
+            raise TaskWorkspaceError("Optional bootstrap destination has a foreign file type")
+        _directory_sync(path.parent)
+    except TaskWorkspaceError:
+        raise
+    except OSError as error:
+        raise TaskWorkspaceError("Optional bootstrap destination could not be removed") from error
 
 
 def _temporary_parent_require(

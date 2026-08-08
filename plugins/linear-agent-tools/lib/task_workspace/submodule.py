@@ -7,7 +7,7 @@ import re
 
 from task_workspace.model import TaskWorkspaceError, WorkspaceSubmoduleState
 from task_workspace.repository import (
-    git_config_file_record_list_get,
+    git_config_bytes_record_list_get,
     git_command_run,
     git_command_text_get,
     git_relative_transport_destination_parse,
@@ -183,7 +183,7 @@ def _submodule_transport_by_name_map_get(repository_root: Path, relative_path_li
 def _submodule_declaration_by_path_get(repository_root: Path) -> dict[str, tuple[str, str]]:
     """Parse and resolve every direct submodule declaration before invoking Git."""
 
-    record_list = git_config_file_record_list_get(repository_root / ".gitmodules", required=False)
+    record_list = _gitmodules_record_list_get(repository_root)
     if not record_list:
         return {}
     value_list_by_name_and_field_map: dict[tuple[str, str], list[str]] = {}
@@ -226,6 +226,48 @@ def _submodule_declaration_by_path_get(repository_root: Path) -> dict[str, tuple
         destination = git_relative_transport_destination_parse(origin_pair[0], url_value_list[0])
         declaration_by_path_map[relative_path] = (name, destination.url)
     return declaration_by_path_map
+
+
+def _gitmodules_record_list_get(repository_root: Path) -> list[tuple[str, str]]:
+    """Read the clean stage-zero Gitmodules blob used by the current gitlinks.
+
+    Args:
+        repository_root: Exact repository that owns the current index.
+
+    Returns:
+        Committed configuration records from the clean stage-zero index entry.
+    """
+
+    for argument_list in (
+        ("diff", "--quiet", "--", ".gitmodules"),
+        ("diff", "--cached", "--quiet", "--", ".gitmodules"),
+    ):
+        completed_process = git_command_run(repository_root, argument_list, check=False)
+        if completed_process.returncode == 1:
+            raise TaskWorkspaceError("Submodule authority requires a clean committed .gitmodules")
+        if completed_process.returncode != 0:
+            raise TaskWorkspaceError("Submodule authority could not validate committed .gitmodules")
+
+    index_payload = git_command_run(
+        repository_root,
+        ("ls-files", "--stage", "-z", "--", ".gitmodules"),
+    ).stdout
+    entry_list = [entry for entry in index_payload.split(b"\0") if entry]
+    if not entry_list:
+        return []
+    if len(entry_list) != 1 or b"\t" not in entry_list[0]:
+        raise TaskWorkspaceError("Submodule authority found ambiguous .gitmodules index state")
+    try:
+        metadata, encoded_path = entry_list[0].split(b"\t", 1)
+        mode, encoded_blob, stage = metadata.split(b" ")
+        path = encoded_path.decode("utf-8", errors="strict")
+        blob = encoded_blob.decode("ascii", errors="strict")
+    except (UnicodeDecodeError, ValueError) as error:
+        raise TaskWorkspaceError("Submodule authority found malformed .gitmodules index state") from error
+    if mode not in {b"100644", b"100755"} or stage != b"0" or path != ".gitmodules" or not match_full_commit(blob):
+        raise TaskWorkspaceError("Submodule authority requires one ordinary stage-zero .gitmodules")
+    payload_bytes = git_command_run(repository_root, ("cat-file", "blob", blob)).stdout
+    return git_config_bytes_record_list_get(payload_bytes)
 
 
 def _direct_gitlink_by_path_get(repository_root: Path) -> dict[str, str]:

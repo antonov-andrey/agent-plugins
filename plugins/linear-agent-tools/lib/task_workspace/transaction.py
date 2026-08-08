@@ -65,8 +65,10 @@ class TaskWorkspaceTransaction:
                 task_root = repository.task_worktree_require(request.issue_identifier, state)
                 WorkspaceSubmoduleReader(task_root).read()
                 task_head = repository.commit_get(f"refs/heads/linear/{request.issue_identifier.lower()}")
-                for resource in self._bootstrap_plan_get(repository, task_head).resource_list:
-                    resource.ready_require(main_root=repository.main_root, task_root=task_root)
+                self._bootstrap_plan_get(repository, task_head).ready_require(
+                    main_root=repository.main_root,
+                    task_root=task_root,
+                )
                 state_list.append(state)
             return state_list
 
@@ -98,7 +100,7 @@ class TaskWorkspaceTransaction:
         """
 
         manifest_bytes = self._bootstrap_manifest_bytes_get(repository, commit)
-        return BootstrapPlan.from_manifest(manifest_bytes, main_root=repository.main_root)
+        return BootstrapPlan.from_manifest(manifest_bytes)
 
     def _repository_prepare(
         self,
@@ -133,12 +135,11 @@ class TaskWorkspaceTransaction:
         if temporary_root is None:
             raise TaskWorkspaceError("Workspace bootstrap temporary root was not created")
         try:
-            for resource in bootstrap_plan.resource_list:
-                resource.materialize(
-                    main_root=repository.main_root,
-                    task_root=task_root,
-                    temporary_root=temporary_root,
-                )
+            bootstrap_plan.materialize(
+                main_root=repository.main_root,
+                task_root=task_root,
+                temporary_root=temporary_root,
+            )
         finally:
             repository.bootstrap_temporary_root_cleanup(request.issue_identifier)
         if repository.commit_get(f"refs/heads/linear/{request.issue_identifier.lower()}") != bootstrap_commit:

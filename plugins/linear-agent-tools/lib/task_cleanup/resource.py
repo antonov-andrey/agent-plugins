@@ -294,7 +294,7 @@ class WorkflowInfrastructureDevelopmentEnvironmentCleanupHandler:
         manifest_bytes = repository.tracked_file_bytes_get(commit, "worktree-bootstrap.yaml")
         if manifest_bytes is None:
             raise TaskCleanupError("Workflow-infrastructure cleanup handler declaration is absent")
-        plan = BootstrapPlan.from_manifest(manifest_bytes, main_root=repository.main_root)
+        plan = BootstrapPlan.from_manifest(manifest_bytes)
         if self.resource_type.handler_key not in plan.cleanup_handler_key_list:
             raise TaskCleanupError("Workflow-infrastructure owner does not declare its cleanup handler")
 

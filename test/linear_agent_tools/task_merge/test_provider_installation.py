@@ -19,15 +19,16 @@ LIBRARY_ROOT = REPOSITORY_ROOT / "plugins" / "linear-agent-tools" / "lib"
 if str(LIBRARY_ROOT) not in sys.path:
     sys.path.insert(0, str(LIBRARY_ROOT))
 
-import task_workspace.repository as repository_module
 from git_origin.identity import origin_identity_get
 from git_origin.transport import GitTransportDestination
+import task_merge.provider_installation as provider_installation_module
 from task_merge.provider_installation import (
     ProviderInstallationError,
     ProviderInstallationReconciler,
     ProviderInstallationRequest,
     standard_home_environment_get,
 )
+import task_workspace.repository as repository_module
 
 BASE_BRANCH = "2026-08-04-agent-development-workflow"
 ISSUE_IDENTIFIER = "AND-45"
@@ -367,6 +368,75 @@ def test_provider_installation_fast_forwards_installs_and_recovers_from_exact_re
         "schema_version",
         "skill_name_list",
     }
+
+
+@pytest.mark.parametrize(
+    ("raw_origin", "canonical_origin"),
+    [
+        (
+            "https://GITHUB.com/Antonov-Andrey/Agent-Plugins",
+            "https://github.com/antonov-andrey/agent-plugins.git",
+        ),
+        (
+            "https://github.com/Antonov-Andrey/Agent-Plugins.git",
+            "https://github.com/antonov-andrey/agent-plugins.git",
+        ),
+        (
+            "ssh://git@GITHUB.com/Antonov-Andrey/Agent-Plugins",
+            "ssh://git@github.com/antonov-andrey/agent-plugins.git",
+        ),
+        (
+            "git@github.com:Antonov-Andrey/Agent-Plugins",
+            "git@github.com:antonov-andrey/agent-plugins.git",
+        ),
+    ],
+)
+def test_provider_installation_forwards_only_canonical_origin_to_fetch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    raw_origin: str,
+    canonical_origin: str,
+) -> None:
+    """Accepted origin aliases normalize once before the canonical-only Git runner."""
+
+    fixture = _provider_repository_fixture_create(tmp_path)
+    _git(
+        fixture.marketplace_root,
+        "fetch",
+        str(fixture.remote_root),
+        f"+refs/heads/{BASE_BRANCH}:refs/remotes/origin/{BASE_BRANCH}",
+    )
+    _git(fixture.bootstrap_root, "remote", "set-url", "origin", raw_origin)
+    _git(fixture.marketplace_root, "remote", "set-url", "origin", raw_origin)
+    runner = _CodexRunner(fixture)
+    reconciler = ProviderInstallationReconciler(
+        bootstrap_repository_root=fixture.bootstrap_root,
+        codex_runner=runner,
+        environment_by_name_map={"HOME": str(fixture.home_root), "PATH": os.environ["PATH"]},
+        repository="git@github.com:antonov-andrey/agent-plugins.git",
+        standard_home=fixture.home_root,
+    )
+    original = provider_installation_module.git_command_run
+    fetch_url_list: list[str] = []
+
+    def run(
+        repository_root: Path,
+        argument_list: Sequence[str],
+        **kwargs: object,
+    ) -> subprocess.CompletedProcess[bytes]:
+        if repository_root == fixture.marketplace_root and argument_list[0] == "fetch":
+            fetch_url_list.append(argument_list[4])
+            assert kwargs["transport_url_list"] == (canonical_origin,)
+            return subprocess.CompletedProcess(argument_list, 0, stdout=b"", stderr=b"")
+        return original(repository_root, argument_list, **kwargs)
+
+    monkeypatch.setattr(provider_installation_module, "git_command_run", run)
+
+    result = reconciler.reconcile(fixture.request_get())
+
+    assert fetch_url_list == [canonical_origin]
+    assert result.repository_identity == "github.com/antonov-andrey/agent-plugins"
+    assert _git(fixture.marketplace_root, "rev-parse", "HEAD") == fixture.merged_base_commit
 
 
 def test_provider_installation_rejects_repository_local_post_merge_hook_before_git(tmp_path: Path) -> None:

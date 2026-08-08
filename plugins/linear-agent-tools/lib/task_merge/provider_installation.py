@@ -15,7 +15,11 @@ from typing import Protocol
 from git_origin.identity import GitOriginError, origin_identity_get
 from json_contract import JsonContractError, json_load_strict
 from task_workspace.model import TaskWorkspaceError, issue_identifier_validate
-from task_workspace.repository import git_command_run, git_command_text_get
+from task_workspace.repository import (
+    git_command_run,
+    git_command_text_get,
+    git_repository_origin_transport_pair_get,
+)
 
 _COMMIT_PATTERN = re.compile(r"[0-9a-f]{40,64}")
 _CACHEBUSTER_VERSION_PATTERN = re.compile(r"[^+\x00\r\n/]+\+codex\.[a-z0-9][a-z0-9-]*")
@@ -447,30 +451,26 @@ class ProviderInstallationReconciler:
         """Return one canonical credential-free repository origin identity."""
 
         try:
-            return origin_identity_get(git_command_text_get(root, ("remote", "get-url", "origin")))
-        except (GitOriginError, TaskWorkspaceError) as error:
+            origin_pair = git_repository_origin_transport_pair_get(root)
+        except TaskWorkspaceError as error:
             raise ProviderInstallationError("Provider repository origin identity could not be read") from error
+        if origin_pair is None:
+            raise ProviderInstallationError("Provider repository origin identity could not be read")
+        return origin_pair[0].identity
 
     def _repository_fetch_url_get(self, root: Path) -> str:
-        """Return one exact effective fetch URL matching the provider repository."""
+        """Return one canonical fetch destination matching the provider repository."""
 
         try:
-            output = git_command_run(
-                root,
-                ("remote", "get-url", "--all", "origin"),
-            ).stdout.decode("utf-8", errors="strict")
-        except (UnicodeDecodeError, TaskWorkspaceError) as error:
+            origin_pair = git_repository_origin_transport_pair_get(root)
+        except TaskWorkspaceError as error:
             raise ProviderInstallationError("Provider repository fetch destination could not be read") from error
-        value_list = output.splitlines()
-        if len(value_list) != 1 or not value_list[0]:
+        if origin_pair is None:
             raise ProviderInstallationError("Provider repository requires one exact fetch destination")
-        try:
-            identity = origin_identity_get(value_list[0])
-        except GitOriginError as error:
-            raise ProviderInstallationError("Provider repository fetch destination is malformed") from error
-        if identity != self._repository_identity:
+        fetch_destination = origin_pair[0]
+        if fetch_destination.identity != self._repository_identity:
             raise ProviderInstallationError("Provider repository fetch destination differs from its owner")
-        return value_list[0]
+        return fetch_destination.url
 
     def _plugin_state_get(
         self,

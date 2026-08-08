@@ -121,10 +121,7 @@ class TaskWorkspaceRetirement:
             manifest_bytes = self._repository.tracked_file_bytes_get(task_head, "worktree-bootstrap.yaml")
             if manifest_bytes is None:
                 raise TaskWorkspaceError("Current task head omits its bootstrap manifest")
-            plan = BootstrapPlan.from_manifest(
-                manifest_bytes,
-                main_root=self._repository.main_root,
-            )
+            plan = BootstrapPlan.from_manifest(manifest_bytes)
             self._repository.state_temporary_recover(self._request.issue_identifier)
             temporary_root = self._repository.bootstrap_temporary_root_get(
                 self._request.issue_identifier,
@@ -132,8 +129,7 @@ class TaskWorkspaceRetirement:
             )
             if temporary_root is None:
                 return
-            for resource in plan.resource_list:
-                resource.transient_cleanup(temporary_root=temporary_root)
+            plan.transient_cleanup(temporary_root=temporary_root)
             self._repository.bootstrap_temporary_root_cleanup(self._request.issue_identifier)
         except TaskWorkspaceError as error:
             raise TaskCleanupError("Task workspace transient state could not be safely reconciled") from error
