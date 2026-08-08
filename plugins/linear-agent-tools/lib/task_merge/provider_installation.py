@@ -360,6 +360,7 @@ class ProviderInstallationReconciler:
         local_commit = self._git_text(marketplace.root, ("rev-parse", "HEAD"))
         if local_commit not in {request.reviewed_base_commit, request.merged_base_commit}:
             raise ProviderInstallationError("Configured marketplace source HEAD is outside exact merge recovery")
+        fetch_url = self._repository_fetch_url_get(marketplace.root)
         try:
             git_command_run(
                 marketplace.root,
@@ -368,9 +369,10 @@ class ProviderInstallationReconciler:
                     "--no-write-fetch-head",
                     "--no-tags",
                     "--prune",
-                    "origin",
+                    fetch_url,
                     f"+refs/heads/{request.base_branch}:refs/remotes/origin/{request.base_branch}",
                 ),
+                mutation=True,
             )
         except TaskWorkspaceError as error:
             raise ProviderInstallationError("Configured marketplace source could not fetch its merged base") from error
@@ -386,12 +388,11 @@ class ProviderInstallationReconciler:
                 git_command_run(
                     marketplace.root,
                     (
-                        "-c",
-                        "core.hooksPath=/dev/null",
                         "merge",
                         "--ff-only",
                         request.merged_base_commit,
                     ),
+                    mutation=True,
                 )
             except TaskWorkspaceError as error:
                 raise ProviderInstallationError(
@@ -462,6 +463,28 @@ class ProviderInstallationReconciler:
             return origin_identity_get(git_command_text_get(root, ("remote", "get-url", "origin")))
         except (GitOriginError, TaskWorkspaceError) as error:
             raise ProviderInstallationError("Provider repository origin identity could not be read") from error
+
+    def _repository_fetch_url_get(self, root: Path) -> str:
+        """Return one exact effective fetch URL matching the provider repository."""
+
+        try:
+            output = git_command_run(
+                root,
+                ("remote", "get-url", "--all", "origin"),
+                mutation=True,
+            ).stdout.decode("utf-8", errors="strict")
+        except (UnicodeDecodeError, TaskWorkspaceError) as error:
+            raise ProviderInstallationError("Provider repository fetch destination could not be read") from error
+        value_list = output.splitlines()
+        if len(value_list) != 1 or not value_list[0]:
+            raise ProviderInstallationError("Provider repository requires one exact fetch destination")
+        try:
+            identity = origin_identity_get(value_list[0])
+        except GitOriginError as error:
+            raise ProviderInstallationError("Provider repository fetch destination is malformed") from error
+        if identity != self._repository_identity:
+            raise ProviderInstallationError("Provider repository fetch destination differs from its owner")
+        return value_list[0]
 
     def _plugin_state_get(
         self,

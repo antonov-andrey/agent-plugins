@@ -54,6 +54,16 @@ BASELINE_EVIDENCE_URL = "https://linear.app/acme/issue/AND-17/local-phase-baseli
 PULL_REQUEST_URL = "https://github.com/antonov-andrey/example/pull/17"
 
 
+def test_repository_identity_canonicalizes_github_owner_and_repository_case() -> None:
+    """External provider spelling cannot create a second physical GitHub identity."""
+
+    repository = RepositoryIdentity("Antonov-Andrey/Example")
+
+    assert repository.value == "antonov-andrey/example"
+    assert repository == RepositoryIdentity("antonov-andrey/example")
+    assert repository.canonical_https_url == "https://github.com/antonov-andrey/example.git"
+
+
 @pytest.fixture(autouse=True)
 def _ordinary_task_repository_create(tmp_path: Path) -> None:
     """Give every repository-bound test one ordinary local audit source."""

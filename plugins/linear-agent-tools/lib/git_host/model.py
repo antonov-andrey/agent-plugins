@@ -68,6 +68,7 @@ class RepositoryIdentity:
             part in {".", ".."} for part in self.value.split("/")
         ):
             raise GitHubContractError("GitHub repository must use exact owner/name form")
+        object.__setattr__(self, "value", self.value.lower())
 
     @property
     def canonical_https_url(self) -> str:

@@ -221,7 +221,11 @@ class WorkflowInfrastructureDevelopmentEnvironmentCleanupHandler:
                 )
                 if ancestor.returncode != 0:
                     raise TaskCleanupError("Workflow-infrastructure main cannot fast-forward to current origin/main")
-                git_command_run(repository.main_root, ("merge", "--ff-only", remote_commit))
+                git_command_run(
+                    repository.main_root,
+                    ("merge", "--ff-only", remote_commit),
+                    mutation=True,
+                )
             if repository.commit_get("refs/heads/main") != remote_commit or git_command_text_get(
                 repository.main_root,
                 ("status", "--porcelain=v1", "--untracked-files=normal"),

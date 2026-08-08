@@ -6,6 +6,7 @@ from collections.abc import Sequence
 import json
 import os
 from pathlib import Path
+import pwd
 import stat
 import subprocess
 
@@ -38,6 +39,53 @@ _GIT_REDIRECTION_NAME_SET = frozenset(
         "GIT_WORK_TREE",
     }
 )
+_GIT_MUTATION_CONFIG_ARGUMENT_LIST = (
+    "-c",
+    "core.hooksPath=/dev/null",
+    "-c",
+    "core.attributesFile=/dev/null",
+    "-c",
+    "core.askPass=",
+    "-c",
+    "core.gitProxy=",
+    "-c",
+    "core.sshCommand=/usr/bin/ssh -F /dev/null -oBatchMode=yes -oClearAllForwardings=yes",
+    "-c",
+    "core.useReplaceRefs=false",
+    "-c",
+    "credential.helper=",
+    "-c",
+    "credential.https://github.com.helper=!/usr/bin/gh auth git-credential",
+    "-c",
+    "credential.interactive=never",
+    "-c",
+    "http.extraHeader=",
+    "-c",
+    "http.proxy=",
+    "-c",
+    "https.proxy=",
+    "-c",
+    "http.followRedirects=false",
+    "-c",
+    "http.sslVerify=true",
+    "-c",
+    "protocol.allow=never",
+    "-c",
+    "protocol.file.allow=always",
+    "-c",
+    "protocol.git.allow=always",
+    "-c",
+    "protocol.http.allow=always",
+    "-c",
+    "protocol.https.allow=always",
+    "-c",
+    "protocol.ssh.allow=always",
+    "-c",
+    "commit.gpgSign=false",
+    "-c",
+    "push.gpgSign=false",
+)
+_STANDARD_EXECUTABLE_PATH = "/usr/bin:/bin"
 
 
 def git_command_run(
@@ -46,16 +94,22 @@ def git_command_run(
     *,
     check: bool = True,
     input_bytes: bytes | None = None,
+    mutation: bool = False,
 ) -> subprocess.CompletedProcess[bytes]:
-    """Run Git without inherited repository-redirection variables."""
+    """Run Git through the read or closed mutation process boundary."""
 
-    environment_by_name_map = os.environ.copy()
-    for name in list(environment_by_name_map):
-        if name in _GIT_REDIRECTION_NAME_SET or name.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")):
-            environment_by_name_map.pop(name, None)
-    environment_by_name_map["GIT_TERMINAL_PROMPT"] = "0"
+    if mutation:
+        environment_by_name_map = _git_mutation_environment_get()
+        command_prefix = ["git", "-C", str(repository), *_GIT_MUTATION_CONFIG_ARGUMENT_LIST]
+    else:
+        environment_by_name_map = os.environ.copy()
+        for name in list(environment_by_name_map):
+            if name in _GIT_REDIRECTION_NAME_SET or name.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")):
+                environment_by_name_map.pop(name, None)
+        environment_by_name_map["GIT_TERMINAL_PROMPT"] = "0"
+        command_prefix = ["git", "-C", str(repository)]
     completed_process = subprocess.run(
-        ["git", "-C", str(repository), *argument_list],
+        [*command_prefix, *argument_list],
         capture_output=True,
         check=False,
         env=environment_by_name_map,
@@ -367,7 +421,8 @@ class WorkspaceRepository:
     def fetch(self) -> None:
         """Fetch current origin refs without changing a checked-out branch."""
 
-        git_command_run(self.main_root, ("fetch", "--prune", "origin"))
+        fetch_url, _push_url = self._remote_transport_url_pair_get()
+        self._remote_fetch_exact(fetch_url)
 
     def _remote_transport_url_pair_get(self) -> tuple[str, str]:
         """Resolve one exact effective fetch and push destination for origin."""
@@ -378,7 +433,11 @@ class WorkspaceRepository:
             ("remote", "get-url", "--push", "--all", "origin"),
         ):
             try:
-                output = git_command_run(self.main_root, argument_list).stdout.decode("utf-8", errors="strict")
+                output = git_command_run(
+                    self.main_root,
+                    argument_list,
+                    mutation=True,
+                ).stdout.decode("utf-8", errors="strict")
             except UnicodeDecodeError as error:
                 raise TaskWorkspaceError("Git origin transport destination is not valid UTF-8") from error
             value_list = output.splitlines()
@@ -406,13 +465,18 @@ class WorkspaceRepository:
                 fetch_url,
                 "+refs/heads/*:refs/remotes/origin/*",
             ),
+            mutation=True,
         )
 
     def _remote_branch_head_get(self, push_url: str, branch_name: str) -> str:
         """Read one branch head directly from the validated effective push target."""
 
         ref = f"refs/heads/{branch_name}"
-        output = git_command_run(self.main_root, ("ls-remote", "--refs", push_url, ref)).stdout
+        output = git_command_run(
+            self.main_root,
+            ("ls-remote", "--refs", push_url, ref),
+            mutation=True,
+        ).stdout
         record_list = [record for record in output.splitlines() if record]
         if not record_list:
             return ""
@@ -563,11 +627,13 @@ class WorkspaceRepository:
             self.main_root,
             (
                 "push",
+                "--no-verify",
                 f"--force-with-lease=refs/heads/{branch_name}:{expected_commit}",
                 push_url,
                 f":refs/heads/{branch_name}",
             ),
             check=False,
+            mutation=True,
         )
         if completed_process.returncode != 0:
             raise TaskWorkspaceError("Remote task branch changed during exact deletion")
@@ -609,11 +675,20 @@ class WorkspaceRepository:
                         branch_name,
                         f"refs/remotes/origin/{branch_name}",
                     ),
+                    mutation=True,
                 )
             else:
-                git_command_run(self.main_root, ("branch", branch_name, state.baseline_commit))
+                git_command_run(
+                    self.main_root,
+                    ("branch", branch_name, state.baseline_commit),
+                    mutation=True,
+                )
         task_root.parent.mkdir(parents=True, exist_ok=True)
-        git_command_run(self.main_root, ("worktree", "add", str(task_root), branch_name))
+        git_command_run(
+            self.main_root,
+            ("worktree", "add", str(task_root), branch_name),
+            mutation=True,
+        )
         return self.task_worktree_require(issue_identifier, state)
 
     def task_worktree_require(self, issue_identifier: str, state: RepositoryWorkspaceState) -> Path:
@@ -780,6 +855,48 @@ def match_full_commit(value: str) -> bool:
     """
 
     return len(value) in {40, 64} and all(character in "0123456789abcdef" for character in value)
+
+
+def _git_mutation_environment_get() -> dict[str, str]:
+    """Build one complete minimal standard-user environment for Git mutation."""
+
+    try:
+        account = pwd.getpwuid(os.getuid())
+    except KeyError as error:
+        raise TaskWorkspaceError("Git mutation requires one operating-system user") from error
+    environment_by_name_map = {
+        "GCM_INTERACTIVE": "never",
+        "GH_PROMPT_DISABLED": "1",
+        "GIT_ATTR_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_SYSTEM": "/dev/null",
+        "GIT_NO_REPLACE_OBJECTS": "1",
+        "GIT_TERMINAL_PROMPT": "0",
+        "HOME": account.pw_dir,
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "LOGNAME": account.pw_name,
+        "PATH": _STANDARD_EXECUTABLE_PATH,
+        "SSH_ASKPASS_REQUIRE": "never",
+        "USER": account.pw_name,
+    }
+    socket_text = os.environ.get("SSH_AUTH_SOCK", "")
+    if socket_text:
+        socket_path = Path(socket_text)
+        try:
+            metadata = socket_path.stat(follow_symlinks=False)
+        except OSError as error:
+            raise TaskWorkspaceError("Git mutation SSH agent socket is unavailable") from error
+        if (
+            not socket_path.is_absolute()
+            or str(socket_path) != socket_text
+            or not stat.S_ISSOCK(metadata.st_mode)
+            or metadata.st_uid != os.getuid()
+        ):
+            raise TaskWorkspaceError("Git mutation SSH agent socket is not one exact user-owned socket")
+        environment_by_name_map["SSH_AUTH_SOCK"] = socket_text
+    return environment_by_name_map
 
 
 def _private_temporary_path_remove(path: Path) -> None:

@@ -48,7 +48,11 @@ class TaskWorkspaceRetirement:
         registered_branch = self._repository.task_worktree_branch_get(self._request.issue_identifier)
         removed_worktree_count = 0
         if task_root.exists() or registered_branch is not None:
-            git_command_run(self._repository.main_root, ("worktree", "remove", "--force", str(task_root)))
+            git_command_run(
+                self._repository.main_root,
+                ("worktree", "remove", "--force", str(task_root)),
+                mutation=True,
+            )
             removed_worktree_count = 1
 
         self._repository.fetch()
@@ -63,7 +67,11 @@ class TaskWorkspaceRetirement:
         if self._repository.exist_local_branch(self._branch_name):
             local_commit = self._repository.commit_get(self._branch_name)
             self._branch_removal_require(local_commit)
-            git_command_run(self._repository.main_root, ("branch", "-D", self._branch_name))
+            git_command_run(
+                self._repository.main_root,
+                ("branch", "-D", self._branch_name),
+                mutation=True,
+            )
             removed_local_branch_count = 1
 
         self._repository.fetch()

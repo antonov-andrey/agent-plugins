@@ -35,7 +35,7 @@ class WorkspaceSubmoduleReader:
         if not missing_update_list:
             return self.read()
         for owner_root, missing_path_list in missing_update_list:
-            git_command_run(owner_root, ("submodule", "sync", "--recursive"))
+            git_command_run(owner_root, ("submodule", "sync", "--recursive"), mutation=True)
             git_command_run(
                 owner_root,
                 (
@@ -49,6 +49,7 @@ class WorkspaceSubmoduleReader:
                     "--",
                     *missing_path_list,
                 ),
+                mutation=True,
             )
         return self.read()
 

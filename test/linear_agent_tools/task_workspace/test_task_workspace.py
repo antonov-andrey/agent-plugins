@@ -44,7 +44,7 @@ from task_workspace.model import (
     WorkspaceRequest,
 )
 from task_workspace.bootstrap import BootstrapPlan, BootstrapResource
-from task_workspace.repository import WorkspaceRepository
+from task_workspace.repository import WorkspaceRepository, git_command_run
 from task_workspace.submodule import WorkspaceSubmoduleReader
 from task_workspace.transaction import TaskWorkspaceTransaction
 
@@ -612,21 +612,70 @@ def test_direct_workspace_and_cleanup_models_require_strict_typed_lists(
         )
 
 
+def test_git_mutation_boundary_uses_complete_closed_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Mutation ignores ambient Git controls and disables hooks in the invocation."""
+
+    captured: dict[str, object] = {}
+
+    def run(argument_list: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        captured["argument_list"] = argument_list
+        captured["environment"] = kwargs["env"]
+        return subprocess.CompletedProcess(argument_list, 0, b"", b"")
+
+    monkeypatch.setenv("CODEX_HOME", "/tmp/foreign-codex-home")
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "core.hooksPath")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "/tmp/malicious-hooks")
+    monkeypatch.delenv("SSH_AUTH_SOCK", raising=False)
+    monkeypatch.setattr(subprocess, "run", run)
+
+    git_command_run(tmp_path, ("merge", "--ff-only", "a" * 40), mutation=True)
+
+    argument_list = captured["argument_list"]
+    environment = captured["environment"]
+    assert isinstance(argument_list, list)
+    assert isinstance(environment, dict)
+    assert argument_list[:3] == ["git", "-C", str(tmp_path)]
+    assert "core.hooksPath=/dev/null" in argument_list
+    assert "credential.helper=" in argument_list
+    assert argument_list[-3:] == ["merge", "--ff-only", "a" * 40]
+    assert environment == {
+        "GCM_INTERACTIVE": "never",
+        "GH_PROMPT_DISABLED": "1",
+        "GIT_ATTR_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_SYSTEM": "/dev/null",
+        "GIT_NO_REPLACE_OBJECTS": "1",
+        "GIT_TERMINAL_PROMPT": "0",
+        "HOME": pwd.getpwuid(os.getuid()).pw_dir,
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "LOGNAME": pwd.getpwuid(os.getuid()).pw_name,
+        "PATH": "/usr/bin:/bin",
+        "SSH_ASKPASS_REQUIRE": "never",
+        "USER": pwd.getpwuid(os.getuid()).pw_name,
+    }
+
+
 def test_workspace_request_rejects_duplicate_normalized_repository_identity() -> None:
-    """Equivalent GitHub SCP and HTTPS origins cannot create two task owners."""
+    """GitHub transport and owner/repository case aliases cannot create two task owners."""
 
     with pytest.raises(TaskWorkspaceError, match="repeats one repository origin"):
         WorkspaceRequest(
             "AND-121",
             [
-                RepositoryRequest("git@github.com:antonov-andrey/example.git", "main", ""),
+                RepositoryRequest("git@github.com:Antonov-Andrey/Example.git", "main", ""),
                 RepositoryRequest("https://github.com/antonov-andrey/example.git", "main", ""),
             ],
         )
 
 
 def test_cleanup_request_rejects_duplicate_normalized_repository_identity() -> None:
-    """Terminal cleanup cannot address one GitHub repository twice through transport aliases."""
+    """Terminal cleanup cannot address one GitHub repository twice through case aliases."""
 
     authority = CleanupAuthority(
         scope="terminal-issue",
@@ -642,7 +691,7 @@ def test_cleanup_request_rejects_duplicate_normalized_repository_identity() -> N
             project_id=PROJECT_ID,
             authority=authority,
             repository_list=[
-                RepositoryRequest("git@github.com:antonov-andrey/example.git", "main", ""),
+                RepositoryRequest("git@github.com:Antonov-Andrey/Example.git", "main", ""),
                 RepositoryRequest("https://github.com/antonov-andrey/example.git", "main", ""),
             ],
             pull_request_list=[],
@@ -1693,6 +1742,44 @@ def test_remote_branch_cleanup_leases_the_current_validated_push_target_head(tmp
     )
 
 
+def test_remote_branch_cleanup_disables_repository_and_ambient_pre_push_hooks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exact leased deletion runs with inert hooks and no ambient Git config."""
+
+    repository_fixture = _repository_create(tmp_path, resources=False)
+    root = repository_fixture.root
+    request = _request(repository_fixture.remote, issue="AND-136")
+    config = WorkspaceConfig(tmp_path.resolve())
+    TaskWorkspaceTransaction(config).prepare(request)
+    task_root = root / ".worktree" / request.basename
+    _git(task_root, "push", "-u", "origin", request.branch_name)
+    repository = WorkspaceRepository.from_config(config, request.repository_list[0])
+    repository.fetch()
+    expected_commit = repository.commit_get(f"refs/remotes/origin/{request.branch_name}")
+
+    repository_marker = tmp_path / "repository-hook-ran"
+    repository_hook = root / ".git" / "hooks" / "pre-push"
+    repository_hook.write_text(f"#!/bin/sh\nprintf attacked > {repository_marker}\n", encoding="utf-8")
+    repository_hook.chmod(0o755)
+    ambient_hook_root = tmp_path / "ambient-hooks"
+    ambient_hook_root.mkdir()
+    ambient_marker = tmp_path / "ambient-hook-ran"
+    ambient_hook = ambient_hook_root / "pre-push"
+    ambient_hook.write_text(f"#!/bin/sh\nprintf attacked > {ambient_marker}\n", encoding="utf-8")
+    ambient_hook.chmod(0o755)
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "core.hooksPath")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", str(ambient_hook_root))
+
+    repository.remote_branch_delete_exact(request.branch_name, expected_commit=expected_commit)
+
+    assert _git(root, "ls-remote", "--heads", str(repository_fixture.remote), request.branch_name) == ""
+    assert not repository_marker.exists()
+    assert not ambient_marker.exists()
+
+
 def test_successful_cleanup_retires_branch_only_after_terminal_merged_readback(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2566,8 +2653,7 @@ cleanup:
     inventory_absent = True
     absent = registry.reconcile(resource, repository=repository, delete=False)
     inventory_absent = False
-    _git(repository_fixture.root, "merge", "--ff-only", "linear/and-45")
-    _git(repository_fixture.root, "push", "origin", "main")
+    _git(task_root, "push", "origin", "linear/and-45:main")
     original_remote_delete = WorkspaceRepository.remote_branch_delete_exact
     fail_once = True
 
@@ -2588,6 +2674,10 @@ cleanup:
         reconciler.cleanup(terminal_request)
     assert not task_root.exists()
     terminal = reconciler.cleanup(terminal_request)
+    post_merge_marker = tmp_path / "cleanup-post-merge-hook-ran"
+    post_merge_hook = repository_fixture.root / ".git" / "hooks" / "post-merge"
+    post_merge_hook.write_text(f"#!/bin/sh\nprintf attacked > {post_merge_marker}\n", encoding="utf-8")
+    post_merge_hook.chmod(0o755)
     inventory_absent = True
     first = reconciler.cleanup(project_request)
     second = reconciler.cleanup(project_request)
@@ -2599,6 +2689,7 @@ cleanup:
     assert not task_root.exists()
     assert [item.state for item in first.resource_readback_list] == ["absent"]
     assert [item.state for item in second.resource_readback_list] == ["absent"]
+    assert not post_merge_marker.exists()
     assert [item[0][2] for item in call_list] == [
         "destroy-inventory",
         "destroy-inventory",

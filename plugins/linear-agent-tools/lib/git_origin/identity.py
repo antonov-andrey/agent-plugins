@@ -112,7 +112,7 @@ def _github_identity_get(
         or any(part in {".", ".."} for part in normalized_path.split("/"))
     ):
         raise GitOriginError("GitHub repository origin uses an unsupported or ambiguous form")
-    return f"{_GITHUB_IDENTITY_PREFIX}{normalized_path}"
+    return f"{_GITHUB_IDENTITY_PREFIX}{normalized_path.lower()}"
 
 
 def _file_url_identity_get(path_text: str) -> str:
@@ -154,7 +154,7 @@ def origin_identity_get(value: str) -> str:
             or any(part in {".", ".."} for part in normalized_path.split("/"))
         ):
             raise GitOriginError("GitHub repository identity uses an unsupported or ambiguous form")
-        return value
+        return f"{_GITHUB_IDENTITY_PREFIX}{normalized_path.lower()}"
     scp_match = _SCP_ORIGIN_PATTERN.fullmatch(value)
     if scp_match is not None:
         username = scp_match.group("username")

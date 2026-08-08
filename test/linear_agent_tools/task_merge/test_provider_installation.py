@@ -335,6 +335,24 @@ def test_provider_installation_fast_forwards_installs_and_recovers_from_exact_re
     )
 
 
+def test_provider_installation_fast_forward_disables_post_merge_hooks(tmp_path: Path) -> None:
+    """Merged-source recovery ignores a malicious repository-local post-merge hook."""
+
+    fixture = _provider_repository_fixture_create(tmp_path)
+    hook_root = tmp_path / "malicious-hooks"
+    hook_root.mkdir()
+    marker = tmp_path / "post-merge-hook-ran"
+    hook_path = hook_root / "post-merge"
+    hook_path.write_text(f"#!/bin/sh\nprintf attacked > {marker}\n", encoding="utf-8")
+    hook_path.chmod(0o755)
+    _git(fixture.marketplace_root, "config", "core.hooksPath", str(hook_root))
+
+    _reconciler_get(fixture, _CodexRunner(fixture)).reconcile(fixture.request_get())
+
+    assert _git(fixture.marketplace_root, "rev-parse", "HEAD") == fixture.merged_base_commit
+    assert not marker.exists()
+
+
 def test_provider_installation_rejects_dirty_marketplace_before_fetch_or_install(tmp_path: Path) -> None:
     """A dirty configured source remains at the reviewed old base and no install starts."""
 

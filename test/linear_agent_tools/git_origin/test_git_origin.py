@@ -25,9 +25,10 @@ def test_origin_identity_collapses_supported_github_transport_aliases() -> None:
     """GitHub SCP, SSH and HTTPS transports identify one owner/repository."""
 
     expected = "github.com/owner/example"
-    assert origin_identity_get("git@github.com:owner/example.git") == expected
-    assert origin_identity_get("ssh://git@github.com/owner/example.git") == expected
-    assert origin_identity_get("https://github.com/owner/example.git") == expected
+    assert origin_identity_get("git@github.com:Owner/Example.git") == expected
+    assert origin_identity_get("ssh://git@github.com/OWNER/example.git") == expected
+    assert origin_identity_get("https://github.com/owner/EXAMPLE.git") == expected
+    assert origin_identity_get("github.com/Owner/Example") == expected
     assert origin_identity_get(expected) == expected
 
 
