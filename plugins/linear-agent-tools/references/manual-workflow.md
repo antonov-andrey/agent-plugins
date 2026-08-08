@@ -46,7 +46,7 @@
 1. A task thread performs its owned scope directly; do not create a nested agent unless the task names a genuinely independent parallel owner.
 2. When the harness launches a Codex child, use the operating-system user's standard `HOME`, remove `CODEX_HOME`, pass the complete prompt and close stdin in that same launch operation, and never forward Linear credentials.
 3. Use harness-native background execution and native wait/resume. Do not add model polling, a supervisor, timeouts, arbitrary thresholds, an alternate home or copied authentication.
-4. When a merged issue changes an installed lifecycle plugin, the reviewed candidate already contains its cachebuster. Before the issue reaches `Done`, reinstall that exact merged plugin through the normal local-marketplace command under standard `HOME` with `CODEX_HOME` unset, then require fresh generic-process discovery/readback of the installed source and expected skills.
+4. When a merged issue changes the installed lifecycle provider, its retained reviewed task worktree runs branch-local `task-merge/scripts/provider_install.py` after terminal merge readback. That fixed boundary discovers the configured local marketplace, fast-forwards its exact clean base worktree from the reviewed old base to the exact merged commit, performs only an incomplete normal standard-home installation phase, and returns the complete fresh-discovery prompt and expected result. The outer harness launches generic max `codex exec` directly with that prompt and closed stdin, waits natively, and requires exact installed source/manifest and skill discovery before `Done`; no launcher wrapper, alternate home, cache authority or install state file is created.
 
 ## Cleanup Sequence
 

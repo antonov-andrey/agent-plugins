@@ -54,7 +54,7 @@ python3 ~/.codex/skills/.system/plugin-creator/scripts/update_plugin_cachebuster
 env -u CODEX_HOME codex plugin add linear-agent-tools@agent-plugins
 ```
 
-Start a new Codex thread after reinstalling and verify that fresh discovery resolves the installed manifest/source and expected skills. A lifecycle-provider issue does not reach `Done` until this post-merge install/readback succeeds.
+During a lifecycle-provider merge, do not run that reinstall against a stale local marketplace source. The retained reviewed `task-merge` provider first runs its fixed `scripts/provider_install.py` boundary, which synchronizes the configured clean base worktree to the exact merged commit and performs the normal install only when needed. Its returned complete prompt is then passed directly to a fresh generic max Codex process with closed stdin and native waiting. The issue does not reach `Done` until the installed manifest/source and expected skill discovery match the returned exact result.
 
 ## Manual Linear Workflow
 
