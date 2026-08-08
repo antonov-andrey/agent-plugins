@@ -68,6 +68,7 @@ class RepositoryIdentity:
             part in {".", ".."} for part in self.value.split("/")
         ):
             raise GitHubContractError("GitHub repository must use exact owner/name form")
+        object.__setattr__(self, "value", self.value.lower())
 
     @property
     def canonical_https_url(self) -> str:
@@ -86,13 +87,16 @@ class RepositoryIdentity:
             Exact GitHub repository identity, or absence for another host.
         """
 
+        prefix = "github.com/"
+        if origin_identity.startswith(prefix):
+            path_part_list = origin_identity.removeprefix(prefix).split("/")
+            if len(path_part_list) != 2:
+                raise GitHubContractError("GitHub origin does not identify exact owner/repository")
+            return cls("/".join(path_part_list))
         parsed = urlsplit(origin_identity)
-        if parsed.hostname != "github.com":
-            return None
-        path_part_list = [item for item in parsed.path.split("/") if item]
-        if len(path_part_list) != 2:
-            raise GitHubContractError("GitHub origin does not identify exact owner/repository")
-        return cls("/".join(path_part_list))
+        if parsed.hostname == "github.com":
+            raise GitHubContractError("GitHub origin is not one canonical owner/repository identity")
+        return None
 
 
 @dataclass(frozen=True, slots=True)

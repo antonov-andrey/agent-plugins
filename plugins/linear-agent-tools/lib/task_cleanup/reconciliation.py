@@ -1,14 +1,13 @@
-"""Idempotent cleanup sequencing for exact task-owned state."""
+"""Idempotent cleanup sequencing from current provider state."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
-from pathlib import Path
+from dataclasses import dataclass, field
 
 from git_host.model import PullRequestSnapshot, RepositoryIdentity
 from git_host.pull_request import GitHubPullRequestBoundary
-from task_cleanup.model import CleanupRequest, PullRequestTarget, TaskCleanupError, cleanup_origin_identity_get
-from task_cleanup.resource import ResourceCleaner
+from task_cleanup.model import CleanupRequest, PullRequestTarget, TaskCleanupError
+from task_cleanup.resource import CleanupResourceReadback, CleanupResourceRegistry
 from task_cleanup.workspace import TaskWorkspaceRetirement
 from task_workspace.lock import IssueWorkspaceLock
 from task_workspace.model import RepositoryWorkspaceState, TaskWorkspaceError, WorkspaceConfig
@@ -17,39 +16,39 @@ from task_workspace.repository import WorkspaceRepository
 
 @dataclass(frozen=True, slots=True)
 class CleanupResult:
-    """Summarize exact cleanup reconciliation without duplicating Linear history."""
+    """Summarize exact cleanup reconciliation without duplicating provider state."""
 
     closed_pull_request_count: int
-    cleaned_resource_count: int
     removed_worktree_count: int
     removed_local_branch_count: int
     removed_remote_branch_count: int
+    resource_readback_list: list[CleanupResourceReadback]
 
-    def payload(self) -> dict[str, int]:
+    def payload(self) -> dict[str, object]:
         """Return one JSON-ready result."""
 
         return {
             "schema_version": 1,
-            "cleaned_resource_count": self.cleaned_resource_count,
             "closed_pull_request_count": self.closed_pull_request_count,
             "removed_local_branch_count": self.removed_local_branch_count,
             "removed_remote_branch_count": self.removed_remote_branch_count,
             "removed_worktree_count": self.removed_worktree_count,
+            "resource_readback_list": [item.payload() for item in self.resource_readback_list],
         }
 
 
 @dataclass(slots=True)
 class CleanupState:
-    """Carry mutable counters and exact repository snapshots through one cleanup run."""
+    """Carry run-local counters and current repository reads through cleanup."""
 
     request: CleanupRequest
     repository_by_origin_identity_map: dict[str, WorkspaceRepository] = field(default_factory=dict)
     workspace_state_by_origin_identity_map: dict[str, RepositoryWorkspaceState | None] = field(default_factory=dict)
     closed_pull_request_count: int = 0
-    cleaned_resource_count: int = 0
     removed_worktree_count: int = 0
     removed_local_branch_count: int = 0
     removed_remote_branch_count: int = 0
+    resource_readback_list: list[CleanupResourceReadback] = field(default_factory=list)
 
     def pull_request_target_get(self, github_repository: RepositoryIdentity) -> PullRequestTarget:
         """Return the exact approved target for one participating GitHub repository."""
@@ -66,13 +65,6 @@ class CleanupState:
             head_branch=f"linear/{self.request.issue_identifier.lower()}",
         )
 
-    def resource_scope_require(self) -> None:
-        """Require every cleanup resource to name one participating repository."""
-
-        for resource in self.request.resource_list:
-            if cleanup_origin_identity_get(resource.repository_url) not in self.repository_by_origin_identity_map:
-                raise TaskCleanupError(f"Resource {resource.key} has no exact participating repository")
-
     def task_absence_require(self, repository: WorkspaceRepository, issue_identifier: str) -> None:
         """Translate repository-level absence proof into the cleanup domain."""
 
@@ -85,20 +77,20 @@ class CleanupState:
 
 
 class TaskCleanupReconciler:
-    """Sequence exact PR, resource and workspace cleanup owners."""
+    """Sequence exact PR and workspace cleanup from live provider identities."""
 
     def __init__(
         self,
         config: WorkspaceConfig,
         *,
         github: GitHubPullRequestBoundary,
-        resources: ResourceCleaner,
+        resources: CleanupResourceRegistry | None = None,
     ) -> None:
         """Initialize explicit external boundaries."""
 
         self._config = config
         self._github = github
-        self._resources = resources
+        self._resources = resources or CleanupResourceRegistry()
 
     def cleanup(self, request: CleanupRequest) -> CleanupResult:
         """Reconcile every exact requested cleanup target idempotently."""
@@ -106,20 +98,51 @@ class TaskCleanupReconciler:
         state = CleanupState(request=request)
         with IssueWorkspaceLock(self._config, request.issue_identifier):
             self._repository_state_load(state)
-            state.resource_scope_require()
-            self._terminal_contract_prepare(state)
+            self._terminal_contract_require(state)
             self._pull_request_reconcile(state)
-            self._resource_reconcile(state)
-            if request.authority.scope != "attempt":
+            if request.authority.scope == "attempt":
+                self._resource_reconcile(state)
+            elif request.authority.scope == "terminal-issue":
+                # Project-lifetime retention may require the owner's published
+                # worktree and committed manifest. Complete and read it back
+                # before retiring that workspace.
+                self._resource_reconcile(state)
+                self._workspace_reconcile(state)
+            else:
+                # Project-final handlers consume merged canonical owners only
+                # after every issue workspace has retired.
                 self._workspace_reconcile(state)
                 self._project_absence_require(state)
+                self._resource_reconcile(state)
         return CleanupResult(
             closed_pull_request_count=state.closed_pull_request_count,
-            cleaned_resource_count=state.cleaned_resource_count,
             removed_worktree_count=state.removed_worktree_count,
             removed_local_branch_count=state.removed_local_branch_count,
             removed_remote_branch_count=state.removed_remote_branch_count,
+            resource_readback_list=list(state.resource_readback_list),
         )
+
+    def _resource_reconcile(self, state: CleanupState) -> None:
+        """Reconcile each resource at its scope-specific owner dependency point."""
+
+        deleted_lifetime_set = {
+            "attempt": {"attempt"},
+            "terminal-issue": {"attempt", "issue"},
+            "project-final": {"attempt", "issue", "project"},
+        }[state.request.authority.scope]
+        for resource in state.request.resource_list:
+            repository = state.repository_by_origin_identity_map.get(resource.repository)
+            if repository is None:
+                raise TaskCleanupError("Cleanup resource has no exact participating repository owner")
+            readback = self._resources.reconcile(
+                resource,
+                repository=repository,
+                delete=resource.lifetime in deleted_lifetime_set,
+            )
+            expected_state = "absent" if resource.lifetime in deleted_lifetime_set else "retained"
+            if readback.state not in {expected_state, "absent"}:
+                raise TaskCleanupError("Cleanup resource readback differs from its authorized lifetime")
+            state.resource_readback_list.append(readback)
 
     def _project_absence_require(self, state: CleanupState) -> None:
         """Prove every Project issue workspace absent at the final cleanup gate."""
@@ -159,9 +182,11 @@ class TaskCleanupReconciler:
     def _repository_state_load(self, state: CleanupState) -> None:
         """Load and validate exact participating repositories under the issue lock."""
 
-        repository_list = [
-            WorkspaceRepository.from_config(self._config, item) for item in state.request.repository_list
-        ]
+        repository_list: list[WorkspaceRepository] = []
+        for item in state.request.repository_list:
+            repository = WorkspaceRepository.from_config(self._config, item)
+            repository.task_root_get(state.request.issue_identifier)
+            repository_list.append(repository)
         state.repository_by_origin_identity_map = {
             repository.origin_identity: repository for repository in repository_list
         }
@@ -173,63 +198,13 @@ class TaskCleanupReconciler:
         }
         for origin_identity, workspace_state in state.workspace_state_by_origin_identity_map.items():
             repository = state.repository_by_origin_identity_map[origin_identity]
-            if workspace_state is not None:
-                state.workspace_state_by_origin_identity_map[origin_identity] = repository.state_migrate_and_require(
-                    state.request.issue_identifier,
-                    workspace_state,
-                )
-            else:
+            if workspace_state is None:
                 state.task_absence_require(repository, state.request.issue_identifier)
-
-    def _resource_reconcile(self, run_state: CleanupState) -> None:
-        """Execute each declared resource cleanup and durably record completion."""
-
-        for resource in run_state.request.resource_list:
-            origin_identity = cleanup_origin_identity_get(resource.repository_url)
-            repository = run_state.repository_by_origin_identity_map[origin_identity]
-            state = run_state.workspace_state_by_origin_identity_map[origin_identity]
-            cleaned_resource_fingerprint_by_resource_key_map: dict[str, str] = {}
-            if run_state.request.authority.scope != "attempt" and state is not None:
-                cleaned_resource_fingerprint_by_resource_key_map = dict(
-                    state.cleaned_resource_fingerprint_by_resource_key_map
-                )
-                if resource.key in cleaned_resource_fingerprint_by_resource_key_map:
-                    if cleaned_resource_fingerprint_by_resource_key_map[resource.key] != resource.fingerprint():
-                        raise TaskCleanupError(
-                            f"Cleanup declaration changed after exact resource {resource.key} was reconciled"
-                        )
-                    continue
-            if state is None:
-                working_directory = repository.main_root
-                placeholder_by_name_map = {
-                    "linear_issue_identifier": run_state.request.issue_identifier,
-                    "main_root": str(repository.main_root),
-                    "task_branch": f"linear/{run_state.request.issue_identifier.lower()}",
-                    "task_root": str(repository.main_root / ".worktree" / run_state.request.issue_identifier.lower()),
-                }
             else:
-                retirement = self._workspace_retirement_get(run_state, repository, state)
-                working_directory = retirement.task_root_require()
-                placeholder_by_name_map = state.cleanup_placeholder_map(run_state.request.issue_identifier)
-            self._resources.cleanup(
-                resource,
-                working_directory=working_directory,
-                placeholder_by_name_map=placeholder_by_name_map,
-            )
-            if state is not None and run_state.request.authority.scope != "attempt":
-                cleaned_resource_fingerprint_by_resource_key_map[resource.key] = resource.fingerprint()
-                state = replace(
-                    state,
-                    cleaned_resource_fingerprint_by_resource_key_map=dict(
-                        sorted(cleaned_resource_fingerprint_by_resource_key_map.items())
-                    ),
-                )
-                repository.state_write(state)
-                run_state.workspace_state_by_origin_identity_map[origin_identity] = state
-            run_state.cleaned_resource_count += 1
+                repository.state_identity_require(state.request.issue_identifier, workspace_state)
 
-    def _terminal_contract_prepare(self, state: CleanupState) -> None:
-        """Bind PR and branch identities before terminal destructive cleanup."""
+    def _terminal_contract_require(self, state: CleanupState) -> None:
+        """Validate current PR, worktree and branch identities before destructive cleanup."""
 
         if state.request.authority.scope == "attempt":
             return
@@ -238,11 +213,10 @@ class TaskCleanupReconciler:
             if workspace_state is None:
                 continue
             repository = state.repository_by_origin_identity_map[origin_identity]
-            retirement = self._workspace_retirement_get(state, repository, workspace_state)
-            state.workspace_state_by_origin_identity_map[origin_identity] = retirement.branch_snapshot_prepare()
+            self._workspace_retirement_get(state, repository, workspace_state).removal_require()
 
     def _workspace_reconcile(self, run_state: CleanupState) -> None:
-        """Retire every terminal task repository through its durable owner."""
+        """Retire every terminal task repository through its live-state owner."""
 
         for origin_identity, repository in run_state.repository_by_origin_identity_map.items():
             state = run_state.workspace_state_by_origin_identity_map[origin_identity]
@@ -263,7 +237,6 @@ class TaskCleanupReconciler:
         """Wire one repository retirement owner to the current cleanup run."""
 
         return TaskWorkspaceRetirement(
-            self._config,
             github=self._github,
             repository=repository,
             request=state.request,

@@ -437,6 +437,10 @@
           "text": "It follows the explicit merge order, records rather than hides partial merge state, and completes idempotent nested attempt cleanup before every success, stale, failed, canceled or controlled interrupted handoff and transition; it proves final commits and links, publishes and rereads a minimal merged handoff whose corresponding composite candidate contains the exact merged commit, marks only this issue Done, and starts issue-local cleanup."
         },
         {
+          "id": "self-changing-provider-installation",
+          "text": "When the merged candidate changes the installed lifecycle provider, the retained exact reviewed branch-local provider first discovers the unique configured local marketplace and guarded-fast-forwards its clean base worktree only from reviewed old base to the exact remote merged commit, then runs ordinary standard-HOME and unset-CODEX_HOME installation only if exact merged cache/list readback is incomplete. After deterministic revalidation of LINEAR_AGENT_WORKSPACE_ROOT, a fresh generic gpt-5.6-sol max process receives the provider-produced complete prompt with closed stdin in one direct harness launch, uses native waiting, activates no named skill, and must semantically return the exact installed manifest/source and skill discovery result before Done; retry derives progress from Git, plugin list and installed files without state, wrappers, polling, copied auth or Product fix-forward."
+        },
+        {
           "id": "exclusive-attempt",
           "text": "The merge attempt acquires the exact issue process-lifetime host-local attempt guard before dispatch or mutation and retains it across ordered recovery, final readback, and nested cleanup."
         }
@@ -452,7 +456,7 @@
       "semantic_invariant_list": [
         {
           "id": "idempotent-exact-cleanup",
-          "text": "The response treats already absent owned state as success, closes only exact linked open canceled PRs, removes only proven worktrees/branches/private state and declared direct-argv resources, and preserves all Linear history and foreign state."
+          "text": "The response treats already absent owned state as success, closes only exact linked open canceled PRs, removes only proven worktrees/branches/private state and typed resources resolved through fixed provider handlers from natural Project, issue and repository identities, and preserves all Linear history and foreign state without arbitrary argv or fingerprints."
         },
         {
           "id": "project-completion-gate",

@@ -11,7 +11,6 @@ from git_origin.identity import GitOriginError, origin_identity_get
 
 _ISSUE_IDENTIFIER_PATTERN = re.compile(r"[A-Z][A-Z0-9]*-[1-9][0-9]*")
 _COMMIT_PATTERN = re.compile(r"[0-9a-f]{40,64}")
-_SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 
 
 class TaskWorkspaceError(RuntimeError):
@@ -118,18 +117,19 @@ class WorkspaceConfig:
 class RepositoryRequest:
     """Request one exact canonical repository worktree at one base branch."""
 
-    origin_url: str
+    origin_identity: str
     base_branch: str
     expected_baseline_commit: str
 
     def __post_init__(self) -> None:
-        """Validate external repository identity text and Git ref shape."""
+        """Validate canonical repository identity and Git ref shape."""
 
-        _single_line(self.origin_url, label="Repository origin URL")
+        _single_line(self.origin_identity, label="Repository origin identity")
         try:
-            origin_identity_get(self.origin_url)
+            normalized_identity = origin_identity_get(self.origin_identity)
         except GitOriginError as error:
-            raise TaskWorkspaceError("Repository origin URL is unsafe or unsupported") from error
+            raise TaskWorkspaceError("Repository origin identity is unsafe or unsupported") from error
+        object.__setattr__(self, "origin_identity", normalized_identity)
         _single_line(self.base_branch, label="Repository base branch")
         if (
             self.base_branch.startswith("-")
@@ -157,7 +157,11 @@ class RepositoryRequest:
             "expected_baseline_commit",
         }:
             raise TaskWorkspaceError("Repository request has another shape")
-        return cls(**payload)
+        return cls(
+            origin_identity=payload["origin_url"],
+            base_branch=payload["base_branch"],
+            expected_baseline_commit=payload["expected_baseline_commit"],
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -203,7 +207,7 @@ class WorkspaceRequest:
             raise TaskWorkspaceError("Workspace repository list must contain only repository requests")
         if not self.repository_list:
             raise TaskWorkspaceError("Code-mutating task requires at least one repository")
-        origin_identity_list = [origin_identity_get(item.origin_url) for item in self.repository_list]
+        origin_identity_list = [item.origin_identity for item in self.repository_list]
         if len(origin_identity_list) != len(set(origin_identity_list)):
             raise TaskWorkspaceError("Workspace request repeats one repository origin")
         object.__setattr__(self, "repository_list", list(self.repository_list))
@@ -230,223 +234,29 @@ class WorkspaceRequest:
 
 
 @dataclass(frozen=True, slots=True)
-class BootstrapResourceState:
-    """Record proof and phase for one manifest-owned materialization."""
-
-    relative_path: str
-    kind: str
-    source_identity: str
-    phase: str
-    skipped: bool
-
-    def __post_init__(self) -> None:
-        """Validate one bootstrap state record."""
-
-        _single_line(self.relative_path, label="Bootstrap resource path")
-        if self.kind not in {"copy", "link"} or self.phase not in {"planned", "ready"}:
-            raise TaskWorkspaceError("Bootstrap resource kind or phase is unsupported")
-        _single_line(self.source_identity, label="Bootstrap source identity")
-        if not isinstance(self.skipped, bool):
-            raise TaskWorkspaceError("Bootstrap skipped flag must be boolean")
-
-    def payload(self) -> dict[str, object]:
-        """Return the JSON-ready resource state.
-
-        Returns:
-            Resource state payload.
-        """
-
-        return {
-            "kind": self.kind,
-            "phase": self.phase,
-            "relative_path": self.relative_path,
-            "skipped": self.skipped,
-            "source_identity": self.source_identity,
-        }
-
-    @classmethod
-    def from_payload(cls, payload: object) -> "BootstrapResourceState":
-        """Parse one strict bootstrap resource state.
-
-        Args:
-            payload: Candidate JSON value.
-
-        Returns:
-            Typed resource state.
-        """
-
-        expected = {"kind", "phase", "relative_path", "skipped", "source_identity"}
-        if not isinstance(payload, dict) or set(payload) != expected:
-            raise TaskWorkspaceError("Bootstrap resource state has another shape")
-        return cls(**payload)
-
-
-@dataclass(frozen=True, slots=True)
 class RepositoryWorkspaceState:
-    """Contain minimal crash-recovery state for one issue-owned worktree."""
+    """Retain only the first-attempt Git baseline that recovery cannot derive."""
 
-    issue_identifier: str
-    origin_identity: str
-    base_branch: str
     baseline_commit: str
-    branch_name: str
-    main_root: str
-    task_root: str
-    manifest_sha256: str
-    phase: str
-    resource_list: list[BootstrapResourceState]
-    cleanup_argument_list: list[str]
-    cleaned_resource_fingerprint_by_resource_key_map: dict[str, str]
-    cleanup_binding_completed: bool
-    cleanup_branch_snapshot_ready: bool
-    cleanup_local_branch_commit: str
-    cleanup_remote_branch_commit: str
-    cleanup_worktree_removal_ready: bool
-    worktree_removed: bool
-    remote_branch_removed: bool
-    local_branch_removed: bool
 
     def __post_init__(self) -> None:
-        """Validate one complete private state record."""
+        """Validate one immutable repository baseline."""
 
-        issue_identifier_validate(self.issue_identifier)
-        for label, value in (
-            ("origin identity", self.origin_identity),
-            ("base branch", self.base_branch),
-            ("branch name", self.branch_name),
-        ):
-            _single_line(value, label=label)
-        _absolute_path_text_validate(self.main_root, label="Workspace main root")
-        _absolute_path_text_validate(self.task_root, label="Workspace task root")
         if _COMMIT_PATTERN.fullmatch(self.baseline_commit) is None:
             raise TaskWorkspaceError("Workspace baseline must be one full Git commit")
-        if _SHA256_PATTERN.fullmatch(self.manifest_sha256) is None:
-            raise TaskWorkspaceError("Workspace manifest fingerprint must be SHA-256")
-        if self.phase not in {"planned", "worktree-ready", "bootstrap-ready"}:
-            raise TaskWorkspaceError("Workspace transaction phase is unsupported")
-        expected_branch = f"linear/{self.issue_identifier.lower()}"
-        if self.branch_name != expected_branch:
-            raise TaskWorkspaceError("Workspace branch differs from its issue identity")
-        expected_task_root = Path(self.main_root) / ".worktree" / self.issue_identifier.lower()
-        if Path(self.task_root) != expected_task_root:
-            raise TaskWorkspaceError("Workspace path differs from its issue identity")
-        if not isinstance(self.resource_list, list) or any(
-            not isinstance(item, BootstrapResourceState) for item in self.resource_list
-        ):
-            raise TaskWorkspaceError("Workspace resource list must contain only bootstrap resource states")
-        resource_path_list = [item.relative_path for item in self.resource_list]
-        if len(resource_path_list) != len(set(resource_path_list)):
-            raise TaskWorkspaceError("Workspace state repeats one bootstrap resource")
-        if not isinstance(self.cleanup_argument_list, list) or any(
-            not isinstance(item, str) or not item or any(character in item for character in ("\x00", "\n", "\r"))
-            for item in self.cleanup_argument_list
-        ):
-            raise TaskWorkspaceError("Workspace cleanup binding must use direct non-empty argv")
-        if not isinstance(self.cleaned_resource_fingerprint_by_resource_key_map, dict):
-            raise TaskWorkspaceError("Cleaned resource declaration identities must be a mapping")
-        if any(
-            not isinstance(resource_key, str)
-            or not resource_key
-            or not isinstance(fingerprint, str)
-            or _SHA256_PATTERN.fullmatch(fingerprint) is None
-            for resource_key, fingerprint in self.cleaned_resource_fingerprint_by_resource_key_map.items()
-        ):
-            raise TaskWorkspaceError("Cleaned resource declaration identities must bind text keys to SHA-256")
-        boolean_by_field_name_map = {
-            "cleanup_binding_completed": self.cleanup_binding_completed,
-            "cleanup_branch_snapshot_ready": self.cleanup_branch_snapshot_ready,
-            "cleanup_worktree_removal_ready": self.cleanup_worktree_removal_ready,
-            "worktree_removed": self.worktree_removed,
-            "remote_branch_removed": self.remote_branch_removed,
-            "local_branch_removed": self.local_branch_removed,
-        }
-        for field_name, value in boolean_by_field_name_map.items():
-            if not isinstance(value, bool):
-                raise TaskWorkspaceError(f"{field_name} must be boolean")
-        for label, value in (
-            ("cleanup local branch commit", self.cleanup_local_branch_commit),
-            ("cleanup remote branch commit", self.cleanup_remote_branch_commit),
-        ):
-            if not isinstance(value, str) or (value and _COMMIT_PATTERN.fullmatch(value) is None):
-                raise TaskWorkspaceError(f"Workspace {label} must be empty or one full Git commit")
-        if self.cleanup_branch_snapshot_ready and not self.cleanup_local_branch_commit:
-            raise TaskWorkspaceError("Cleanup branch snapshot must retain the exact local task head")
-        if not self.cleanup_branch_snapshot_ready and (
-            self.cleanup_local_branch_commit or self.cleanup_remote_branch_commit
-        ):
-            raise TaskWorkspaceError("Cleanup branch commits require a durable snapshot marker")
-        if (self.worktree_removed or self.remote_branch_removed or self.local_branch_removed) and not (
-            self.cleanup_branch_snapshot_ready
-        ):
-            raise TaskWorkspaceError("Destructive cleanup state requires a durable branch snapshot")
-        if self.worktree_removed and not self.cleanup_worktree_removal_ready:
-            raise TaskWorkspaceError("Removed worktree requires a durable removal-ready marker")
-        if self.worktree_removed and not self.cleanup_binding_completed:
-            raise TaskWorkspaceError("Worktree cannot be removed before its cleanup binding completes")
-        object.__setattr__(self, "resource_list", list(self.resource_list))
-        object.__setattr__(self, "cleanup_argument_list", list(self.cleanup_argument_list))
-        object.__setattr__(
-            self,
-            "cleaned_resource_fingerprint_by_resource_key_map",
-            dict(self.cleaned_resource_fingerprint_by_resource_key_map),
-        )
 
     def payload(self) -> dict[str, object]:
-        """Return the canonical JSON-ready state object.
+        """Return the minimal private state payload.
 
         Returns:
             State payload.
         """
 
-        return {
-            "schema_version": 1,
-            "base_branch": self.base_branch,
-            "baseline_commit": self.baseline_commit,
-            "branch_name": self.branch_name,
-            "cleanup_argument_list": list(self.cleanup_argument_list),
-            "cleaned_resource_fingerprint_by_resource_key_map": dict(
-                sorted(self.cleaned_resource_fingerprint_by_resource_key_map.items())
-            ),
-            "cleanup_binding_completed": self.cleanup_binding_completed,
-            "cleanup_branch_snapshot_ready": self.cleanup_branch_snapshot_ready,
-            "cleanup_local_branch_commit": self.cleanup_local_branch_commit,
-            "cleanup_remote_branch_commit": self.cleanup_remote_branch_commit,
-            "cleanup_worktree_removal_ready": self.cleanup_worktree_removal_ready,
-            "issue_identifier": self.issue_identifier,
-            "main_root": self.main_root,
-            "manifest_sha256": self.manifest_sha256,
-            "origin_identity": self.origin_identity,
-            "phase": self.phase,
-            "local_branch_removed": self.local_branch_removed,
-            "remote_branch_removed": self.remote_branch_removed,
-            "resource_list": [item.payload() for item in self.resource_list],
-            "task_root": self.task_root,
-            "worktree_removed": self.worktree_removed,
-        }
-
-    def cleanup_placeholder_map(self, issue_identifier: str) -> dict[str, str]:
-        """Return the closed direct-argv placeholder mapping.
-
-        Args:
-            issue_identifier: Exact Linear issue identifier.
-
-        Returns:
-            Placeholder values bound to this workspace state.
-        """
-
-        issue_identifier_validate(issue_identifier)
-        if issue_identifier != self.issue_identifier:
-            raise TaskWorkspaceError("Cleanup placeholder issue differs from workspace ownership")
-        return {
-            "linear_issue_identifier": issue_identifier,
-            "task_branch": self.branch_name,
-            "main_root": self.main_root,
-            "task_root": self.task_root,
-        }
+        return {"schema_version": 1, "baseline_commit": self.baseline_commit}
 
     @classmethod
     def from_payload(cls, payload: object) -> "RepositoryWorkspaceState":
-        """Parse one strict private workspace state.
+        """Parse one strict minimal private state payload.
 
         Args:
             payload: Candidate JSON value.
@@ -455,58 +265,8 @@ class RepositoryWorkspaceState:
             Typed repository state.
         """
 
-        expected = {
-            "schema_version",
-            "base_branch",
-            "baseline_commit",
-            "branch_name",
-            "cleanup_argument_list",
-            "cleaned_resource_fingerprint_by_resource_key_map",
-            "cleanup_binding_completed",
-            "cleanup_branch_snapshot_ready",
-            "cleanup_local_branch_commit",
-            "cleanup_remote_branch_commit",
-            "cleanup_worktree_removal_ready",
-            "issue_identifier",
-            "main_root",
-            "manifest_sha256",
-            "origin_identity",
-            "phase",
-            "local_branch_removed",
-            "remote_branch_removed",
-            "resource_list",
-            "task_root",
-            "worktree_removed",
-        }
-        if not isinstance(payload, dict) or set(payload) != expected or payload["schema_version"] != 1:
+        if not isinstance(payload, dict) or set(payload) != {"schema_version", "baseline_commit"}:
             raise TaskWorkspaceError("Workspace state has another shape")
-        if (
-            not isinstance(payload["resource_list"], list)
-            or not isinstance(payload["cleanup_argument_list"], list)
-            or not isinstance(payload["cleaned_resource_fingerprint_by_resource_key_map"], dict)
-        ):
-            raise TaskWorkspaceError("Workspace state collections have another shape")
-        return cls(
-            issue_identifier=payload["issue_identifier"],
-            origin_identity=payload["origin_identity"],
-            base_branch=payload["base_branch"],
-            baseline_commit=payload["baseline_commit"],
-            branch_name=payload["branch_name"],
-            main_root=payload["main_root"],
-            task_root=payload["task_root"],
-            manifest_sha256=payload["manifest_sha256"],
-            phase=payload["phase"],
-            resource_list=[BootstrapResourceState.from_payload(item) for item in payload["resource_list"]],
-            cleanup_argument_list=list(payload["cleanup_argument_list"]),
-            cleaned_resource_fingerprint_by_resource_key_map=dict(
-                payload["cleaned_resource_fingerprint_by_resource_key_map"]
-            ),
-            cleanup_binding_completed=payload["cleanup_binding_completed"],
-            cleanup_branch_snapshot_ready=payload["cleanup_branch_snapshot_ready"],
-            cleanup_local_branch_commit=payload["cleanup_local_branch_commit"],
-            cleanup_remote_branch_commit=payload["cleanup_remote_branch_commit"],
-            cleanup_worktree_removal_ready=payload["cleanup_worktree_removal_ready"],
-            worktree_removed=payload["worktree_removed"],
-            remote_branch_removed=payload["remote_branch_removed"],
-            local_branch_removed=payload["local_branch_removed"],
-        )
+        if payload["schema_version"] != 1:
+            raise TaskWorkspaceError("Workspace state schema version is unsupported")
+        return cls(baseline_commit=payload["baseline_commit"])

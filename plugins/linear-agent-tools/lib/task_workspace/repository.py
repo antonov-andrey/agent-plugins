@@ -3,18 +3,19 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import replace
 import json
 import os
 from pathlib import Path
-import secrets
+import pwd
+import re
 import stat
 import subprocess
 
-from git_origin.identity import (
-    GitOriginError,
-    legacy_origin_identity_set_get,
-    origin_identity_get,
+from git_origin.transport import (
+    GitTransportDestination,
+    GitTransportError,
+    git_relative_transport_destination_get,
+    git_transport_destination_get,
 )
 from json_contract import JsonContractError, json_load_strict
 from task_workspace.model import (
@@ -25,25 +26,45 @@ from task_workspace.model import (
     issue_identifier_validate,
 )
 
-_GIT_REDIRECTION_NAME_SET = frozenset(
-    {
-        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-        "GIT_COMMON_DIR",
-        "GIT_CONFIG",
-        "GIT_CONFIG_COUNT",
-        "GIT_CONFIG_GLOBAL",
-        "GIT_CONFIG_NOSYSTEM",
-        "GIT_CONFIG_PARAMETERS",
-        "GIT_CONFIG_SYSTEM",
-        "GIT_DIR",
-        "GIT_INDEX_FILE",
-        "GIT_NAMESPACE",
-        "GIT_OBJECT_DIRECTORY",
-        "GIT_PREFIX",
-        "GIT_QUARANTINE_PATH",
-        "GIT_WORK_TREE",
-    }
+_GIT_CONFIG_ARGUMENT_LIST = (
+    "-c",
+    "core.hooksPath=/dev/null",
+    "-c",
+    "core.attributesFile=/dev/null",
+    "-c",
+    "core.fsmonitor=false",
+    "-c",
+    "core.askPass=",
+    "-c",
+    "core.gitProxy=",
+    "-c",
+    "core.useReplaceRefs=false",
+    "-c",
+    "credential.helper=",
+    "-c",
+    "credential.interactive=never",
+    "-c",
+    "http.extraHeader=",
+    "-c",
+    "http.proxy=",
+    "-c",
+    "https.proxy=",
+    "-c",
+    "http.followRedirects=false",
+    "-c",
+    "http.sslVerify=true",
+    "-c",
+    "protocol.allow=never",
+    "-c",
+    "commit.gpgSign=false",
+    "-c",
+    "push.gpgSign=false",
 )
+_STANDARD_EXECUTABLE_PATH = "/usr/bin:/bin"
+_GIT_CONFIG_SECTION_PATTERN = re.compile(
+    r'\[(?P<section>[A-Za-z][A-Za-z0-9.-]*)(?:[ \t]+"(?P<subsection>(?:[^"\\]|\\.)*)")?\]'
+)
+_GIT_CONFIG_VARIABLE_PATTERN = re.compile(r"(?P<key>[A-Za-z][A-Za-z0-9-]*)(?:[ \t]*=[ \t]*(?P<value>.*))?")
 
 
 def git_command_run(
@@ -52,16 +73,111 @@ def git_command_run(
     *,
     check: bool = True,
     input_bytes: bytes | None = None,
+    submodule_transport_by_name_map: dict[str, str] | None = None,
+    transport_url_list: Sequence[str] = (),
 ) -> subprocess.CompletedProcess[bytes]:
-    """Run Git without inherited repository-redirection variables."""
+    """Run one Git read or mutation through the same closed authority boundary.
 
-    environment_by_name_map = os.environ.copy()
-    for name in list(environment_by_name_map):
-        if name in _GIT_REDIRECTION_NAME_SET or name.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")):
-            environment_by_name_map.pop(name, None)
-    environment_by_name_map["GIT_TERMINAL_PROMPT"] = "0"
+    Args:
+        repository: Exact repository working directory.
+        argument_list: Fixed Git subcommand and arguments.
+        check: Whether a nonzero result raises a task-workspace error.
+        input_bytes: Optional bytes supplied to Git stdin.
+        submodule_transport_by_name_map: Exact derived submodule destinations for one update.
+        transport_url_list: Exact approved network destinations required by this command.
+
+    Returns:
+        Completed Git process result.
+    """
+
+    if any(
+        argument == "-c" or argument == "--config-env" or argument.startswith("--config-env=")
+        for argument in argument_list
+    ):
+        raise TaskWorkspaceError("Git invocation config belongs to the shared command boundary")
+    external_transport_argument_set = {
+        "--exec",
+        "--receive-pack",
+        "--upload-pack",
+        "-u",
+    }
+    if any(
+        argument in external_transport_argument_set
+        or argument.startswith(("--exec=", "--receive-pack=", "--upload-pack="))
+        for argument in argument_list
+    ):
+        raise TaskWorkspaceError("Git invocation cannot select an external transport helper")
+    protocol_set: set[str] = set()
+    credential_config_argument_list: list[str] = []
+    credential_key_set: set[str] = set()
+    canonical_transport_url_set: set[str] = set()
+    for transport_url in transport_url_list:
+        destination = _git_transport_destination_parse(transport_url)
+        if destination.url != transport_url:
+            raise TaskWorkspaceError("Git transport destination must use its canonical approved form")
+        canonical_transport_url_set.add(transport_url)
+        protocol_set.add(destination.protocol)
+        if destination.protocol != "https":
+            continue
+        repository_identity = destination.identity.removeprefix("github.com/")
+        credential_key = f"credential.https://github.com/{repository_identity}.git.helper"
+        if credential_key in credential_key_set:
+            continue
+        credential_key_set.add(credential_key)
+        credential_config_argument_list.extend(
+            [
+                "-c",
+                f"{credential_key}=",
+                "-c",
+                f"{credential_key}=!/usr/bin/gh auth git-credential",
+                "-c",
+                "credential.useHttpPath=true",
+            ]
+        )
+    _git_invocation_transport_validate(
+        argument_list,
+        canonical_transport_url_set=canonical_transport_url_set,
+        has_submodule_transport=submodule_transport_by_name_map is not None,
+    )
+    if "ssh" in protocol_set:
+        credential_config_argument_list.extend(
+            [
+                "-c",
+                "core.sshCommand=/usr/bin/ssh -F /dev/null -oBatchMode=yes -oClearAllForwardings=yes",
+            ]
+        )
+    submodule_config_argument_list: list[str] = []
+    if submodule_transport_by_name_map is not None:
+        if not submodule_transport_by_name_map:
+            raise TaskWorkspaceError("Git submodule transport map is empty")
+        for name, transport_url in sorted(submodule_transport_by_name_map.items()):
+            if (
+                not isinstance(name, str)
+                or re.fullmatch(r"[A-Za-z0-9._/-]+", name) is None
+                or name.startswith(("/", "-"))
+                or any(part in {"", ".", ".."} for part in name.split("/"))
+            ):
+                raise TaskWorkspaceError("Git submodule transport name is malformed")
+            destination = _git_transport_destination_parse(transport_url)
+            if destination.url != transport_url or transport_url not in transport_url_list:
+                raise TaskWorkspaceError("Git submodule transport map differs from its approved destination set")
+            submodule_config_argument_list.extend(["-c", f"submodule.{name}.url={transport_url}"])
+        if set(submodule_transport_by_name_map.values()) != canonical_transport_url_set:
+            raise TaskWorkspaceError("Git submodule transport authority contains an underived destination")
+    environment_by_name_map = _git_environment_get(protocol_set)
+    _git_repository_substitution_validate(repository)
+    _git_repository_config_validate(repository)
+    command_prefix = [
+        "/usr/bin/git",
+        "-C",
+        str(repository),
+        *_GIT_CONFIG_ARGUMENT_LIST,
+        *credential_config_argument_list,
+        *submodule_config_argument_list,
+        *(argument for protocol in sorted(protocol_set) for argument in ("-c", f"protocol.{protocol}.allow=always")),
+    ]
     completed_process = subprocess.run(
-        ["git", "-C", str(repository), *argument_list],
+        [*command_prefix, *argument_list],
         capture_output=True,
         check=False,
         env=environment_by_name_map,
@@ -76,26 +192,52 @@ def git_command_run(
     return completed_process
 
 
+def _git_invocation_transport_validate(
+    argument_list: Sequence[str],
+    *,
+    canonical_transport_url_set: set[str],
+    has_submodule_transport: bool,
+) -> None:
+    """Bind every transport-capable Git command to its parsed destination set."""
+
+    if not argument_list:
+        raise TaskWorkspaceError("Git invocation is empty")
+    subcommand = argument_list[0]
+    if subcommand in {"fetch", "ls-remote", "push"}:
+        if not canonical_transport_url_set or not canonical_transport_url_set.issubset(set(argument_list)):
+            raise TaskWorkspaceError("Git network invocation omits its exact approved destination")
+        positional_argument_list = [argument for argument in argument_list[1:] if not argument.startswith("-")]
+        if not positional_argument_list or positional_argument_list[0] not in canonical_transport_url_set:
+            raise TaskWorkspaceError("Git network invocation starts with an unapproved destination")
+        destination_candidate_list = [
+            argument
+            for argument in argument_list[1:]
+            if "://" in argument
+            or "::" in argument
+            or Path(argument).is_absolute()
+            or re.fullmatch(r"[^/@:]+@[^/:]+:.+", argument)
+        ]
+        if any(candidate not in canonical_transport_url_set for candidate in destination_candidate_list):
+            raise TaskWorkspaceError("Git network invocation contains an unapproved destination")
+    elif canonical_transport_url_set and not has_submodule_transport:
+        raise TaskWorkspaceError("Git invocation declares transport authority it cannot consume")
+    if subcommand == "submodule" and "update" in argument_list and not has_submodule_transport:
+        raise TaskWorkspaceError("Git submodule update requires exact derived transport authority")
+
+
 def git_command_text_get(repository: Path, argument_list: Sequence[str], *, check: bool = True) -> str:
-    """Return strict UTF-8 output from one Git command."""
-
-    return git_command_run(repository, argument_list, check=check).stdout.decode("utf-8", errors="strict").strip()
-
-
-def _workspace_origin_identity_get(value: str) -> str:
-    """Translate shared Git-origin validation into the workspace boundary.
+    """Return strict UTF-8 output from one closed Git command.
 
     Args:
-        value: Configured or requested origin URL.
+        repository: Exact repository working directory.
+        argument_list: Fixed Git subcommand and arguments.
+        check: Whether a nonzero result raises a task-workspace error.
 
     Returns:
-        Canonical comparison identity.
+        Strict decoded Git stdout without surrounding whitespace.
     """
 
-    try:
-        return origin_identity_get(value)
-    except GitOriginError as error:
-        raise TaskWorkspaceError(str(error)) from error
+    return git_command_run(repository, argument_list, check=check).stdout.decode("utf-8", errors="strict").strip()
 
 
 class WorkspaceRepository:
@@ -114,6 +256,13 @@ class WorkspaceRepository:
         metadata_directory = self.main_root / ".git"
         if metadata_directory.is_symlink() or not metadata_directory.is_dir():
             raise TaskWorkspaceError(f"Canonical checkout must own one .git directory: {self.main_root}")
+        origin_pair = git_repository_origin_transport_pair_get(self.main_root)
+        if origin_pair is None:
+            raise TaskWorkspaceError("Canonical checkout has no validated origin")
+        self._fetch_transport, self._push_transport = origin_pair
+        self.origin_identity = self._fetch_transport.identity
+        if self.origin_identity != request.origin_identity:
+            raise TaskWorkspaceError("Canonical checkout origin differs from the approved issue contract")
         discovered_root = Path(git_command_text_get(self.main_root, ("rev-parse", "--show-toplevel"))).resolve(
             strict=True
         )
@@ -121,11 +270,6 @@ class WorkspaceRepository:
             raise TaskWorkspaceError("Canonical checkout discovery returned another root")
         if metadata_directory.resolve(strict=True) != self._common_directory_get():
             raise TaskWorkspaceError("Canonical checkout must own its physical Git common directory")
-        configured_origin = git_command_text_get(self.main_root, ("remote", "get-url", "origin"))
-        self.origin_identity = _workspace_origin_identity_get(configured_origin)
-        self._legacy_origin_identity_set = legacy_origin_identity_set_get(configured_origin) - {self.origin_identity}
-        if self.origin_identity != _workspace_origin_identity_get(request.origin_url):
-            raise TaskWorkspaceError("Canonical checkout origin differs from the approved issue contract")
         git_command_run(self.main_root, ("check-ref-format", "--branch", request.base_branch))
 
     @classmethod
@@ -140,7 +284,7 @@ class WorkspaceRepository:
             Unique bound repository.
         """
 
-        requested_identity = _workspace_origin_identity_get(request.origin_url)
+        requested_identity = request.origin_identity
         candidate_list: list[Path] = []
         root_candidate_list = [
             config.root,
@@ -150,16 +294,22 @@ class WorkspaceRepository:
             metadata_directory = candidate / ".git"
             if metadata_directory.is_symlink() or not metadata_directory.is_dir():
                 continue
-            origin = git_command_text_get(candidate, ("remote", "get-url", "origin"), check=False)
-            if not origin:
-                continue
             try:
-                candidate_identity = _workspace_origin_identity_get(origin)
-            except TaskWorkspaceError:
+                origin_pair = git_repository_origin_transport_pair_get(candidate, required=False)
+            except TaskWorkspaceError as origin_error:
+                try:
+                    fetch_transport = git_repository_origin_fetch_transport_get(candidate, required=False)
+                except TaskWorkspaceError:
+                    continue
+                if fetch_transport is not None and fetch_transport.identity == requested_identity:
+                    raise origin_error
                 # An unrelated checkout with a non-canonical remote is outside this
                 # request. It must not make discovery of the exact approved origin
                 # depend on every sibling repository being well configured.
                 continue
+            if origin_pair is None:
+                continue
+            candidate_identity = origin_pair[0].identity
             if candidate_identity == requested_identity:
                 candidate_list.append(candidate)
         if len(candidate_list) != 1:
@@ -216,18 +366,20 @@ class WorkspaceRepository:
             raise TaskWorkspaceError("Workspace private state is malformed") from error
         return RepositoryWorkspaceState.from_payload(payload)
 
-    def state_write(self, state: RepositoryWorkspaceState) -> None:
+    def state_write(self, issue_identifier: str, state: RepositoryWorkspaceState) -> None:
         """Atomically replace one private state and fsync its parent.
 
         Args:
+            issue_identifier: Exact Linear issue identifier.
             state: Exact repository workspace state.
         """
 
-        parent = self._state_parent_get(state.issue_identifier, create=True)
+        parent = self._state_parent_get(issue_identifier, create=True)
         if parent is None:
             raise TaskWorkspaceError("Workspace private state parent was not created")
         path = parent / "workspace.json"
-        temporary = path.parent / f".{path.name}.{secrets.token_hex(12)}.tmp"
+        temporary = path.parent / ".workspace.json.tmp"
+        self.state_temporary_recover(issue_identifier)
         encoded = (
             json.dumps(
                 state.payload(),
@@ -237,7 +389,11 @@ class WorkspaceRepository:
             )
             + "\n"
         ).encode("utf-8")
-        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
+            0o600,
+        )
         try:
             with os.fdopen(descriptor, "wb", closefd=True) as handle:
                 handle.write(encoded)
@@ -247,53 +403,51 @@ class WorkspaceRepository:
             os.chmod(path, 0o600)
             _directory_sync(path.parent)
         except BaseException:
-            temporary.unlink(missing_ok=True)
+            _private_temporary_path_remove(temporary)
             raise
 
-    def state_migrate_and_require(
-        self,
-        issue_identifier: str,
-        state: RepositoryWorkspaceState,
-    ) -> RepositoryWorkspaceState:
-        """Persist one proven predecessor identity transition, then require the current owner.
+    def state_temporary_recover(self, issue_identifier: str) -> None:
+        """Remove only the deterministic owned state-write temporary file."""
 
-        The caller holds the issue workspace lock. No other legacy spelling is
-        accepted, and every non-origin ownership field is proved before the
-        migrated state is written atomically.
+        parent = self._state_parent_get(issue_identifier, create=False)
+        if parent is None:
+            return
+        _private_temporary_path_remove(parent / ".workspace.json.tmp")
 
-        Args:
-            issue_identifier: Canonical Linear issue identifier.
-            state: Typed predecessor private state read from this repository.
+    def bootstrap_temporary_root_get(self, issue_identifier: str, *, create: bool) -> Path | None:
+        """Return the issue-private deterministic bootstrap staging root."""
 
-        Returns:
-            Strict current state, migrated only from an exact derived predecessor identity.
-        """
+        parent = self._state_parent_get(issue_identifier, create=create)
+        if parent is None:
+            return None
+        root = parent / "bootstrap"
+        try:
+            metadata = root.stat(follow_symlinks=False)
+        except FileNotFoundError:
+            if not create:
+                return None
+            root.mkdir(mode=0o700)
+            _directory_sync(parent)
+            metadata = root.stat(follow_symlinks=False)
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or metadata.st_uid != os.getuid()
+            or stat.S_IMODE(metadata.st_mode) & 0o077
+        ):
+            raise TaskWorkspaceError("Bootstrap temporary root must be one private user-owned physical directory")
+        return root
 
-        migrated_state = self.state_current_view_require(issue_identifier, state)
-        if migrated_state is not state:
-            self.state_write(migrated_state)
-        return migrated_state
+    def bootstrap_temporary_root_cleanup(self, issue_identifier: str) -> None:
+        """Remove the owned staging root only when no staged or foreign entry remains."""
 
-    def state_current_view_require(
-        self,
-        issue_identifier: str,
-        state: RepositoryWorkspaceState,
-    ) -> RepositoryWorkspaceState:
-        """Return a strict current identity view without writing private state.
-
-        Args:
-            issue_identifier: Canonical Linear issue identifier.
-            state: Typed predecessor private state read from this repository.
-
-        Returns:
-            Current state or one in-memory view of a proven legacy identity.
-        """
-
-        migrated_state = state
-        if state.origin_identity != self.origin_identity and state.origin_identity in self._legacy_origin_identity_set:
-            migrated_state = replace(state, origin_identity=self.origin_identity)
-        self.state_identity_require(issue_identifier, migrated_state)
-        return migrated_state
+        root = self.bootstrap_temporary_root_get(issue_identifier, create=False)
+        if root is None:
+            return
+        try:
+            root.rmdir()
+        except OSError:
+            return
+        _directory_sync(root.parent)
 
     def state_delete(self, issue_identifier: str) -> None:
         """Delete exact private state idempotently.
@@ -305,6 +459,8 @@ class WorkspaceRepository:
         parent = self._state_parent_get(issue_identifier, create=False)
         if parent is None:
             return
+        self.state_temporary_recover(issue_identifier)
+        self.bootstrap_temporary_root_cleanup(issue_identifier)
         path = parent / "workspace.json"
         path.unlink(missing_ok=True)
         if path.parent.exists():
@@ -361,23 +517,65 @@ class WorkspaceRepository:
             state: Current private workspace state.
         """
 
-        basename = issue_identifier.lower()
-        if (
-            state.issue_identifier != issue_identifier
-            or state.origin_identity != self.origin_identity
-            or state.base_branch != self.request.base_branch
-            or state.branch_name != f"linear/{basename}"
-            or Path(state.main_root) != self.main_root
-            or Path(state.task_root) != self.main_root / ".worktree" / basename
-        ):
-            raise TaskWorkspaceError("Private workspace state belongs to another issue or repository contract")
+        issue_identifier_validate(issue_identifier)
         if self.request.expected_baseline_commit and state.baseline_commit != self.request.expected_baseline_commit:
             raise TaskWorkspaceError("Private workspace baseline differs from Linear attempt evidence")
 
     def fetch(self) -> None:
         """Fetch current origin refs without changing a checked-out branch."""
 
-        git_command_run(self.main_root, ("fetch", "--prune", "origin"))
+        fetch_url, _push_url = self._remote_transport_url_pair_get()
+        self._remote_fetch_exact(fetch_url)
+
+    def _remote_transport_url_pair_get(self) -> tuple[str, str]:
+        """Resolve one exact effective fetch and push destination for origin."""
+
+        origin_pair = git_repository_origin_transport_pair_get(self.main_root)
+        if origin_pair is None:
+            raise TaskWorkspaceError("Git origin transport destination is absent")
+        fetch, push = origin_pair
+        if fetch.identity != self.origin_identity or push.identity != self.origin_identity:
+            raise TaskWorkspaceError("Git origin fetch and push destinations differ from the repository owner")
+        return fetch.url, push.url
+
+    def _remote_fetch_exact(self, fetch_url: str) -> None:
+        """Refresh origin branch refs from one already validated explicit destination."""
+
+        git_command_run(
+            self.main_root,
+            (
+                "fetch",
+                "--no-tags",
+                "--prune",
+                fetch_url,
+                "+refs/heads/*:refs/remotes/origin/*",
+            ),
+            transport_url_list=(fetch_url,),
+        )
+
+    def _remote_branch_head_get(self, push_url: str, branch_name: str) -> str:
+        """Read one branch head directly from the validated effective push target."""
+
+        ref = f"refs/heads/{branch_name}"
+        output = git_command_run(
+            self.main_root,
+            ("ls-remote", "--refs", push_url, ref),
+            transport_url_list=(push_url,),
+        ).stdout
+        record_list = [record for record in output.splitlines() if record]
+        if not record_list:
+            return ""
+        if len(record_list) != 1 or b"\t" not in record_list[0]:
+            raise TaskWorkspaceError("Remote task branch readback is ambiguous")
+        commit_bytes, ref_bytes = record_list[0].split(b"\t", 1)
+        try:
+            commit = commit_bytes.decode("ascii")
+            actual_ref = ref_bytes.decode("utf-8", errors="strict")
+        except UnicodeDecodeError as error:
+            raise TaskWorkspaceError("Remote task branch readback is malformed") from error
+        if actual_ref != ref or not match_full_commit(commit):
+            raise TaskWorkspaceError("Remote task branch readback is malformed")
+        return commit
 
     def commit_get(self, ref: str) -> str:
         """Resolve one ref to a full commit.
@@ -491,40 +689,63 @@ class WorkspaceRepository:
             Nothing. Absence is already reconciled.
         """
 
-        self.fetch()
-        if not self.exist_remote_branch(branch_name):
+        git_command_run(self.main_root, ("check-ref-format", "--branch", branch_name))
+        fetch_url, push_url = self._remote_transport_url_pair_get()
+        self._remote_fetch_exact(fetch_url)
+        current_target_commit = self._remote_branch_head_get(push_url, branch_name)
+        if not current_target_commit:
+            if self.exist_remote_branch(branch_name):
+                raise TaskWorkspaceError("Remote task branch absence differs between fetch and push destinations")
             return
-        if not expected_commit or self.commit_get(f"refs/remotes/origin/{branch_name}") != expected_commit:
+        if (
+            not expected_commit
+            or self.commit_get(f"refs/remotes/origin/{branch_name}") != expected_commit
+            or current_target_commit != expected_commit
+        ):
             raise TaskWorkspaceError("Remote task branch differs from its durable cleanup snapshot")
+        if self._remote_transport_url_pair_get() != (fetch_url, push_url):
+            raise TaskWorkspaceError("Git origin transport destination changed before branch deletion")
+        current_target_commit = self._remote_branch_head_get(push_url, branch_name)
+        if current_target_commit != expected_commit:
+            raise TaskWorkspaceError("Remote task branch changed before exact deletion")
         completed_process = git_command_run(
             self.main_root,
             (
                 "push",
+                "--no-verify",
                 f"--force-with-lease=refs/heads/{branch_name}:{expected_commit}",
-                "origin",
+                push_url,
                 f":refs/heads/{branch_name}",
             ),
             check=False,
+            transport_url_list=(push_url,),
         )
         if completed_process.returncode != 0:
             raise TaskWorkspaceError("Remote task branch changed during exact deletion")
-        self.fetch()
+        if self._remote_branch_head_get(push_url, branch_name):
+            raise TaskWorkspaceError("Remote task branch remained at the validated push destination")
+        self._remote_fetch_exact(fetch_url)
         if self.exist_remote_branch(branch_name):
             raise TaskWorkspaceError("Remote task branch remained after exact deletion")
 
-    def task_worktree_create_or_accept(self, state: RepositoryWorkspaceState) -> None:
-        """Create or prove the exact state-owned branch and worktree.
+    def task_worktree_create_or_accept(
+        self,
+        issue_identifier: str,
+        state: RepositoryWorkspaceState,
+    ) -> Path:
+        """Create or prove the exact issue-owned branch and worktree.
 
         Args:
-            state: Durable pre-mutation state.
+            issue_identifier: Exact Linear issue identifier.
+            state: Durable first-attempt baseline.
         """
 
+        issue_identifier_validate(issue_identifier)
         self.task_container_require(create=True)
-        task_root = Path(state.task_root)
-        branch_name = state.branch_name
+        task_root = self.task_root_get(issue_identifier)
+        branch_name = f"linear/{issue_identifier.lower()}"
         if task_root.exists():
-            self.task_worktree_require(state)
-            return
+            return self.task_worktree_require(issue_identifier, state)
         if self._exist_branch_checkout_elsewhere(branch_name):
             raise TaskWorkspaceError("Task branch is already checked out in another worktree")
         if not self.exist_local_branch(branch_name):
@@ -541,46 +762,87 @@ class WorkspaceRepository:
                     ),
                 )
             else:
-                git_command_run(self.main_root, ("branch", branch_name, state.baseline_commit))
+                git_command_run(
+                    self.main_root,
+                    ("branch", branch_name, state.baseline_commit),
+                )
         task_root.parent.mkdir(parents=True, exist_ok=True)
-        git_command_run(self.main_root, ("worktree", "add", str(task_root), branch_name))
-        self.task_worktree_require(state)
+        git_command_run(
+            self.main_root,
+            ("worktree", "add", str(task_root), branch_name),
+        )
+        return self.task_worktree_require(issue_identifier, state)
 
-    def task_worktree_require(self, state: RepositoryWorkspaceState) -> None:
-        """Require exact registration, branch, origin and ancestry for a task root.
+    def task_worktree_require(self, issue_identifier: str, state: RepositoryWorkspaceState) -> Path:
+        """Require exact registration, branch, origin and ancestry for an issue task root.
 
         Args:
-            state: Durable workspace state.
+            issue_identifier: Exact Linear issue identifier.
+            state: Durable first-attempt baseline.
         """
 
-        self.task_container_require(create=False)
-        try:
-            task_root = Path(state.task_root).resolve(strict=True)
-        except OSError as error:
-            raise TaskWorkspaceError("Task worktree path is absent or unavailable") from error
+        issue_identifier_validate(issue_identifier)
+        task_root = self.task_root_get(issue_identifier)
+        branch_name = f"linear/{issue_identifier.lower()}"
+        if not task_root.exists():
+            raise TaskWorkspaceError("Task worktree path is absent or unavailable")
         registration = self._branch_name_by_worktree_path_map_get().get(task_root)
-        if registration != state.branch_name:
+        if registration != branch_name:
             raise TaskWorkspaceError("Task path is absent from Git worktree registration or uses another branch")
         branch = git_command_text_get(task_root, ("symbolic-ref", "--quiet", "--short", "HEAD"))
-        if branch != state.branch_name:
+        if branch != branch_name:
             raise TaskWorkspaceError("Task worktree checked out another branch")
-        origin = _workspace_origin_identity_get(git_command_text_get(task_root, ("remote", "get-url", "origin")))
-        if origin != state.origin_identity:
-            raise TaskWorkspaceError("Task worktree origin differs from private ownership state")
-        head = self.commit_get(state.branch_name)
+        origin_pair = git_repository_origin_transport_pair_get(task_root)
+        if origin_pair is None:
+            raise TaskWorkspaceError("Task worktree has no validated origin")
+        origin = origin_pair[0].identity
+        if origin != self.origin_identity:
+            raise TaskWorkspaceError("Task worktree origin differs from the participating repository identity")
+        head = self.commit_get(branch_name)
         self._ancestor_require(state.baseline_commit, head, label="Task branch")
+        return task_root
 
-    def worktree_branch_get(self, task_root: Path) -> str | None:
-        """Return the exact registered branch for one task path when present.
+    def task_worktree_branch_get(self, issue_identifier: str) -> str | None:
+        """Return the exact registered branch for one issue task path when present.
 
         Args:
-            task_root: Exact task-worktree path.
+            issue_identifier: Exact Linear issue identifier.
 
         Returns:
             Registered local branch name, or absence.
         """
 
-        return self._branch_name_by_worktree_path_map_get().get(task_root.resolve(strict=False))
+        return self._branch_name_by_worktree_path_map_get().get(self.task_root_get(issue_identifier))
+
+    def task_head_commit_get(self, issue_identifier: str, state: RepositoryWorkspaceState) -> str:
+        """Return one unambiguous current retained task-branch head.
+
+        Args:
+            issue_identifier: Exact Linear issue identifier.
+            state: Durable ancestry baseline for this repository.
+
+        Returns:
+            Current local or freshly fetched remote task head.
+        """
+
+        issue_identifier = issue_identifier_validate(issue_identifier)
+        self.state_identity_require(issue_identifier, state)
+        branch_name = f"linear/{issue_identifier.lower()}"
+        task_root = self.task_root_get(issue_identifier)
+        registered_branch = self.task_worktree_branch_get(issue_identifier)
+        if task_root.exists() or registered_branch is not None:
+            self.task_worktree_require(issue_identifier, state)
+        local_commit = self.commit_get(f"refs/heads/{branch_name}") if self.exist_local_branch(branch_name) else ""
+        remote_commit = (
+            self.commit_get(f"refs/remotes/origin/{branch_name}") if self.exist_remote_branch(branch_name) else ""
+        )
+        if local_commit and remote_commit and local_commit != remote_commit:
+            raise TaskWorkspaceError("Local and remote retained task heads differ")
+        task_head = local_commit or remote_commit
+        if not task_head:
+            raise TaskWorkspaceError("Current retained task branch is absent and requires explicit adoption")
+        self._ancestor_require(state.baseline_commit, task_head, label="Retained task branch")
+        return task_head
 
     def task_container_require(self, *, create: bool) -> None:
         """Require the repository-local worktree container to be a physical directory.
@@ -609,15 +871,43 @@ class WorkspaceRepository:
 
         issue_identifier = issue_identifier_validate(issue_identifier)
         branch_name = f"linear/{issue_identifier.lower()}"
-        self.task_container_require(create=False)
-        task_root = self.main_root / ".worktree" / issue_identifier.lower()
+        task_root = self.task_root_get(issue_identifier)
         if (
             task_root.exists()
-            or self.worktree_branch_get(task_root) is not None
+            or self.task_worktree_branch_get(issue_identifier) is not None
             or self.exist_local_branch(branch_name)
             or self.exist_remote_branch(branch_name)
         ):
             raise TaskWorkspaceError("Task resources exist without private ownership proof")
+
+    def task_root_get(self, issue_identifier: str) -> Path:
+        """Return the exact issue path after rejecting filesystem aliases.
+
+        Args:
+            issue_identifier: Exact Linear issue identifier.
+
+        Returns:
+            The absent or physical canonical task-worktree path.
+        """
+
+        issue_identifier = issue_identifier_validate(issue_identifier)
+        self.task_container_require(create=False)
+        task_root = self.main_root / ".worktree" / issue_identifier.lower()
+        try:
+            metadata = task_root.stat(follow_symlinks=False)
+        except FileNotFoundError:
+            return task_root
+        except OSError as error:
+            raise TaskWorkspaceError("Task worktree path is unavailable") from error
+        if not stat.S_ISDIR(metadata.st_mode):
+            raise TaskWorkspaceError("Task worktree path must be one physical canonical directory")
+        try:
+            resolved = task_root.resolve(strict=True)
+        except OSError as error:
+            raise TaskWorkspaceError("Task worktree path is unavailable") from error
+        if resolved != task_root:
+            raise TaskWorkspaceError("Task worktree path must be one physical canonical directory")
+        return task_root
 
     def _branch_name_by_worktree_path_map_get(self) -> dict[Path, str]:
         """Return registered branch by worktree path.
@@ -631,7 +921,7 @@ class WorkspaceRepository:
         current_path: Path | None = None
         for raw in item_list:
             if raw.startswith(b"worktree "):
-                current_path = Path(raw.removeprefix(b"worktree ").decode("utf-8")).resolve(strict=False)
+                current_path = Path(raw.removeprefix(b"worktree ").decode("utf-8"))
             elif raw.startswith(b"branch ") and current_path is not None:
                 ref = raw.removeprefix(b"branch ").decode("utf-8")
                 branch_name_by_worktree_path_map[current_path] = ref.removeprefix("refs/heads/")
@@ -680,6 +970,400 @@ def match_full_commit(value: str) -> bool:
     """
 
     return len(value) in {40, 64} and all(character in "0123456789abcdef" for character in value)
+
+
+def _git_environment_get(protocol_set: set[str]) -> dict[str, str]:
+    """Build one complete minimal standard-user environment for every Git command.
+
+    Args:
+        protocol_set: Exact transport protocols enabled for this invocation.
+
+    Returns:
+        Closed process environment with only standard-user transport authority.
+    """
+
+    try:
+        account = pwd.getpwuid(os.getuid())
+    except KeyError as error:
+        raise TaskWorkspaceError("Git invocation requires one operating-system user") from error
+    environment_by_name_map = {
+        "GCM_INTERACTIVE": "never",
+        "GH_PROMPT_DISABLED": "1",
+        "GIT_ATTR_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_SYSTEM": "/dev/null",
+        "GIT_NO_LAZY_FETCH": "1",
+        "GIT_NO_REPLACE_OBJECTS": "1",
+        "GIT_PAGER": "cat",
+        "GIT_PROTOCOL_FROM_USER": "0",
+        "GIT_TERMINAL_PROMPT": "0",
+        "HOME": account.pw_dir,
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "LOGNAME": account.pw_name,
+        "PAGER": "cat",
+        "PATH": _STANDARD_EXECUTABLE_PATH,
+        "SSH_ASKPASS_REQUIRE": "never",
+        "USER": account.pw_name,
+    }
+    if "ssh" not in protocol_set:
+        return environment_by_name_map
+    socket_text = os.environ.get("SSH_AUTH_SOCK", "")
+    if socket_text:
+        socket_path = Path(socket_text)
+        try:
+            metadata = socket_path.stat(follow_symlinks=False)
+        except OSError as error:
+            raise TaskWorkspaceError("Git invocation SSH agent socket is unavailable") from error
+        if (
+            not socket_path.is_absolute()
+            or str(socket_path) != socket_text
+            or not stat.S_ISSOCK(metadata.st_mode)
+            or metadata.st_uid != os.getuid()
+        ):
+            raise TaskWorkspaceError("Git invocation SSH agent socket is not one exact user-owned socket")
+        environment_by_name_map["SSH_AUTH_SOCK"] = socket_text
+    return environment_by_name_map
+
+
+def _git_repository_metadata_directory_pair_get(repository: Path) -> tuple[Path, Path] | None:
+    """Return exact Git and common metadata directories without invoking Git.
+
+    Args:
+        repository: Exact repository working directory.
+
+    Returns:
+        Git-directory/common-directory pair, or none outside a repository.
+    """
+
+    marker = repository / ".git"
+    try:
+        marker_metadata = marker.lstat()
+    except FileNotFoundError:
+        return None
+    except OSError as error:
+        raise TaskWorkspaceError("Git repository metadata is unavailable") from error
+    if stat.S_ISDIR(marker_metadata.st_mode) and not marker.is_symlink():
+        git_directory = marker
+    elif stat.S_ISREG(marker_metadata.st_mode) and not marker.is_symlink() and marker_metadata.st_nlink == 1:
+        try:
+            marker_text = marker.read_text(encoding="utf-8")
+        except OSError as error:
+            raise TaskWorkspaceError("Git worktree metadata is unavailable") from error
+        if not marker_text.startswith("gitdir: ") or "\n" in marker_text.rstrip("\n"):
+            raise TaskWorkspaceError("Git worktree metadata is malformed")
+        git_directory = Path(marker_text.removeprefix("gitdir: ").strip())
+        if not git_directory.is_absolute():
+            git_directory = repository / git_directory
+    else:
+        raise TaskWorkspaceError("Git repository metadata must be one physical directory or ordinary file")
+    try:
+        git_directory = git_directory.resolve(strict=True)
+    except OSError as error:
+        raise TaskWorkspaceError("Git repository metadata is unavailable") from error
+    if not git_directory.is_dir():
+        raise TaskWorkspaceError("Git repository metadata is not one directory")
+    common_directory = git_directory
+    common_path = git_directory / "commondir"
+    if common_path.exists():
+        try:
+            common_text = common_path.read_text(encoding="utf-8")
+        except OSError as error:
+            raise TaskWorkspaceError("Git common-directory metadata is unavailable") from error
+        if not common_text.strip() or "\n" in common_text.rstrip("\n"):
+            raise TaskWorkspaceError("Git common-directory metadata is malformed")
+        common_directory = Path(common_text.strip())
+        if not common_directory.is_absolute():
+            common_directory = git_directory / common_directory
+        try:
+            common_directory = common_directory.resolve(strict=True)
+        except OSError as error:
+            raise TaskWorkspaceError("Git common directory is unavailable") from error
+    return git_directory, common_directory
+
+
+def _git_repository_substitution_validate(repository: Path) -> None:
+    """Reject repository-local object substitution before Git resolves authority.
+
+    Args:
+        repository: Exact repository working directory.
+    """
+
+    metadata_directory_pair = _git_repository_metadata_directory_pair_get(repository)
+    if metadata_directory_pair is None:
+        return
+    git_directory, common_directory = metadata_directory_pair
+    for metadata_directory in {git_directory, common_directory}:
+        for relative_path in (
+            Path("info/grafts"),
+            Path("objects/info/alternates"),
+            Path("objects/info/http-alternates"),
+        ):
+            if os.path.lexists(metadata_directory / relative_path):
+                raise TaskWorkspaceError("Git repository contains ambient object substitution state")
+
+
+def git_config_bytes_record_list_get(payload_bytes: bytes) -> list[tuple[str, str]]:
+    """Parse one strict Git-format configuration payload.
+
+    Args:
+        payload_bytes: Exact configuration bytes.
+
+    Returns:
+        Ordered canonical config-name/value records.
+    """
+
+    if not isinstance(payload_bytes, bytes):
+        raise TaskWorkspaceError("Git configuration payload must be bytes")
+    try:
+        text = payload_bytes.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise TaskWorkspaceError("Git configuration file is malformed") from error
+    if "\x00" in text or "\r" in text:
+        raise TaskWorkspaceError("Git configuration file contains control characters")
+
+    section = ""
+    subsection = ""
+    record_list: list[tuple[str, str]] = []
+    for raw_line in text.split("\n"):
+        line = raw_line.strip()
+        if not line or line.startswith(("#", ";")):
+            continue
+        if raw_line.rstrip().endswith("\\"):
+            raise TaskWorkspaceError("Git configuration continuations are unsupported")
+        section_match = _GIT_CONFIG_SECTION_PATTERN.fullmatch(line)
+        if section_match is not None:
+            section = section_match.group("section").lower()
+            encoded_subsection = section_match.group("subsection")
+            subsection = ""
+            if encoded_subsection is not None:
+                try:
+                    decoded_subsection = json.loads(f'"{encoded_subsection}"')
+                except json.JSONDecodeError as error:
+                    raise TaskWorkspaceError("Git configuration section is malformed") from error
+                if (
+                    not isinstance(decoded_subsection, str)
+                    or not decoded_subsection
+                    or any(ord(character) < 32 or ord(character) == 127 for character in decoded_subsection)
+                ):
+                    raise TaskWorkspaceError("Git configuration section is malformed")
+                subsection = decoded_subsection
+            continue
+        variable_match = _GIT_CONFIG_VARIABLE_PATTERN.fullmatch(line)
+        if not section or variable_match is None:
+            raise TaskWorkspaceError("Git configuration syntax is unsupported")
+        key = variable_match.group("key").lower()
+        raw_value = variable_match.group("value")
+        value = "true" if raw_value is None else raw_value.strip()
+        if value.startswith('"'):
+            try:
+                value, end_index = json.JSONDecoder().raw_decode(value)
+            except json.JSONDecodeError as error:
+                raise TaskWorkspaceError("Git configuration value is malformed") from error
+            if not isinstance(value, str) or raw_value is None or raw_value.strip()[end_index:].strip():
+                raise TaskWorkspaceError("Git configuration value is malformed")
+        if not isinstance(value, str) or any(ord(character) < 32 or ord(character) == 127 for character in value):
+            raise TaskWorkspaceError("Git configuration value contains control characters")
+        name_part_list = [section]
+        if subsection:
+            name_part_list.append(subsection)
+        name_part_list.append(key)
+        record_list.append((".".join(name_part_list), value))
+    return record_list
+
+
+def git_config_file_record_list_get(path: Path, *, required: bool = True) -> list[tuple[str, str]]:
+    """Read one strict physical Git-format config without invoking Git.
+
+    Args:
+        path: Exact config file path.
+        required: Whether the file must exist.
+
+    Returns:
+        Ordered canonical config-name/value records.
+    """
+
+    try:
+        metadata = path.stat(follow_symlinks=False)
+    except FileNotFoundError:
+        if required:
+            raise TaskWorkspaceError("Git configuration file is missing")
+        return []
+    except OSError as error:
+        raise TaskWorkspaceError("Git configuration file is unavailable") from error
+    if not stat.S_ISREG(metadata.st_mode) or path.is_symlink() or metadata.st_nlink != 1:
+        raise TaskWorkspaceError("Git configuration must be one physical ordinary file")
+    try:
+        payload_bytes = path.read_bytes()
+    except OSError as error:
+        raise TaskWorkspaceError("Git configuration file is malformed") from error
+    return git_config_bytes_record_list_get(payload_bytes)
+
+
+def _git_repository_config_record_list_get(repository: Path) -> list[tuple[str, str]]:
+    """Return repository/common/worktree config records without invoking Git."""
+
+    metadata_directory_pair = _git_repository_metadata_directory_pair_get(repository)
+    if metadata_directory_pair is None:
+        return []
+    git_directory, common_directory = metadata_directory_pair
+    record_list = git_config_file_record_list_get(common_directory / "config")
+    record_list.extend(git_config_file_record_list_get(git_directory / "config.worktree", required=False))
+    return record_list
+
+
+def _git_transport_destination_parse(value: str) -> GitTransportDestination:
+    """Translate strict Git transport parsing into the workspace boundary."""
+
+    try:
+        return git_transport_destination_get(value)
+    except GitTransportError as error:
+        raise TaskWorkspaceError(str(error)) from error
+
+
+def git_relative_transport_destination_parse(
+    parent: GitTransportDestination,
+    value: str,
+) -> GitTransportDestination:
+    """Translate relative submodule parsing into the workspace boundary."""
+
+    try:
+        return git_relative_transport_destination_get(parent, value)
+    except GitTransportError as error:
+        raise TaskWorkspaceError(str(error)) from error
+
+
+def _git_origin_transport_pair_from_record_list_get(
+    record_list: Sequence[tuple[str, str]],
+    *,
+    required: bool,
+) -> tuple[GitTransportDestination, GitTransportDestination] | None:
+    """Return one exact fetch/push transport pair from direct config records."""
+
+    fetch_value_list = [value for name, value in record_list if name == "remote.origin.url"]
+    push_value_list = [value for name, value in record_list if name == "remote.origin.pushurl"]
+    if not fetch_value_list:
+        if required:
+            raise TaskWorkspaceError("Git origin requires one exact transport destination")
+        return None
+    if len(fetch_value_list) != 1 or len(push_value_list) > 1:
+        raise TaskWorkspaceError("Git origin requires one exact fetch and push destination")
+    fetch = _git_transport_destination_parse(fetch_value_list[0])
+    push = _git_transport_destination_parse(push_value_list[0] if push_value_list else fetch_value_list[0])
+    if fetch.identity != push.identity:
+        raise TaskWorkspaceError("Git origin fetch and push destinations differ from the repository owner")
+    return fetch, push
+
+
+def git_repository_origin_transport_pair_get(
+    repository: Path,
+    *,
+    required: bool = True,
+) -> tuple[GitTransportDestination, GitTransportDestination] | None:
+    """Read and parse the current origin before any Git process can execute."""
+
+    return _git_origin_transport_pair_from_record_list_get(
+        _git_repository_config_record_list_get(repository),
+        required=required,
+    )
+
+
+def git_repository_origin_fetch_transport_get(
+    repository: Path,
+    *,
+    required: bool = True,
+) -> GitTransportDestination | None:
+    """Read the sole fetch transport even when a push override is invalid."""
+
+    record_list = _git_repository_config_record_list_get(repository)
+    fetch_value_list = [value for name, value in record_list if name == "remote.origin.url"]
+    if not fetch_value_list:
+        if required:
+            raise TaskWorkspaceError("Git origin requires one exact transport destination")
+        return None
+    if len(fetch_value_list) != 1:
+        raise TaskWorkspaceError("Git origin requires one exact fetch destination")
+    return _git_transport_destination_parse(fetch_value_list[0])
+
+
+def _git_repository_config_validate(repository: Path) -> None:
+    """Reject ambient transport, helper, include, and checkout execution config."""
+
+    record_list = _git_repository_config_record_list_get(repository)
+    origin_pair = _git_origin_transport_pair_from_record_list_get(record_list, required=False)
+    for name, value in record_list:
+        normalized_name = name.lower()
+        if (
+            normalized_name.startswith(
+                ("credential.", "filter.", "http.", "https.", "include.", "includeif.", "protocol.", "url.")
+            )
+            or normalized_name
+            in {
+                "core.attributesfile",
+                "core.askpass",
+                "core.fsmonitor",
+                "core.gitproxy",
+                "core.hookspath",
+                "core.pager",
+                "core.sshcommand",
+                "diff.external",
+            }
+            or normalized_name.startswith(("difftool.", "mergetool."))
+            or (
+                normalized_name.startswith("remote.")
+                and normalized_name.rsplit(".", 1)[-1]
+                in {"proxy", "proxyauthmethod", "receivepack", "uploadpack", "vcs"}
+            )
+            or (
+                normalized_name.startswith("submodule.")
+                and normalized_name.endswith(".update")
+                and value.startswith("!")
+            )
+        ):
+            raise TaskWorkspaceError("Git repository contains ambient transport, helper, or filter configuration")
+        if normalized_name.startswith("remote.") and normalized_name.rsplit(".", 1)[-1] in {"url", "pushurl"}:
+            _git_transport_destination_parse(value)
+        if normalized_name.startswith("submodule.") and normalized_name.endswith(".url"):
+            if origin_pair is None:
+                _git_transport_destination_parse(value)
+            else:
+                git_relative_transport_destination_parse(origin_pair[0], value)
+    module_record_list = git_config_file_record_list_get(repository / ".gitmodules", required=False)
+    for name, value in module_record_list:
+        normalized_name = name.lower()
+        if not normalized_name.startswith("submodule."):
+            raise TaskWorkspaceError("Git submodule configuration contains a foreign section")
+        if normalized_name.endswith(".url"):
+            if origin_pair is None:
+                _git_transport_destination_parse(value)
+            else:
+                git_relative_transport_destination_parse(origin_pair[0], value)
+        if normalized_name.endswith(".update") and value.startswith("!"):
+            raise TaskWorkspaceError("Git submodule configuration contains an external update helper")
+
+
+def _private_temporary_path_remove(path: Path) -> None:
+    """Remove one exact owned private temporary file without following aliases."""
+
+    try:
+        metadata = path.stat(follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    except OSError as error:
+        raise TaskWorkspaceError("Workspace private temporary state is unavailable") from error
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != os.getuid()
+        or metadata.st_nlink != 1
+        or stat.S_IMODE(metadata.st_mode) & 0o077
+    ):
+        raise TaskWorkspaceError("Workspace private temporary state is not one owned private ordinary file")
+    try:
+        path.unlink()
+        _directory_sync(path.parent)
+    except OSError as error:
+        raise TaskWorkspaceError("Workspace private temporary state could not be removed") from error
 
 
 def _directory_sync(path: Path) -> None:

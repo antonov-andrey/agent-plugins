@@ -16,6 +16,9 @@ _SSH_USERNAME_PATTERN = re.compile(r"[A-Za-z0-9._-]+")
 _HEX_DIGIT_SET = frozenset("0123456789abcdefABCDEF")
 _URI_UNRESERVED_CHARACTER_SET = frozenset(ascii_letters + digits + "-._~")
 _SCP_RELATIVE_SCHEME = "ssh+scp"
+_GITHUB_HOST = "github.com"
+_GITHUB_REPOSITORY_PATH_PATTERN = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
+_GITHUB_IDENTITY_PREFIX = f"{_GITHUB_HOST}/"
 
 
 class GitOriginError(RuntimeError):
@@ -87,6 +90,31 @@ def _network_host_normalize(value: str) -> str:
         raise GitOriginError("Repository origin URL contains an invalid host") from error
 
 
+def _github_identity_get(
+    *,
+    scheme: str,
+    username: str | None,
+    port: int | None,
+    normalized_path: str,
+    scp_path_is_absolute: bool | None = None,
+) -> str:
+    """Return the sole GitHub repository identity for supported transport aliases."""
+
+    supported = (
+        (scheme == "https" and username is None)
+        or (scheme == "ssh" and username == "git")
+        or (scheme == _SCP_RELATIVE_SCHEME and username == "git" and scp_path_is_absolute is False)
+    )
+    if (
+        not supported
+        or port is not None
+        or _GITHUB_REPOSITORY_PATH_PATTERN.fullmatch(normalized_path) is None
+        or any(part in {".", ".."} for part in normalized_path.split("/"))
+    ):
+        raise GitOriginError("GitHub repository origin uses an unsupported or ambiguous form")
+    return f"{_GITHUB_IDENTITY_PREFIX}{normalized_path.lower()}"
+
+
 def _file_url_identity_get(path_text: str) -> str:
     """Return one location-independent canonical identity for an absolute file URL path."""
 
@@ -106,82 +134,6 @@ def _file_url_identity_get(path_text: str) -> str:
     return path.as_uri()
 
 
-def legacy_v1_origin_identity_get(value: str) -> str | None:
-    """Return the identity produced by the previous workspace owner.
-
-    This function exists only for a narrow private-state migration. It derives
-    the old identity from the exact current configured remote and never accepts
-    a state-provided value as input.
-
-    Args:
-        value: Exact current configured Git remote.
-
-    Returns:
-        Previous identity when that owner accepted the remote, or absence.
-    """
-
-    if not isinstance(value, str) or not value or any(character in value for character in ("\x00", "\n", "\r")):
-        return None
-    if value.startswith("git@") and ":" in value:
-        authority, path = value.split(":", 1)
-        host = authority.removeprefix("git@").lower()
-        normalized_path = path.removesuffix(".git").strip("/")
-        if not host or not normalized_path or any(character in path for character in ("?", "#")):
-            return None
-        return f"ssh://{host}/{normalized_path}"
-    try:
-        parsed = urlsplit(value)
-        port = parsed.port
-    except ValueError:
-        return None
-    if parsed.scheme in {"http", "https", "ssh", "git"} and parsed.hostname:
-        if parsed.query or parsed.fragment or parsed.password is not None:
-            return None
-        if parsed.scheme in {"http", "https", "git"} and parsed.username is not None:
-            return None
-        normalized_path = parsed.path.removesuffix(".git").strip("/")
-        if not normalized_path:
-            return None
-        host = parsed.hostname.lower()
-        authority = host if port is None else f"{host}:{port}"
-        if parsed.scheme == "ssh" and parsed.username not in {None, "git"}:
-            authority = f"{parsed.username}@{authority}"
-        return f"{parsed.scheme.lower()}://{authority}/{normalized_path}"
-    if parsed.scheme == "file":
-        if (
-            parsed.query
-            or parsed.fragment
-            or parsed.username
-            or parsed.password
-            or parsed.netloc not in {"", "localhost"}
-        ):
-            return None
-        return f"file://{Path(parsed.path).resolve(strict=False)}"
-    path = Path(value)
-    if path.is_absolute():
-        return f"file://{path.resolve(strict=False)}"
-    return None
-
-
-def legacy_origin_identity_set_get(value: str) -> frozenset[str]:
-    """Return only predecessor identities derived from one current remote.
-
-    The v1 owner omitted the conventional Git SSH user. The immediately
-    preceding owner also collapsed SCP-relative paths into absolute SSH URL
-    paths. Both values are derived from the configured remote rather than from
-    untrusted persisted state.
-    """
-
-    identity_set = {identity for identity in (legacy_v1_origin_identity_get(value),) if identity is not None}
-    scp_match = _SCP_ORIGIN_PATTERN.fullmatch(value)
-    if scp_match is not None and not scp_match.group("path").startswith("/"):
-        username = scp_match.group("username")
-        host = _network_host_normalize(scp_match.group("host"))
-        normalized_path = _network_path_normalize(scp_match.group("path"))
-        identity_set.add(f"ssh://{username}@{_network_authority_render(host, None)}/{normalized_path}")
-    return frozenset(identity_set)
-
-
 def origin_identity_get(value: str) -> str:
     """Normalize one credential-free Git origin for equality.
 
@@ -194,13 +146,30 @@ def origin_identity_get(value: str) -> str:
 
     if not isinstance(value, str) or not value or any(character in value for character in ("\x00", "\n", "\r")):
         raise GitOriginError("Repository origin URL is malformed")
+    if value.startswith(_GITHUB_IDENTITY_PREFIX):
+        normalized_path = value.removeprefix(_GITHUB_IDENTITY_PREFIX)
+        if (
+            _GITHUB_REPOSITORY_PATH_PATTERN.fullmatch(normalized_path) is None
+            or normalized_path.endswith(".git")
+            or any(part in {".", ".."} for part in normalized_path.split("/"))
+        ):
+            raise GitOriginError("GitHub repository identity uses an unsupported or ambiguous form")
+        return f"{_GITHUB_IDENTITY_PREFIX}{normalized_path.lower()}"
     scp_match = _SCP_ORIGIN_PATTERN.fullmatch(value)
     if scp_match is not None:
         username = scp_match.group("username")
         host = _network_host_normalize(scp_match.group("host"))
         path = scp_match.group("path")
         normalized_path = _network_path_normalize(path)
-        scheme = "ssh" if path.startswith("/") or host == "github.com" else _SCP_RELATIVE_SCHEME
+        if host == _GITHUB_HOST:
+            return _github_identity_get(
+                scheme=_SCP_RELATIVE_SCHEME,
+                username=username,
+                port=None,
+                normalized_path=normalized_path,
+                scp_path_is_absolute=path.startswith("/"),
+            )
+        scheme = "ssh" if path.startswith("/") else _SCP_RELATIVE_SCHEME
         return f"{scheme}://{username}@{_network_authority_render(host, None)}/{normalized_path}"
     try:
         parsed = urlsplit(value)
@@ -216,13 +185,19 @@ def origin_identity_get(value: str) -> str:
             raise GitOriginError("Repository SCP identity contains an invalid authority")
         normalized_path = _network_path_normalize(parsed.path)
         host = _network_host_normalize(parsed.hostname)
+        if host == _GITHUB_HOST:
+            return _github_identity_get(
+                scheme=parsed.scheme.lower(),
+                username=parsed.username,
+                port=port,
+                normalized_path=normalized_path,
+            )
         authority = _network_authority_render(host, port)
         if parsed.scheme in {"ssh", _SCP_RELATIVE_SCHEME} and parsed.username is not None:
             if _SSH_USERNAME_PATTERN.fullmatch(parsed.username) is None:
                 raise GitOriginError("Repository origin URL contains an invalid SSH user")
             authority = f"{parsed.username}@{authority}"
-        scheme = "ssh" if parsed.scheme == _SCP_RELATIVE_SCHEME and host == "github.com" else parsed.scheme.lower()
-        return f"{scheme}://{authority}/{normalized_path}"
+        return f"{parsed.scheme.lower()}://{authority}/{normalized_path}"
     if parsed.scheme == "file":
         if (
             parsed.query
