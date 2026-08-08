@@ -5,6 +5,15 @@ from __future__ import annotations
 from linear_boundary.configuration.model import LinearLabel, StatusDefinition
 from linear_boundary.status import IssueStatusCategory, ProjectStatusCategory
 
+ISSUE_STATUS_LEGACY_REVIEW = StatusDefinition(
+    "",
+    "Human Review",
+    IssueStatusCategory.STARTED,
+    "#7C3AED",
+    "Candidate awaits a human decision",
+    400.0,
+)
+
 ISSUE_STATUS_DESIRED = (
     StatusDefinition("", "Backlog", IssueStatusCategory.BACKLOG, "#6B7280", "Idea or inactive import staging", 100.0),
     StatusDefinition(

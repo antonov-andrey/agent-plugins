@@ -25,6 +25,7 @@ from json_contract import JsonContractError, json_load_strict
 from linear_boundary.configuration.graphql import LinearWorkflowConfigurationGraphQL
 from linear_boundary.configuration.catalog import (
     ISSUE_STATUS_DESIRED,
+    ISSUE_STATUS_LEGACY_REVIEW,
     LABEL_DESIRED,
     PROJECT_STATUS_DESIRED,
 )
@@ -176,7 +177,7 @@ def test_status_apply_precedes_still_missing_official_mcp_labels(
     spec.loader.exec_module(module)
     approved = (
         WorkflowConfigurationReconciler()
-        .plan_get(WorkflowConfigurationSnapshot(_destination(), [], [], [], []))
+        .plan_get(WorkflowConfigurationSnapshot(_destination(), [], [], [], [], []))
         .status_identifier_allocate()
     )
     labels_path = tmp_path / "labels.json"
@@ -235,7 +236,7 @@ def _status_node(item: StatusDefinition, index: int) -> dict[str, object]:
     """
 
     return {
-        "id": f"20000000-0000-4000-8000-{index:012d}",
+        "id": item.id or f"20000000-0000-4000-8000-{index:012d}",
         "name": item.name,
         "type": item.category,
         "color": item.color,
@@ -247,6 +248,7 @@ def _status_node(item: StatusDefinition, index: int) -> dict[str, object]:
 def _workflow_response(
     status_list: list[StatusDefinition],
     *,
+    active_status_name_set: set[str] | None = None,
     has_next: bool = False,
     end_cursor: str | None = None,
 ) -> dict[str, object]:
@@ -254,6 +256,7 @@ def _workflow_response(
 
     Args:
         status_list: Page definitions.
+        active_status_name_set: Status names that currently own a non-archived issue.
         has_next: Pagination flag.
         end_cursor: Pagination cursor.
 
@@ -261,6 +264,12 @@ def _workflow_response(
         GraphQL data object.
     """
 
+    node_list = [_status_node(item, index) for index, item in enumerate(status_list, 1)]
+    for index, node in enumerate(node_list, 1):
+        issue_list = []
+        if active_status_name_set is not None and node["name"] in active_status_name_set:
+            issue_list = [{"id": f"60000000-0000-4000-8000-{index:012d}"}]
+        node["issues"] = {"nodes": issue_list}
     return {
         "viewer": {"id": VIEWER_ID, "admin": True, "guest": False, "active": True},
         "organization": {"id": WORKSPACE_ID},
@@ -271,10 +280,51 @@ def _workflow_response(
                 "archivedAt": None,
             },
             "states": {
-                "nodes": [_status_node(item, index) for index, item in enumerate(status_list, 1)],
+                "nodes": node_list,
                 "pageInfo": {"hasNextPage": has_next, "endCursor": end_cursor},
             },
         },
+    }
+
+
+def _workflow_status_update_response(status: StatusDefinition) -> dict[str, object]:
+    """Return one full successful in-place status mutation response."""
+
+    return {
+        "workflowStateUpdate": {
+            "success": True,
+            "workflowState": {
+                "id": status.id,
+                "name": status.name,
+                "type": status.category,
+                "color": status.color,
+                "description": status.description,
+                "position": status.position,
+            },
+        }
+    }
+
+
+def _workflow_status_archive_response(status: StatusDefinition) -> dict[str, object]:
+    """Return one successful archive response retaining the historical identity."""
+
+    return {
+        "workflowStateArchive": {
+            "success": True,
+            "entity": {"id": status.id, "name": status.name, "archivedAt": "2026-08-08T05:00:00.000Z"},
+        }
+    }
+
+
+def _workflow_status_archive_readback(status: StatusDefinition) -> dict[str, object]:
+    """Return one direct archived-status readback by ID."""
+
+    return {
+        "workflowState": {
+            "id": status.id,
+            "name": status.name,
+            "archivedAt": "2026-08-08T05:00:00.000Z",
+        }
     }
 
 
@@ -353,6 +403,7 @@ def test_configuration_plan_is_exact_and_idempotent() -> None:
     partial = WorkflowConfigurationSnapshot(
         destination=_destination(),
         issue_status_list=list(_existing_status(item, index) for index, item in enumerate(ISSUE_STATUS_DESIRED[:3], 1)),
+        active_issue_status_id_list=[],
         project_status_list=[],
         label_list=[],
         git_status_automation_list=[_git_status_automation(1)],
@@ -369,6 +420,7 @@ def test_configuration_plan_is_exact_and_idempotent() -> None:
     current = WorkflowConfigurationSnapshot(
         destination=_destination(),
         issue_status_list=list(_existing_status(item, index) for index, item in enumerate(ISSUE_STATUS_DESIRED, 1)),
+        active_issue_status_id_list=[],
         project_status_list=list(
             _existing_status(item, index + 20) for index, item in enumerate(PROJECT_STATUS_DESIRED, 1)
         ),
@@ -387,6 +439,7 @@ def test_configuration_plan_roundtrip_and_fresh_subset_guard() -> None:
         .plan_get(
             WorkflowConfigurationSnapshot(
                 _destination(),
+                [],
                 [],
                 [],
                 [],
@@ -410,6 +463,8 @@ def test_configuration_plan_roundtrip_and_fresh_subset_guard() -> None:
     current = ConfigurationPlan(
         destination=approved.destination,
         issue_status_create_list=[replace(item, id="") for item in approved.issue_status_create_list[1:]],
+        issue_status_update_list=[],
+        issue_status_archive_list=[],
         project_status_create_list=[replace(item, id="") for item in approved.project_status_create_list],
         label_create_list=[],
         git_status_automation_delete_list=approved.git_status_automation_delete_list[:1],
@@ -441,6 +496,81 @@ def test_configuration_plan_roundtrip_and_fresh_subset_guard() -> None:
         ).subset_require(approved)
 
 
+def test_configuration_migrates_provider_review_identity_and_archives_only_inactive_alias() -> None:
+    """Human Review retains canonical history while inactive In Review is archived in place."""
+
+    desired_review = next(item for item in ISSUE_STATUS_DESIRED if item.name == "Review")
+    provider_review = _existing_status(ISSUE_STATUS_LEGACY_REVIEW, 30)
+    inactive_alias = StatusDefinition(
+        id="50000000-0000-4000-8000-000000000031",
+        name="In Review",
+        category=desired_review.category,
+        color="#5E6AD2",
+        description="Legacy inactive alias",
+        position=450.0,
+    )
+    current_status_list = [
+        _existing_status(item, index) for index, item in enumerate(ISSUE_STATUS_DESIRED, 1) if item.name != "Review"
+    ]
+    current_status_list.extend((provider_review, inactive_alias))
+
+    plan = WorkflowConfigurationReconciler().plan_get(
+        WorkflowConfigurationSnapshot(_destination(), current_status_list, [], [], [], [])
+    )
+
+    assert plan.issue_status_create_list == []
+    assert plan.issue_status_update_list == [replace(desired_review, id=provider_review.id)]
+    assert plan.issue_status_archive_list == [inactive_alias]
+    assert plan.can_mutate()
+    assert ConfigurationPlan.from_payload(plan.payload()) == plan
+    with pytest.raises(LinearContractError, match="archive plan changed"):
+        replace(
+            plan,
+            issue_status_archive_list=[replace(inactive_alias, description="changed")],
+        ).subset_require(plan)
+
+    active_alias_plan = WorkflowConfigurationReconciler().plan_get(
+        WorkflowConfigurationSnapshot(
+            _destination(),
+            current_status_list,
+            [inactive_alias.id],
+            [],
+            [],
+            [],
+        )
+    )
+    assert not active_alias_plan.can_mutate()
+    assert active_alias_plan.issue_status_update_list == []
+    assert active_alias_plan.issue_status_archive_list == []
+    assert ("issue-status", "Review", "In Review alias still owns an active issue") in {
+        (item.kind, item.name, item.reason) for item in active_alias_plan.conflict_list
+    }
+
+
+def test_configuration_rejects_ambiguous_parallel_review_history() -> None:
+    """An existing Review plus the provider-history identity requires a human scope decision."""
+
+    desired_review = next(item for item in ISSUE_STATUS_DESIRED if item.name == "Review")
+    plan = WorkflowConfigurationReconciler().plan_get(
+        WorkflowConfigurationSnapshot(
+            _destination(),
+            [_existing_status(desired_review, 32), _existing_status(ISSUE_STATUS_LEGACY_REVIEW, 33)],
+            [],
+            [],
+            [],
+            [],
+        )
+    )
+
+    assert not plan.can_mutate()
+    assert all(item.name != "Review" for item in plan.issue_status_create_list)
+    assert plan.issue_status_update_list == []
+    assert plan.issue_status_archive_list == []
+    assert ("issue-status", "Review", "canonical and provider-history Review identities coexist") in {
+        (item.kind, item.name, item.reason) for item in plan.conflict_list
+    }
+
+
 def test_configuration_rejects_wrong_category_and_foreign_label() -> None:
     """Same-name foreign or semantically wrong objects are never overwritten."""
 
@@ -456,7 +586,7 @@ def test_configuration_rejects_wrong_category_and_foreign_label() -> None:
     foreign_label = _existing_label(LABEL_DESIRED[0], 2)
     foreign_label = LinearLabel(foreign_label.id, foreign_label.name, foreign_label.color, "foreign owner")
     plan = WorkflowConfigurationReconciler().plan_get(
-        WorkflowConfigurationSnapshot(_destination(), [wrong_status], [], [foreign_label], [])
+        WorkflowConfigurationSnapshot(_destination(), [wrong_status], [], [], [foreign_label], [])
     )
 
     assert not plan.can_mutate()
@@ -470,14 +600,14 @@ def test_configuration_rejects_wrong_category_and_foreign_label() -> None:
         color="#000000",
     )
     color_plan = WorkflowConfigurationReconciler().plan_get(
-        WorkflowConfigurationSnapshot(_destination(), [], [], [wrong_color], [])
+        WorkflowConfigurationSnapshot(_destination(), [], [], [], [wrong_color], [])
     )
     assert ("label", "task:implementation") in {(item.kind, item.name) for item in color_plan.conflict_list}
 
     wrong_case_status = replace(_existing_status(ISSUE_STATUS_DESIRED[1], 4), name="todo")
     wrong_case_label = replace(_existing_label(LABEL_DESIRED[0], 5), name="TASK:IMPLEMENTATION")
     casing_plan = WorkflowConfigurationReconciler().plan_get(
-        WorkflowConfigurationSnapshot(_destination(), [wrong_case_status], [], [wrong_case_label], [])
+        WorkflowConfigurationSnapshot(_destination(), [wrong_case_status], [], [], [wrong_case_label], [])
     )
     assert {(item.kind, item.name, item.reason) for item in casing_plan.conflict_list} == {
         ("issue-status", "Todo", "same name uses different casing"),
@@ -1276,7 +1406,12 @@ def test_graphql_configuration_fully_paginates_and_guards_exact_destination() ->
 
     transport = _ScriptedTransport(
         [
-            _workflow_response(ISSUE_STATUS_DESIRED[:4], has_next=True, end_cursor="next-page"),
+            _workflow_response(
+                ISSUE_STATUS_DESIRED[:4],
+                active_status_name_set={"Review"},
+                has_next=True,
+                end_cursor="next-page",
+            ),
             _workflow_response(ISSUE_STATUS_DESIRED[4:]),
             _git_status_automation_response(
                 [_git_status_automation(1)],
@@ -1296,6 +1431,7 @@ def test_graphql_configuration_fully_paginates_and_guards_exact_destination() ->
     )
 
     assert [item.name for item in current.issue_status_list] == [item.name for item in ISSUE_STATUS_DESIRED]
+    assert current.active_issue_status_id_list == ["20000000-0000-4000-8000-000000000004"]
     assert [item.name for item in current.project_status_list] == [item.name for item in PROJECT_STATUS_DESIRED]
     assert current.git_status_automation_list == [
         _git_status_automation(1),
@@ -1305,6 +1441,7 @@ def test_graphql_configuration_fully_paginates_and_guards_exact_destination() ->
     assert transport.call_list[3]["variables"]["after"] == "next-automation-page"
     assert all(item["variables"]["viewerId"] == VIEWER_ID for item in transport.call_list[:2])
     assert "membership(userId: $viewerId)" in transport.call_list[0]["document"]
+    assert "issues(first: 1, includeArchived: false)" in transport.call_list[0]["document"]
     assert "gitAutomationStates(first: 100" in transport.call_list[2]["document"]
     assert "projectStatuses(first: 100" in transport.call_list[4]["document"]
     assert all(item["repeat_safe"] is True for item in transport.call_list)
@@ -1344,6 +1481,7 @@ def test_graphql_configuration_rereads_approved_destination_before_status_mutati
         issue_status_list=list(
             _existing_status(item, index) for index, item in enumerate(partial_issue_status_list, 1)
         ),
+        active_issue_status_id_list=[],
         project_status_list=list(
             _existing_status(item, index + 20) for index, item in enumerate(partial_project_status_list, 1)
         ),
@@ -1395,6 +1533,78 @@ def test_graphql_configuration_rereads_approved_destination_before_status_mutati
     assert "status { id name type color description position }" in project_create_call["document"]
 
 
+def test_graphql_configuration_migrates_review_identity_then_archives_alias_with_readback() -> None:
+    """Apply preserves provider Review history and proves the inactive alias remains archived by ID."""
+
+    desired_review = next(item for item in ISSUE_STATUS_DESIRED if item.name == "Review")
+    provider_review = _existing_status(ISSUE_STATUS_LEGACY_REVIEW, 40)
+    inactive_alias = StatusDefinition(
+        id="50000000-0000-4000-8000-000000000041",
+        name="In Review",
+        category=desired_review.category,
+        color="#5E6AD2",
+        description="Legacy inactive alias",
+        position=450.0,
+    )
+    current_status_list = [
+        _existing_status(item, index) for index, item in enumerate(ISSUE_STATUS_DESIRED, 1) if item.name != "Review"
+    ]
+    current_status_list.extend((provider_review, inactive_alias))
+    planning_transport = _ScriptedTransport(
+        [
+            _workflow_response(current_status_list),
+            _git_status_automation_response([]),
+            _project_status_response(PROJECT_STATUS_DESIRED),
+        ]
+    )
+    approved = LinearWorkflowConfigurationGraphQL(planning_transport, WorkflowConfigurationReconciler()).plan(
+        expected_workspace_id=WORKSPACE_ID,
+        expected_viewer_id=VIEWER_ID,
+        expected_team_id=TEAM_ID,
+        label_list=list(_existing_label(item, index) for index, item in enumerate(LABEL_DESIRED, 1)),
+    )
+    review_update = approved.issue_status_update_list[0]
+    alias_archive = approved.issue_status_archive_list[0]
+    final_status_list = [
+        review_update if status.id == provider_review.id else status
+        for status in current_status_list
+        if status.id != inactive_alias.id
+    ]
+    transport = _ScriptedTransport(
+        [
+            _workflow_response(current_status_list),
+            _git_status_automation_response([]),
+            _project_status_response(PROJECT_STATUS_DESIRED),
+            _workflow_status_update_response(review_update),
+            _workflow_status_archive_response(alias_archive),
+            _workflow_response(final_status_list),
+            _git_status_automation_response([]),
+            _project_status_response(PROJECT_STATUS_DESIRED),
+            _workflow_status_archive_readback(alias_archive),
+        ]
+    )
+
+    LinearWorkflowConfigurationGraphQL(transport, WorkflowConfigurationReconciler()).approved_configuration_apply(
+        expected_workspace_id=WORKSPACE_ID,
+        expected_viewer_id=VIEWER_ID,
+        expected_team_id=TEAM_ID,
+        approved_plan=approved,
+    )
+
+    operation_list = [item["operation_name"] for item in transport.call_list]
+    assert operation_list[3:5] == ["LinearAgentWorkflowStateUpdate", "LinearAgentWorkflowStateArchive"]
+    assert operation_list[-1] == "LinearAgentWorkflowStateArchiveReadback"
+    update_call = transport.call_list[3]
+    assert update_call["variables"]["id"] == provider_review.id
+    assert update_call["variables"]["input"]["name"] == "Review"
+    assert "type" not in update_call["variables"]["input"]
+    archive_call = transport.call_list[4]
+    assert archive_call["variables"] == {"id": inactive_alias.id}
+    assert archive_call["repeat_safe"] is False
+    assert transport.call_list[-1]["variables"] == {"id": inactive_alias.id}
+    assert transport.call_list[-1]["repeat_safe"] is True
+
+
 def test_graphql_configuration_deletes_every_exact_git_status_automation_before_readback() -> None:
     """Provider-owned task statuses cannot be changed by default or branch Git rules."""
 
@@ -1405,6 +1615,7 @@ def test_graphql_configuration_deletes_every_exact_git_status_automation_before_
     current_snapshot = WorkflowConfigurationSnapshot(
         destination=_destination(),
         issue_status_list=list(_existing_status(item, index) for index, item in enumerate(ISSUE_STATUS_DESIRED, 1)),
+        active_issue_status_id_list=[],
         project_status_list=list(
             _existing_status(item, index + 20) for index, item in enumerate(PROJECT_STATUS_DESIRED, 1)
         ),
