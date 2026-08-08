@@ -173,6 +173,89 @@ def test_bootstrap_manifest_parser_rejects_yaml_outside_owned_subset(payload: by
         BootstrapPlan.from_manifest(payload, main_root=tmp_path)
 
 
+def test_copy_bootstrap_rejects_source_root_symlink_before_destination_creation(tmp_path: Path) -> None:
+    """A copy root cannot import bytes through a symlink or create its destination parent."""
+
+    main_root = tmp_path / "main"
+    task_root = tmp_path / "task"
+    foreign_root = tmp_path / "foreign"
+    (main_root / "owned").mkdir(parents=True)
+    task_root.mkdir()
+    foreign_root.mkdir()
+    (foreign_root / "secret.txt").write_text("foreign\n", encoding="utf-8")
+    (main_root / "owned" / "resource").symlink_to(foreign_root, target_is_directory=True)
+    existing_destination = task_root / "owned" / "resource"
+    existing_destination.mkdir(parents=True)
+    (existing_destination / "preserved.txt").write_text("preserved\n", encoding="utf-8")
+    resource = BootstrapResource(relative_path="owned/resource", kind="copy", skipped=False)
+
+    with pytest.raises(TaskWorkspaceError, match="source may not be a symlink"):
+        resource.materialize(main_root=main_root.resolve(), task_root=task_root.resolve())
+
+    assert [path.name for path in existing_destination.iterdir()] == ["preserved.txt"]
+    assert (existing_destination / "preserved.txt").read_text(encoding="utf-8") == "preserved\n"
+    assert (foreign_root / "secret.txt").read_text(encoding="utf-8") == "foreign\n"
+
+
+def test_copy_bootstrap_rejects_nested_symlink_before_destination_creation(tmp_path: Path) -> None:
+    """A nested copy symlink is rejected before any owned destination exists."""
+
+    main_root = tmp_path / "main"
+    task_root = tmp_path / "task"
+    source_root = main_root / "owned" / "resource"
+    source_root.mkdir(parents=True)
+    task_root.mkdir()
+    foreign = tmp_path / "foreign.txt"
+    foreign.write_text("foreign\n", encoding="utf-8")
+    (source_root / "nested-link").symlink_to(foreign)
+    resource = BootstrapResource(relative_path="owned/resource", kind="copy", skipped=False)
+
+    with pytest.raises(TaskWorkspaceError, match="source may not be a symlink"):
+        resource.materialize(main_root=main_root.resolve(), task_root=task_root.resolve())
+
+    assert list(task_root.iterdir()) == []
+    assert foreign.read_text(encoding="utf-8") == "foreign\n"
+
+
+def test_copy_bootstrap_rejects_unsupported_source_type_before_destination_creation(tmp_path: Path) -> None:
+    """A special source entry is rejected before any owned destination exists."""
+
+    main_root = tmp_path / "main"
+    task_root = tmp_path / "task"
+    source_root = main_root / "owned" / "resource"
+    source_root.mkdir(parents=True)
+    task_root.mkdir()
+    os.mkfifo(source_root / "pipe")
+    resource = BootstrapResource(relative_path="owned/resource", kind="copy", skipped=False)
+
+    with pytest.raises(TaskWorkspaceError, match="source has an unsupported type"):
+        resource.materialize(main_root=main_root.resolve(), task_root=task_root.resolve())
+
+    assert list(task_root.iterdir()) == []
+
+
+def test_copy_bootstrap_materializes_and_reads_back_one_valid_tree(tmp_path: Path) -> None:
+    """A physical regular-file tree is copied exactly and remains ready on readback."""
+
+    main_root = tmp_path / "main"
+    task_root = tmp_path / "task"
+    source_root = main_root / "owned" / "resource"
+    (source_root / "nested").mkdir(parents=True)
+    task_root.mkdir()
+    source_file = source_root / "nested" / "config.json"
+    source_file.write_text('{"mode":"test"}\n', encoding="utf-8")
+    source_file.chmod(0o640)
+    resource = BootstrapResource(relative_path="owned/resource", kind="copy", skipped=False)
+
+    resource.materialize(main_root=main_root.resolve(), task_root=task_root.resolve())
+    resource.ready_require(main_root=main_root.resolve(), task_root=task_root.resolve())
+
+    destination_file = task_root / "owned" / "resource" / "nested" / "config.json"
+    assert destination_file.read_text(encoding="utf-8") == '{"mode":"test"}\n'
+    assert destination_file.stat().st_mode & 0o777 == 0o640
+    assert not destination_file.is_symlink()
+
+
 def _request(remote: Path, *, issue: str = "AND-101", baseline: str = "") -> WorkspaceRequest:
     """Return one exact issue workspace request.
 

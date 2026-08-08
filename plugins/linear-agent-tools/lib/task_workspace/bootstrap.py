@@ -9,6 +9,7 @@ from pathlib import Path, PurePosixPath
 import re
 import secrets
 import shutil
+import stat
 
 from task_workspace.model import TaskWorkspaceError
 
@@ -38,6 +39,8 @@ class BootstrapResource:
         if self.skipped:
             return
         source = main_root / self.relative_path
+        if self.kind == "copy":
+            _copy_source_validate(source)
         destination_parent = _destination_parent_require(
             task_root,
             relative_path=self.relative_path,
@@ -53,11 +56,17 @@ class BootstrapResource:
             if self.kind == "link":
                 temporary.symlink_to(source.resolve(strict=True))
             elif source.is_dir():
-                shutil.copytree(source, temporary, symlinks=False)
+                shutil.copytree(source, temporary, symlinks=True)
+                _copy_source_validate(temporary)
                 _tree_sync(temporary)
             else:
                 shutil.copy2(source, temporary, follow_symlinks=False)
+                _copy_source_validate(temporary)
                 _file_sync(temporary)
+            if self.kind == "copy":
+                _copy_source_validate(source)
+                if not _path_match(source, temporary):
+                    raise TaskWorkspaceError(f"Copy bootstrap source changed during materialization: {source}")
             os.replace(temporary, destination)
             _directory_sync(destination.parent)
         except BaseException:
@@ -335,6 +344,32 @@ def _relative_path_validate(value: str) -> str:
     ):
         raise TaskWorkspaceError(f"Bootstrap resource path is unsafe: {value}")
     return value
+
+
+def _copy_source_validate(source: Path) -> None:
+    """Reject every non-physical copy source before destination mutation.
+
+    Args:
+        source: Copy root or descendant to inspect with lstat semantics.
+    """
+
+    try:
+        source_stat = source.lstat()
+    except OSError as error:
+        raise TaskWorkspaceError(f"Copy bootstrap source cannot be inspected: {source}") from error
+    if stat.S_ISLNK(source_stat.st_mode):
+        raise TaskWorkspaceError(f"Copy bootstrap source may not be a symlink: {source}")
+    if stat.S_ISREG(source_stat.st_mode):
+        return
+    if not stat.S_ISDIR(source_stat.st_mode):
+        raise TaskWorkspaceError(f"Copy bootstrap source has an unsupported type: {source}")
+    try:
+        with os.scandir(source) as child_iterator:
+            child_name_list = sorted(child.name for child in child_iterator)
+    except OSError as error:
+        raise TaskWorkspaceError(f"Copy bootstrap source cannot be inspected: {source}") from error
+    for child_name in child_name_list:
+        _copy_source_validate(source / child_name)
 
 
 def _match_destination(path: Path, *, source: Path, kind: str) -> bool:
