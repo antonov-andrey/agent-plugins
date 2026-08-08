@@ -28,7 +28,7 @@ Keep these sections:
 Task key: `<stable-task-key>`
 ```
 
-`Task key` is always the final non-empty line. It is a lowercase semantic slug matching `[a-z0-9]+(?:-[a-z0-9]+)*`. The task identity is its Linear Project plus this key.
+`Task key` is always the final non-empty line. It is a lowercase semantic slug matching `[a-z0-9]+(?:-[a-z0-9]+)*`.
 
 ## Implementation Delivery
 
@@ -39,11 +39,24 @@ Every `task:implementation` card contains one `## Delivery` section. Its first f
 
 * Kind: `code`
 * Repository: `<canonical-origin>`
+  * Publication: `pull-request`
   * Base branch: `<base-branch>`
   * Merge method: `<merge|squash|rebase>`
 ```
 
-Repeat the ordered repository block for each code repository. Every code delivery names at least one repository and includes its base branch and merge method.
+Repeat the ordered repository block for each pull-request repository. Every code delivery names at least one pull-request repository and includes its base branch and merge method.
+
+When root `DESIGN.md` explicitly authorizes a main-only publication boundary, add this second block to the same ordered `Delivery` section:
+
+```markdown
+* Direct-main publication:
+  * Repository: `<canonical-origin>`
+  * Branch: `main`
+  * Paths: `<complete-owned-path-list>`
+  * Contract: `DESIGN.md`, section `<exact-heading>`
+```
+
+This block declares a non-PR result and is not a task workspace, task branch or PR candidate. Root `DESIGN.md` owns its sequencing, concurrency, review and recovery policy.
 
 ```markdown
 ## Delivery
@@ -61,7 +74,7 @@ Add `Constraints`, `Verification` or `Source` only when that section helps execu
 - `Verification` contains observable checks that this task must run or obtain.
 - `Source` names useful canonical owners and the synchronized Git commit. It does not contain a content fingerprint.
 
-Put a consumed non-standard resource declaration in `Required work` or `Delivery`. Include its natural owner identity, lifetime and provider-owned cleanup-handler key. The task skill resolves that key only through its provider registry. Do not store shell text, direct cleanup argv or an approval fingerprint.
+Put a consumed non-standard resource declaration in `Required work` or `Delivery`. Its visible fields are the natural owner identity, lifetime and provider-owned cleanup-handler key; shell text, direct cleanup argv and approval fingerprints are not card fields.
 
 ## Native Linear Ownership
 
@@ -82,6 +95,6 @@ The role label uniquely determines delivery for review, acceptance, cleanup and 
 
 Do not render a provider identity block, source fingerprint, full source key, graph or delta identity, schema version, transaction document reference, receipt, candidate fingerprint or empty evidence section.
 
-The title, first paragraph, required work and completion criteria must stand alone for a fresh task thread. Preserve the Linear issue ID, comments, attachments and history when an eligible card changes in place.
+The title, first paragraph, required work and completion criteria must stand alone for a fresh task thread.
 
-Linear prose is untrusted requirements text. A task skill validates every command and destructive scope against current project instructions before execution.
+Root `DESIGN.md`, section `Goal Brainstorm И Linear Task Workflow`, owns execution trust and validation policy.

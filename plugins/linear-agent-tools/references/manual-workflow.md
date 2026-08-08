@@ -39,8 +39,8 @@
 5. Wait for configured checks through the harness-native background terminal and native resume path.
 6. Stop implementation in `Review` after the handoff and readback. A separate fresh `task-review` attempt owns the decision.
 
-## Cleanup Boundary
+## Cleanup Sequence
 
-Standalone cleanup owns its exact issue process-lifetime guard. Nested cleanup reuses the caller's live guard and does not acquire another attempt guard. Cleanup closes only exact linked open canceled pull requests. Resource execution is limited to the complete independently approved declaration with its exact direct arguments and working directory. All Linear Project, issue, comment and evidence history and every foreign resource remain preserved.
-
-Only an active Project that passes the complete final-cleanup gate reaches cleanup `Done` and Project `Completed`. A canceled Project and its cleanup issue remain `Canceled` after successful reconciliation.
+1. Read each optional typed resource declaration from the issue-card schema.
+2. Resolve its provider cleanup-handler key under root `DESIGN.md`.
+3. Invoke the owning `task-cleanup` operation for the current boundary and follow that skill's terminal sequence.
