@@ -46,22 +46,22 @@ codex plugin add marketplace-agent-tools@agent-plugins
 codex plugin add workflow-container-agent-tools@agent-plugins
 ```
 
-For local development, update the affected plugin cachebuster, then reinstall that plugin:
+For local development, update the affected plugin cachebuster in the candidate, commit it with the plugin change, then reinstall that exact source through the normal marketplace under the operating-system user's standard `HOME` with `CODEX_HOME` unset:
 
 ```bash
 python3 ~/.codex/skills/.system/plugin-creator/scripts/update_plugin_cachebuster.py \
   plugins/linear-agent-tools
-codex plugin add linear-agent-tools@agent-plugins
+env -u CODEX_HOME codex plugin add linear-agent-tools@agent-plugins
 ```
 
-Start a new Codex thread after reinstalling.
+Start a new Codex thread after reinstalling and verify that fresh discovery resolves the installed manifest/source and expected skills. A lifecycle-provider issue does not reach `Done` until this post-merge install/readback succeeds.
 
 ## Manual Linear Workflow
 
 1. Run `linear-agent-tools:workflow-configure` for the exact workspace/team and every selected GitHub repository merge-policy and base-protection boundary.
 2. Run `linear-agent-tools:task-graph-create` for an agreed source and approve the complete preview before publication.
 3. Open a fresh thread for one ready issue and invoke its role skill: `task-implement`, `task-review`, `task-accept`, `task-merge`, or `task-cleanup`.
-4. A separate fresh Codex reviewer moves implementation from `Review` to `Merging`/`Done` on zero findings or to `Rework` on findings.
+4. A separate fresh Codex reviewer moves implementation from `Review` to `Merging`/`Done` on zero findings or to `Rework` on findings. If the candidate changes that provider, use a generic max-reasoning thread against branch-local contracts and the exact diff, not the installed plugin under review.
 5. Keep human approval only at final deployed-result acceptance in `Review`, then retain the `Completed` or `Canceled` Linear Project as history after exact cleanup.
 
 A Linear Project is the task container for one agreed source outcome, not a mirror of one Git repository. Its issues may reference different repositories, and the same repository may participate in multiple independent Linear Projects.

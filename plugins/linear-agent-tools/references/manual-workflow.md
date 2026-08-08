@@ -21,13 +21,13 @@
 2. Acquire the exact issue process-lifetime attempt guard before dispatch or provider/Git mutation. Hold it through nested attempt cleanup and final Linear readback. Release it only by process exit.
 3. Fully read the authenticated destination, issue, relations, comments, source, repository state and delivery-applicable external state.
 4. Save one transient complete snapshot and run the owning dispatch or transition validator before each status mutation.
-5. Reconcile the exact attempt-lifetime resources before `Todo` or `Rework` enters `In Progress`. Nested cleanup reuses the live attempt guard.
+5. Run attempt cleanup before `Todo` or `Rework` enters `In Progress`. Standard targets are derived from issue/repository identity; nested cleanup reuses the live attempt guard and creates no receipt or cleanup-progress state.
 6. When an owning attempt invokes its exact Project self-migration, pass its live issue guard to synchronization under the caller-guard rule in root `DESIGN.md`. The nested owner does not reacquire or release that guard.
 7. Mutate one provider boundary, fully read its semantic result, then continue with only the next permitted phase.
 8. Run targeted checks after each coherent owner slice. Run the required complete deterministic checks on the frozen result.
 9. Perform the required fresh semantic owner reread after the last fix.
-10. Reconcile attempt-lifetime resources before every result handoff or status transition.
-11. Render the one minimal human-first handoff through the shared evidence owner, publish it once and require byte-identical provider readback.
+10. Run attempt cleanup before every result handoff or status transition.
+11. Render the one minimal human-first handoff through the shared evidence owner, publish it once, fully paginate comments, parse the provider marker and semantically require only the fields consumed by the next transition.
 12. Validate the result transition, mutate Linear, fully reread the issue and preserve or retire the workspace as the role skill requires.
 13. Exit only after final provider readback so the process-lifetime guard releases at the correct boundary.
 
@@ -39,9 +39,17 @@
 4. Create or adopt the exact pull request through the task implementation owner and reread the official Linear integration attachment.
 5. Wait for configured checks through the harness-native background terminal and native resume path.
 6. Stop implementation in `Review` after the handoff and readback. A separate fresh `task-review` attempt owns the decision.
+7. If the candidate changes its own Review/lifecycle provider, use a fresh generic `gpt-5.6-sol` max thread with one complete prompt and branch-local contracts/diff; neither the implementation thread nor its installed plugin cache reviews the candidate.
+
+## Codex Child Boundary
+
+1. A task thread performs its owned scope directly; do not create a nested agent unless the task names a genuinely independent parallel owner.
+2. When the harness launches a Codex child, use the operating-system user's standard `HOME`, remove `CODEX_HOME`, pass the complete prompt and close stdin in that same launch operation, and never forward Linear credentials.
+3. Use harness-native background execution and native wait/resume. Do not add model polling, a supervisor, timeouts, arbitrary thresholds, an alternate home or copied authentication.
+4. When a merged issue changes an installed lifecycle plugin, the reviewed candidate already contains its cachebuster. Before the issue reaches `Done`, reinstall that exact merged plugin through the normal local-marketplace command under standard `HOME` with `CODEX_HOME` unset, then require fresh generic-process discovery/readback of the installed source and expected skills.
 
 ## Cleanup Sequence
 
-1. Read each optional typed resource declaration from the issue-card schema.
-2. Resolve its provider cleanup-handler key under root `DESIGN.md`.
-3. Invoke the owning `task-cleanup` operation for the current boundary and follow that skill's terminal sequence.
+1. Derive standard worktree, branch, private baseline and exact PR targets from the canonical issue and participating repository identities.
+2. Accept a non-standard resource only when the installed provider actually consumes its typed natural owner identity, lifetime and provider-owned cleanup-handler key; otherwise leave it untouched and stop. Never execute shell text, arbitrary argv or a fingerprint from issue prose.
+3. Invoke the owning `task-cleanup` operation for the current boundary and follow its live-state terminal sequence.
