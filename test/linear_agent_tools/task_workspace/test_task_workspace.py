@@ -1964,7 +1964,7 @@ def test_acceptance_base_resource_is_retained_then_deleted_idempotently(tmp_path
 
 
 def test_workflow_infrastructure_resource_uses_only_fixed_typed_provider_boundary(tmp_path: Path) -> None:
-    """The registry derives fixed Product invocation and exact readback from natural identity."""
+    """The registry uses the published owner worktree before merge and canonical main after merge."""
 
     repository_fixture = _repository_create(
         tmp_path,
@@ -1972,12 +1972,25 @@ def test_workflow_infrastructure_resource_uses_only_fixed_typed_provider_boundar
         repository_name="workflow-infrastructure",
         remote_name="workflow-infrastructure.git",
     )
-    script = repository_fixture.root / "development_environment_manage.py"
-    script.write_text("raise SystemExit('test boundary is injected')\n", encoding="utf-8")
-    _git(repository_fixture.root, "add", script.name)
-    _git(repository_fixture.root, "commit", "-m", "Add cleanup entrypoint")
+    (repository_fixture.root / ".gitignore").write_text(".worktree/\n", encoding="utf-8")
+    _git(repository_fixture.root, "add", ".gitignore")
+    _git(repository_fixture.root, "commit", "-m", "Ignore task worktrees")
     _git(repository_fixture.root, "push", "origin", "main")
+    baseline_commit = _git(repository_fixture.root, "rev-parse", "HEAD")
     config = WorkspaceConfig(tmp_path.resolve())
+    repository = WorkspaceRepository.from_config(
+        config,
+        RepositoryRequest(str(repository_fixture.remote), "main", baseline_commit),
+    )
+    workspace_state = RepositoryWorkspaceState(baseline_commit)
+    repository.state_write("AND-45", workspace_state)
+    repository.task_worktree_create_or_accept("AND-45", workspace_state)
+    task_root = repository_fixture.root / ".worktree" / "and-45"
+    script = task_root / "development_environment_manage.py"
+    script.write_text("raise SystemExit('test boundary is injected')\n", encoding="utf-8")
+    _git(task_root, "add", script.name)
+    _git(task_root, "commit", "-m", "Add cleanup entrypoint")
+    _git(task_root, "push", "-u", "origin", "linear/and-45")
     call_list: list[tuple[list[str], Path, bytes]] = []
     inventory_absent = False
 
@@ -2052,6 +2065,8 @@ def test_workflow_infrastructure_resource_uses_only_fixed_typed_provider_boundar
     retained = reconciler.cleanup(retained_request)
     inventory_absent = True
     absent = registry.reconcile(resource, delete=False)
+    _git(repository_fixture.root, "merge", "--ff-only", "linear/and-45")
+    _git(repository_fixture.root, "push", "origin", "main")
     first = reconciler.cleanup(project_request)
     second = reconciler.cleanup(project_request)
 
@@ -2060,13 +2075,14 @@ def test_workflow_infrastructure_resource_uses_only_fixed_typed_provider_boundar
     assert [item.state for item in first.resource_readback_list] == ["absent"]
     assert [item.state for item in second.resource_readback_list] == ["absent"]
     assert [item[0][2] for item in call_list] == ["destroy-inventory", "destroy-inventory", "destroy", "destroy"]
-    for argument_list, cwd, input_bytes in call_list:
+    for index, (argument_list, cwd, input_bytes) in enumerate(call_list):
+        expected_root = task_root if index < 2 else repository_fixture.root
         assert argument_list == [
             sys.executable,
-            str(repository_fixture.root / "development_environment_manage.py"),
+            str(expected_root / "development_environment_manage.py"),
             argument_list[2],
             "--git-worktree",
             "2026-08-08-and-45",
         ]
-        assert cwd == repository_fixture.root
+        assert cwd == expected_root
         assert json.loads(input_bytes) == {"schema_version": 1, "common_prefix": "2026-08-08-and-45"}

@@ -101,11 +101,11 @@ class WorkflowInfrastructureDevelopmentEnvironmentCleanupHandler:
     ) -> CleanupResourceReadback:
         """Run fixed inventory or deletion and require the Product's exact typed readback."""
 
-        repository = self._repository_ready(resource)
+        provider_root = self._provider_root_ready(resource, delete=delete)
         operation = "destroy" if delete else "destroy-inventory"
         argument_list = [
             sys.executable,
-            str(repository.main_root / "development_environment_manage.py"),
+            str(provider_root / "development_environment_manage.py"),
             operation,
             "--git-worktree",
             resource.common_prefix,
@@ -121,7 +121,7 @@ class WorkflowInfrastructureDevelopmentEnvironmentCleanupHandler:
         try:
             completed_process = self._runner(
                 argument_list,
-                cwd=repository.main_root,
+                cwd=provider_root,
                 check=False,
                 capture_output=True,
                 input=request_bytes,
@@ -167,11 +167,13 @@ class WorkflowInfrastructureDevelopmentEnvironmentCleanupHandler:
             raise TaskCleanupError("Development environment retention readback differs from its typed identity")
         return CleanupResourceReadback(resource, "absent" if payload["external_resources_absent"] else "retained")
 
-    def _repository_ready(
+    def _provider_root_ready(
         self,
         resource: WorkflowInfrastructureDevelopmentEnvironmentCleanupResource,
-    ) -> WorkspaceRepository:
-        """Fast-forward one clean canonical main checkout before invoking Product code."""
+        *,
+        delete: bool,
+    ) -> Path:
+        """Select the exact retained owner worktree or synchronized post-merge main."""
 
         try:
             repository = WorkspaceRepository.from_config(
@@ -179,6 +181,8 @@ class WorkflowInfrastructureDevelopmentEnvironmentCleanupHandler:
                 RepositoryRequest(resource.repository, "main", ""),
             )
             repository.fetch()
+            if not delete:
+                return self._retained_provider_root_require(repository, resource.owner_issue_identifier)
             if git_command_text_get(repository.main_root, ("symbolic-ref", "--quiet", "--short", "HEAD")) != "main":
                 raise TaskCleanupError("Workflow-infrastructure canonical checkout is not on main")
             if git_command_text_get(repository.main_root, ("status", "--porcelain=v1", "--untracked-files=normal")):
@@ -199,12 +203,53 @@ class WorkflowInfrastructureDevelopmentEnvironmentCleanupHandler:
                 ("status", "--porcelain=v1", "--untracked-files=normal"),
             ):
                 raise TaskCleanupError("Workflow-infrastructure main synchronization readback failed")
-            script = repository.main_root / "development_environment_manage.py"
-            if script.is_symlink() or not script.is_file():
-                raise TaskCleanupError("Workflow-infrastructure cleanup entrypoint is not one ordinary file")
-            return repository
+            self._entrypoint_require(repository, repository.main_root, remote_commit)
+            return repository.main_root
         except TaskWorkspaceError as error:
             raise TaskCleanupError("Workflow-infrastructure cleanup repository identity could not be proven") from error
+
+    @staticmethod
+    def _retained_provider_root_require(repository: WorkspaceRepository, owner_issue_identifier: str) -> Path:
+        """Require the pushed clean owner worktree that contains the unmerged inventory boundary."""
+
+        state = repository.state_read(owner_issue_identifier)
+        if state is None:
+            raise TaskCleanupError("Workflow-infrastructure owner worktree state is absent before merge")
+        repository.state_identity_require(owner_issue_identifier, state)
+        repository.task_worktree_require(owner_issue_identifier, state)
+        task_root = repository.main_root / ".worktree" / owner_issue_identifier.lower()
+        if git_command_run(
+            task_root,
+            ("status", "--porcelain=v1", "-z", "--untracked-files=normal", "--ignore-submodules=none"),
+        ).stdout:
+            raise TaskCleanupError("Workflow-infrastructure owner worktree is not clean")
+        branch_name = f"linear/{owner_issue_identifier.lower()}"
+        if not repository.exist_remote_branch(branch_name):
+            raise TaskCleanupError("Workflow-infrastructure owner branch is not published")
+        branch_commit = repository.commit_get(f"refs/heads/{branch_name}")
+        if repository.commit_get(f"refs/remotes/origin/{branch_name}") != branch_commit:
+            raise TaskCleanupError("Workflow-infrastructure owner worktree differs from its published branch")
+        WorkflowInfrastructureDevelopmentEnvironmentCleanupHandler._entrypoint_require(
+            repository,
+            task_root,
+            branch_commit,
+        )
+        return task_root
+
+    @staticmethod
+    def _entrypoint_require(repository: WorkspaceRepository, provider_root: Path, commit: str) -> None:
+        """Require the invoked entrypoint to equal one ordinary file in the selected commit."""
+
+        script = provider_root / "development_environment_manage.py"
+        tracked_bytes = repository.tracked_file_bytes_get(commit, script.name)
+        if script.is_symlink() or not script.is_file() or tracked_bytes is None:
+            raise TaskCleanupError("Workflow-infrastructure cleanup entrypoint is not one ordinary tracked file")
+        try:
+            current_bytes = script.read_bytes()
+        except OSError as error:
+            raise TaskCleanupError("Workflow-infrastructure cleanup entrypoint could not be read") from error
+        if current_bytes != tracked_bytes:
+            raise TaskCleanupError("Workflow-infrastructure cleanup entrypoint differs from its selected commit")
 
 
 class CleanupResourceRegistry:
