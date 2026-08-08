@@ -11,7 +11,7 @@
 
 1. Run `linear-agent-tools:workflow-configure` once for the exact workspace, team and GitHub repositories.
 2. On each supported merge host, run the `task-merge` transport provision operation once with the operating-system user's standard `HOME` and no `CODEX_HOME`.
-3. Use the currently installed `linear-agent-tools:task-graph-create` skill for graph publication. The `AND-47` cutover replaces that skill and this step atomically with `task-graph-sync`; do not invoke the replacement name before that cutover lands.
+3. Use the currently installed `linear-agent-tools:task-graph-create` skill for graph publication. The `AND-47` cutover replaces that skill and this step atomically with `task-graph-sync`. Follow the cutover sequence in root `DESIGN.md`. Do not invoke the replacement name before installation readback.
 4. Review the complete provider preview before its mutation boundary.
 5. Open one fresh Codex thread for one ready issue and invoke the skill that matches its role and current status.
 
@@ -22,13 +22,14 @@
 3. Fully read the authenticated destination, issue, relations, comments, source, repository state and delivery-applicable external state.
 4. Save one transient complete snapshot and run the owning dispatch or transition validator before each status mutation.
 5. Reconcile the exact attempt-lifetime resources before `Todo` or `Rework` enters `In Progress`. Nested cleanup reuses the live attempt guard.
-6. Mutate one provider boundary, fully read its semantic result, then continue with only the next permitted phase.
-7. Run targeted checks after each coherent owner slice. Run the required complete deterministic checks on the frozen result.
-8. Perform the required fresh semantic owner reread after the last fix.
-9. Reconcile attempt-lifetime resources before every result handoff or status transition.
-10. Render the one minimal human-first handoff through the shared evidence owner, publish it once and require byte-identical provider readback.
-11. Validate the result transition, mutate Linear, fully reread the issue and preserve or retire the workspace as the role skill requires.
-12. Exit only after final provider readback so the process-lifetime guard releases at the correct boundary.
+6. When an owning attempt invokes its exact Project self-migration, pass its live issue guard to synchronization under the caller-guard rule in root `DESIGN.md`. The nested owner does not reacquire or release that guard.
+7. Mutate one provider boundary, fully read its semantic result, then continue with only the next permitted phase.
+8. Run targeted checks after each coherent owner slice. Run the required complete deterministic checks on the frozen result.
+9. Perform the required fresh semantic owner reread after the last fix.
+10. Reconcile attempt-lifetime resources before every result handoff or status transition.
+11. Render the one minimal human-first handoff through the shared evidence owner, publish it once and require byte-identical provider readback.
+12. Validate the result transition, mutate Linear, fully reread the issue and preserve or retire the workspace as the role skill requires.
+13. Exit only after final provider readback so the process-lifetime guard releases at the correct boundary.
 
 ## Code Delivery Sequence
 

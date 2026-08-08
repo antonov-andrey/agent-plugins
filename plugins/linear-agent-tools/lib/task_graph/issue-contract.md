@@ -30,6 +30,36 @@ Task key: `<stable-task-key>`
 
 `Task key` is always the final non-empty line. It is a lowercase semantic slug matching `[a-z0-9]+(?:-[a-z0-9]+)*`.
 
+## Historical Task Key Input
+
+The synchronization owner emits only the current final-line `Task key` form. New cards and every mutable provider-owned card use no other key form.
+
+One read-only decoder may extract identity during the declared current-Project migration. Later synchronization uses it only for unchanged terminal cards. It accepts only these exact non-fenced Markdown forms:
+
+```markdown
+Task key: `<stable-task-key>`
+```
+
+This current form must be the final non-empty line.
+
+```markdown
+## Source
+
+* Task key: `<stable-task-key>`
+```
+
+This historical embedded form must be a direct bullet in the `Source` section.
+
+```markdown
+## Provider Identity
+
+* Node key: `<stable-task-key>`
+```
+
+This historical provider form must be a direct bullet in the `Provider Identity` section. The decoder extracts only the slug and validates it with the current `Task key` pattern. It does not read a full source key, fingerprint, import document, delta document, comment, attachment or other prose as identity.
+
+Exactly one accepted key line must exist. Reject no accepted line, more than one key line even when values match, conflicting values, an invalid slug, a key label outside its exact accepted position, or any malformed accepted form. Rejection stops synchronization before mutation. Migration rewrites an eligible mutable card to the current final-line form. Historical decoding never authorizes terminal-card mutation and never becomes an emitted schema, issue map or general compatibility parser.
+
 ## Implementation Delivery
 
 Every `task:implementation` card contains one `## Delivery` section. Its first field is exactly one of:
